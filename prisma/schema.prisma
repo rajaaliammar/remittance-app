@@ -1,0 +1,370 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Example models - customize based on your needs
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+model BackofficeUser {
+  id              String    @id @default(cuid())
+  email           String    @unique
+  username        String?   @unique
+  firstName       String?
+  lastName        String?
+  phone           String?
+  photo           String?   // URL to uploaded photo
+  country         String?
+  city            String?
+  state           String?
+  address         String?
+  inviteToken     String    @unique
+  inviteTokenExp  DateTime
+  status          String    @default("pending") // pending, profile_completed, approved, rejected
+  isSuperAdmin    Boolean   @default(false)
+  password        String?   // Hashed password
+  invitedBy       String?   // Admin who invited
+  invitedAt       DateTime  @default(now())
+  profileCompletedAt DateTime?
+  approvedAt      DateTime?
+  approvedBy     String?
+  roleId          String?
+  role            Role?     @relation(fields: [roleId], references: [id])
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@map("backoffice_users")
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  status      String   @default("Active") // Active, Inactive
+  permissions Json     // Store permissions as JSON: { moduleName: boolean }
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  users       BackofficeUser[]
+
+  @@map("roles")
+}
+
+model Continent {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  status    String   @default("Active") // Active, Inactive
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  countries Country[]
+
+  @@map("continents")
+}
+
+model Country {
+  id                    String   @id @default(cuid())
+  continentId            String
+  continent              Continent @relation(fields: [continentId], references: [id], onDelete: Cascade)
+  name                  String
+  iso2                  String   @unique
+  iso3                  String   @unique
+  phoneCode             String
+  currencyName           String
+  currencyCode           String
+  currencyRate           String?
+  currencySymbol         String?
+  currencyNativeSymbol   String?
+  flag                   String?  @db.Text
+  status                 String   @default("Active") // Active, Inactive
+  sendable               Boolean  @default(false)
+  receivable             Boolean  @default(false)
+  services               Json?    // Store services as JSON array
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  countryServices        CountryService[]
+  countryCharge          CountryCharge?
+  states                 State[]
+
+  @@map("countries")
+}
+
+model CountryService {
+  id                    String   @id @default(cuid())
+  countryId              String
+  country                Country  @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  name                  String
+  serviceType            String   // Airtime, Cash Pick-up, Bank Transfer
+  minAmount              String?
+  maxAmount              String?
+  status                 String   @default("Active") // Active, Inactive
+  serviceTypeMode        String   @default("Automatic") // Automatic, Manual
+  fields                 Json?    // Store custom fields as JSON array
+  remittanceBankId       String?
+  remittanceBank         RemittanceBank? @relation(fields: [remittanceBankId], references: [id])
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@map("country_services")
+}
+
+model CountryCharge {
+  id                    String   @id @default(cuid())
+  countryId              String   @unique
+  country                Country  @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  chargeLevels          Json     // Store charge levels as JSON array: [{ level: number, type: string, amount: string, charge: string }]
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@map("country_charges")
+}
+
+model State {
+  id                    String   @id @default(cuid())
+  countryId              String
+  country                Country  @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  name                  String
+  status                 String   @default("Active") // Active, Inactive
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@unique([countryId, name])
+  @@map("states")
+}
+
+model Service {
+  id                    String   @id @default(cuid())
+  name                  String   @unique
+  status                 String   @default("Active") // Active, Inactive
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@map("services")
+}
+
+model Purpose {
+  id                    String   @id @default(cuid())
+  name                  String   @unique
+  status                 String   @default("Active") // Active, Inactive
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@map("purposes")
+}
+
+model SourceOfFund {
+  id                    String   @id @default(cuid())
+  name                  String   @unique
+  status                 String   @default("Active") // Active, Inactive
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@map("source_of_funds")
+}
+
+model RemittanceBank {
+  id                    String   @id @default(cuid())
+  name                  String
+  logo                  String?  @db.Text // Base64 encoded logo image
+  website               String
+  email                 String?
+  phoneNumber           String?
+  address               String?  @db.Text
+  active                Boolean  @default(true)
+  dollarRate            String?  // Default dollar/exchange rate for this bank
+  assignedCountries     Json?    // Store assigned countries as JSON array: [{ countryCode, country, dollarPrice, status }]
+  countryServices       CountryService[]
+  giftRules             RemittanceBankGiftRule[]
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@map("remittance_banks")
+}
+
+model RemittanceBankGiftRule {
+  id               String          @id @default(cuid())
+  remittanceBankId String
+  remittanceBank   RemittanceBank  @relation(fields: [remittanceBankId], references: [id], onDelete: Cascade)
+
+  // Amount range (in send currency USD or destination currency – follow your existing convention)
+  minAmount        String
+  maxAmount        String
+  giftAmount       String          // Gift amount in destination currency
+  active           Boolean         @default(true)
+
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@map("remittance_bank_gift_rules")
+}
+
+model RemittanceWallet {
+  id                    String   @id @default(cuid())
+  name                  String
+  logo                  String?  @db.Text // Base64 encoded logo image
+  website               String
+  email                 String?
+  phoneNumber           String?
+  address               String?  @db.Text
+  active                Boolean  @default(true)
+  assignedCountries     Json?    // Store assigned countries as JSON array: [{ countryCode, country, dollarPrice, status }]
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@map("remittance_wallets")
+}
+
+model Page {
+  id                String   @id @default(cuid())
+  name              String
+  slug              String   @unique
+  content           String?  @db.Text // Rich text content
+  sections          Json?    // Store content sections as JSON array: [{ key: string, type: string, name: string }]
+  status            String   @default("Draft") // Publish, Draft
+  breadcrumbStatus  Boolean  @default(false)
+  breadcrumbImage   String?  @db.Text // URL to breadcrumb image
+  enPublished       Boolean  @default(false) // English version published
+  esPublished       Boolean  @default(false) // Spanish version published
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("pages")
+}
+
+model ManageContent {
+  id                String   @id @default(cuid())
+  sectionType       String   @unique // hero, heroTwo, safe, safeTwo, whyChoose, etc.
+  englishData       Json     // Store English content as JSON
+  spanishData       Json?    // Store Spanish content as JSON (optional)
+  images            Json?    // Store image URLs/paths as JSON: { appStoreIcon: string, playStoreIcon: string, etc. }
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("manage_content")
+}
+
+model BlogCategory {
+  id                String   @id @default(cuid())
+  name              String
+  slug              String   @unique
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  blogs             Blog[]
+
+  @@map("blog_categories")
+}
+
+model Blog {
+  id                String   @id @default(cuid())
+  title             String
+  slug              String   @unique
+  description       String   @db.Text
+  descriptionImage  String?  @db.Text // Base64 or URL
+  categoryId        String?
+  category          BlogCategory? @relation(fields: [categoryId], references: [id])
+  status            String   @default("draft") // draft, published
+  language          String   @default("english") // english, spanish
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("blogs")
+}
+
+model Customer {
+  id              String    @id @default(cuid())
+  email           String    @unique
+  username        String?   @unique
+  firstName       String?
+  lastName        String?
+  phone           String?
+  address         String?
+  password        String    // Hashed password
+  status          String    @default("pending") // pending, approved, rejected
+  approvedAt      DateTime?
+  approvedBy      String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@map("customers")
+}
+
+model Agent {
+  id              String    @id @default(cuid())
+  email           String    @unique
+  username        String?   @unique
+  firstName       String?
+  lastName        String?
+  phone           String?
+  address         String?
+  password        String    // Hashed password
+  status          String    @default("pending") // pending, approved, rejected
+  approvedAt      DateTime?
+  approvedBy      String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@map("agents")
+}
+
+model Menu {
+  id              String    @id @default(cuid())
+  menuType        String    @unique // header, footer
+  items           Json      // Store menu items as JSON: [{ id, name, pageId?, url?, isCustom, order }]
+  footerPages     Json?     // For footer: pages section items
+  footerUsefulLinks Json?   // For footer: useful links section items
+  footerSupportLinks Json?  // For footer: support links section items
+  logo            String?   @db.Text // Logo image (base64 or URL) for header menu
+  brandName       String?   // Brand name text for header menu
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@map("menus")
+}
+
+model PaymentGateway {
+  id                  String    @id @default(cuid())
+  name                String
+  logo                String?   @db.Text // Base64 encoded logo image or emoji
+  logoColor           String?   // Hex color code for logo background
+  gatewayCurrencies   Int?      // Number of gateway currencies
+  supportedCurrency   Int?      // Number of supported currencies
+  description         String?   @db.Text
+  status              String    @default("Active") // Active, Inactive
+  paymentFields       Json?     // Store payment fields as JSON array
+  paymentDescription  String?   @db.Text
+  currencyConfigs     Json?     // Store currency configurations as JSON array
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@map("payment_gateways")
+}
+
+model ManualGateway {
+  id                  String    @id @default(cuid())
+  name                String
+  logo                String?   @db.Text // Base64 encoded logo image or emoji
+  logoColor           String?   // Hex color code for logo background
+  supportedCurrency   Int?      // Number of supported currencies
+  description         String?   @db.Text
+  status              String    @default("Active") // Active, Inactive
+  paymentFields       Json?     // Store payment fields as JSON array
+  paymentDescription  String?   @db.Text
+  currencyConfigs     Json?     // Store currency configurations as JSON array
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@map("manual_gateways")
+}
+
