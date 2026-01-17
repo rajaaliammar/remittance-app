@@ -6,7 +6,6 @@ const prisma = new PrismaClient();
 
 async function main() {
   console.log('🌱 Seeding database...');
-
   // Create super admin
   const hashedPassword = await bcrypt.hash('admin', 10);
   const inviteToken = randomBytes(32).toString('hex');
