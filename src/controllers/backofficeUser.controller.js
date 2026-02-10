@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import prisma from '../utils/prisma.js';
 import { sendInvitationEmail } from '../utils/email.js';
 import bcrypt from 'bcryptjs';
@@ -260,7 +261,24 @@ export const getAllUsers = async (req, res) => {
       }
     });
 
-    res.json({ success: true, data: users });
+    // Include level & balanceLimit (via raw SQL so we get them even if Prisma schema is out of sync)
+    let data = users.map((u) => ({ ...u, level: null, balanceLimit: null }));
+    if (users.length > 0) {
+      try {
+        const ids = users.map((u) => u.id);
+        const rows = await prisma.$queryRaw(
+          Prisma.sql`SELECT id, "level", "balanceLimit" FROM "backoffice_users" WHERE id IN (${Prisma.join(ids)})`
+        );
+        const levelMap = Object.fromEntries(
+          (rows || []).map((r) => [r.id, { level: r.level ?? null, balanceLimit: r.balanceLimit ?? null }])
+        );
+        data = users.map((u) => ({ ...u, ...levelMap[u.id] }));
+      } catch {
+        // Columns may not exist yet; keep nulls
+      }
+    }
+
+    res.json({ success: true, data });
   } catch (error) {
     console.error('Error fetching users:', error);
     res.status(500).json({ success: false, error: error.message });
@@ -335,6 +353,52 @@ export const rejectUser = async (req, res) => {
     });
   } catch (error) {
     console.error('Error rejecting user:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// Update backoffice user (level and balance limit)
+export const updateBackofficeUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { level, balanceLimit } = req.body;
+
+    const user = await prisma.backofficeUser.findUnique({
+      where: { id },
+      select: { id: true, email: true, username: true, firstName: true, lastName: true, phone: true, status: true, createdAt: true, updatedAt: true }
+    });
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const levelVal = level !== undefined ? (level || null) : null;
+    const balanceLimitVal = balanceLimit !== undefined ? (balanceLimit || null) : null;
+
+    try {
+      await prisma.$executeRaw(
+        Prisma.sql`UPDATE "backoffice_users" SET "level" = ${levelVal}, "balanceLimit" = ${balanceLimitVal} WHERE id = ${id}`
+      );
+    } catch (rawErr) {
+      const msg = String(rawErr?.message || '');
+      if (msg.includes('column') || msg.includes('level') || msg.includes('balanceLimit') || msg.includes('does not exist')) {
+        return res.status(503).json({
+          success: false,
+          message: 'Level and balance limit are not available yet. Restart the backend to add the required database columns.'
+        });
+      }
+      throw rawErr;
+    }
+
+    const updatedUser = { ...user, level: levelVal, balanceLimit: balanceLimitVal };
+
+    res.json({
+      success: true,
+      message: 'User updated successfully',
+      data: updatedUser
+    });
+  } catch (error) {
+    console.error('Error updating backoffice user:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 };

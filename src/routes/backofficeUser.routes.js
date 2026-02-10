@@ -4,6 +4,7 @@ import {
   getInvitationDetails,
   completeProfile,
   getAllUsers,
+  updateBackofficeUser,
   approveUser,
   rejectUser,
   deleteUser,
@@ -21,6 +22,7 @@ router.post('/complete-profile/:token', completeProfile);
 // Protected routes (require authentication)
 router.post('/invite', authenticateToken, inviteUser);
 router.get('/', authenticateToken, getAllUsers);
+router.patch('/:id', authenticateToken, updateBackofficeUser);
 router.post('/approve/:id', authenticateToken, approveUser);
 router.post('/reject/:id', authenticateToken, rejectUser);
 router.delete('/:id', authenticateToken, deleteUser);

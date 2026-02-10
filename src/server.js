@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
-import prisma from './utils/prisma.js';
+import prisma, { ensureLevelAndBalanceLimitColumns, ensureLevelsTable } from './utils/prisma.js';
 import apiRoutes from './routes/index.js';
 
 // Load environment variables
@@ -29,7 +29,7 @@ const corsOptions = {
       'http://localhost:5173',      // Alternative Vite port
       'http://localhost:3000',      // Alternative frontend port
       'http://apibrandpay.appliedline.com',
-      'https://apibrandpay.appliedline.com',
+      'http://localhost:3001',
       'https://remittance.appliedline.com',
       'https://remit.appliedline.com'
     ];
@@ -80,12 +80,27 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`🚀 Server is running on http://localhost:${PORT}`);
-  console.log(`📊 Health check: http://localhost:${PORT}/health`);
-  console.log(`🔗 API endpoint: http://localhost:${PORT}/api`);
-});
+// Start server after DB is ready and level/balanceLimit columns exist
+async function startServer() {
+  try {
+    await prisma.$connect();
+    console.log('✅ Prisma Client connected to database');
+    await ensureLevelAndBalanceLimitColumns();
+    await ensureLevelsTable();
+    console.log('✅ Level & balance limit columns ready');
+  } catch (err) {
+    console.error('❌ Database setup failed:', err);
+    process.exit(1);
+  }
+  const HOST = process.env.HOST || '0.0.0.0';
+  app.listen(PORT, HOST, () => {
+    console.log(`🚀 Server is running on http://localhost:${PORT}`);
+    console.log(`📱 For mobile/device: http://<your-mac-ip>:${PORT}/api (e.g. http://192.168.100.167:${PORT}/api)`);
+    console.log(`📊 Health check: http://localhost:${PORT}/health`);
+    console.log(`🔗 API endpoint: http://localhost:${PORT}/api`);
+  });
+}
+startServer();
 
 // Graceful shutdown
 process.on('SIGINT', async () => {

@@ -4,6 +4,7 @@ import {
   login, 
   getAllAgents, 
   getAgentById, 
+  updateAgent,
   approveAgent, 
   rejectAgent, 
   deleteAgent 
@@ -19,6 +20,7 @@ router.post('/login', login);
 // Protected routes (require authentication)
 router.get('/', authenticateToken, getAllAgents);
 router.get('/:id', authenticateToken, getAgentById);
+router.patch('/:id', authenticateToken, updateAgent);
 router.post('/approve/:id', authenticateToken, approveAgent);
 router.post('/reject/:id', authenticateToken, rejectAgent);
 router.delete('/:id', authenticateToken, deleteAgent);

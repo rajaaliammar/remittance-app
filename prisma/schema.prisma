@@ -45,6 +45,8 @@ model BackofficeUser {
   approvedBy     String?
   roleId          String?
   role            Role?     @relation(fields: [roleId], references: [id])
+  level           String?   // User level (e.g. 1, 2, Bronze, Silver)
+  balanceLimit    String?   // Balance limit for the user
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -294,6 +296,8 @@ model Customer {
   status          String    @default("pending") // pending, approved, rejected
   approvedAt      DateTime?
   approvedBy      String?
+  level           String?   // User level (e.g. 1, 2, Bronze, Silver)
+  balanceLimit    String?   // Balance limit for the user
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -312,6 +316,8 @@ model Agent {
   status          String    @default("pending") // pending, approved, rejected
   approvedAt      DateTime?
   approvedBy      String?
+  level           String?   // User level (e.g. 1, 2, Bronze, Silver)
+  balanceLimit    String?   // Balance limit for the user
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -366,5 +372,19 @@ model ManualGateway {
   updatedAt           DateTime  @updatedAt
 
   @@map("manual_gateways")
+}
+
+model Level {
+  id                 String   @id @default(cuid())
+  name               String   // e.g. "0", "1", "2"
+  priority           Int      // 0, 1, 2, 3...
+  description        String?  @db.Text // e.g. "Visitor / Unverified - Phone registered only"
+  active             Boolean  @default(true)
+  transactionLimits  Json?    // [{ transactionType, perTransaction, dailyAmount, monthlyAmount, dailyCount, maxBalance, currency }]
+  kycRequirements    Json?    // { requiredDocuments, description }
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@map("levels")
 }
 

@@ -1,4 +1,6 @@
 import express from 'express';
+import authRoutes from './auth.routes.js';
+import accountsRoutes from './accounts.routes.js';
 import userRoutes from './user.routes.js';
 import backofficeUserRoutes from './backofficeUser.routes.js';
 import customerRoutes from './customer.routes.js';
@@ -22,8 +24,13 @@ import blogRoutes from './blog.routes.js';
 import menuRoutes from './menu.routes.js';
 import paymentGatewayRoutes from './paymentGateway.routes.js';
 import manualGatewayRoutes from './manualGateway.routes.js';
+import levelRoutes from './level.routes.js';
 
 const router = express.Router();
+
+// Mobile app compatibility: /api/auth/login, /api/accounts/signup
+router.use('/auth', authRoutes);
+router.use('/accounts', accountsRoutes);
 
 // Mount route modules
 router.use('/users', userRoutes);
@@ -49,6 +56,7 @@ router.use('/blogs', blogRoutes);
 router.use('/menus', menuRoutes);
 router.use('/payment-gateways', paymentGatewayRoutes);
 router.use('/manual-gateways', manualGatewayRoutes);
+router.use('/levels', levelRoutes);
 
 // Default route
 router.get('/', (req, res) => {
@@ -75,7 +83,8 @@ router.get('/', (req, res) => {
       manageContent: '/api/manage-content',
       blogCategories: '/api/blog-categories',
       blogs: '/api/blogs',
-      menus: '/api/menus'
+      menus: '/api/menus',
+      levels: '/api/levels'
     }
   });
 });

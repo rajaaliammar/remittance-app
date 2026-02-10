@@ -3,9 +3,68 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 
 // Signup - Customer registration
+// Supports two flows:
+// 1. Phone-only (mobile app): { country_code, phone_number } -> creates pending customer, returns success
+// 2. Full form (portal): { firstName, lastName, username, email, phone, password, confirmPassword, ... }
 export const signup = async (req, res) => {
   try {
-    const { firstName, lastName, username, email, phone, address, password, confirmPassword } = req.body;
+    const { firstName, lastName, username, email, phone, address, password, confirmPassword, country_code, phone_number } = req.body;
+
+    const isPhoneOnlySignup = (country_code != null && phone_number != null) && !email && !password;
+    const fullPhone = isPhoneOnlySignup
+      ? `${String(country_code).replace(/^\+/, '')}${String(phone_number).trim()}`
+      : null;
+    const placeholderEmail = fullPhone ? `phone_${fullPhone.replace(/\D/g, '')}@remittance.pending` : null;
+
+    if (isPhoneOnlySignup) {
+      if (!country_code || phone_number == null || String(phone_number).trim() === '') {
+        return res.status(400).json({ success: false, message: 'Country code and phone number are required.' });
+      }
+      const existingByPhone = await prisma.customer.findFirst({
+        where: { phone: fullPhone }
+      });
+      if (existingByPhone) {
+        return res.status(409).json({ success: false, message: 'This phone number is already registered.' });
+      }
+      const existingByEmail = await prisma.customer.findUnique({
+        where: { email: placeholderEmail }
+      });
+      if (existingByEmail) {
+        return res.status(201).json({
+          success: true,
+          message: 'Phone already registered. You can proceed to verify.',
+          data: { id: existingByEmail.id, phone: existingByEmail.phone, status: existingByEmail.status }
+        });
+      }
+      const hashedPassword = await bcrypt.hash(Math.random().toString(36) + Date.now(), 10);
+      const customer = await prisma.customer.create({
+        data: {
+          email: placeholderEmail,
+          username: `user_${fullPhone.replace(/\D/g, '')}_${Date.now()}`,
+          firstName: 'Pending',
+          lastName: 'User',
+          phone: fullPhone,
+          address: null,
+          password: hashedPassword,
+          status: 'pending'
+        },
+        select: {
+          id: true,
+          email: true,
+          username: true,
+          firstName: true,
+          lastName: true,
+          phone: true,
+          status: true,
+          createdAt: true
+        }
+      });
+      return res.status(201).json({
+        success: true,
+        message: 'Registration started. Complete verification to continue.',
+        data: customer
+      });
+    }
 
     if (!firstName || !lastName || !username || !email || !phone || !password) {
       return res.status(400).json({ 
@@ -21,34 +80,20 @@ export const signup = async (req, res) => {
       });
     }
 
-    // Check if email already exists
     const existingEmail = await prisma.customer.findUnique({
       where: { email }
     });
-
     if (existingEmail) {
-      return res.status(409).json({ 
-        success: false, 
-        message: 'Email already registered' 
-      });
+      return res.status(409).json({ success: false, message: 'Email already registered' });
     }
-
-    // Check if username already exists
     const existingUsername = await prisma.customer.findUnique({
       where: { username }
     });
-
     if (existingUsername) {
-      return res.status(409).json({ 
-        success: false, 
-        message: 'Username already taken' 
-      });
+      return res.status(409).json({ success: false, message: 'Username already taken' });
     }
 
-    // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
-
-    // Create customer
     const customer = await prisma.customer.create({
       data: {
         firstName,
@@ -190,6 +235,8 @@ export const getAllCustomers = async (req, res) => {
         address: true,
         status: true,
         approvedAt: true,
+        level: true,
+        balanceLimit: true,
         createdAt: true
       },
       orderBy: {
@@ -221,6 +268,8 @@ export const getCustomerById = async (req, res) => {
         address: true,
         status: true,
         approvedAt: true,
+        level: true,
+        balanceLimit: true,
         createdAt: true,
         updatedAt: true
       }
@@ -298,6 +347,54 @@ export const rejectCustomer = async (req, res) => {
     });
   } catch (error) {
     console.error('Error rejecting customer:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// Update customer (level and balance limit)
+export const updateCustomer = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { level, balanceLimit } = req.body;
+
+    const customer = await prisma.customer.findUnique({
+      where: { id }
+    });
+
+    if (!customer) {
+      return res.status(404).json({ success: false, message: 'Customer not found' });
+    }
+
+    const updatedCustomer = await prisma.customer.update({
+      where: { id },
+      data: {
+        ...(level !== undefined && { level: level || null }),
+        ...(balanceLimit !== undefined && { balanceLimit: balanceLimit || null })
+      },
+      select: {
+        id: true,
+        email: true,
+        username: true,
+        firstName: true,
+        lastName: true,
+        phone: true,
+        address: true,
+        status: true,
+        level: true,
+        balanceLimit: true,
+        approvedAt: true,
+        createdAt: true,
+        updatedAt: true
+      }
+    });
+
+    res.json({
+      success: true,
+      message: 'Customer updated successfully',
+      data: updatedCustomer
+    });
+  } catch (error) {
+    console.error('Error updating customer:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 };

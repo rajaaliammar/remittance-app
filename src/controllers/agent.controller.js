@@ -190,6 +190,8 @@ export const getAllAgents = async (req, res) => {
         address: true,
         status: true,
         approvedAt: true,
+        level: true,
+        balanceLimit: true,
         createdAt: true
       },
       orderBy: {
@@ -221,6 +223,8 @@ export const getAgentById = async (req, res) => {
         address: true,
         status: true,
         approvedAt: true,
+        level: true,
+        balanceLimit: true,
         createdAt: true,
         updatedAt: true
       }
@@ -298,6 +302,54 @@ export const rejectAgent = async (req, res) => {
     });
   } catch (error) {
     console.error('Error rejecting agent:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// Update agent (level and balance limit)
+export const updateAgent = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { level, balanceLimit } = req.body;
+
+    const agent = await prisma.agent.findUnique({
+      where: { id }
+    });
+
+    if (!agent) {
+      return res.status(404).json({ success: false, message: 'Agent not found' });
+    }
+
+    const updatedAgent = await prisma.agent.update({
+      where: { id },
+      data: {
+        ...(level !== undefined && { level: level || null }),
+        ...(balanceLimit !== undefined && { balanceLimit: balanceLimit || null })
+      },
+      select: {
+        id: true,
+        email: true,
+        username: true,
+        firstName: true,
+        lastName: true,
+        phone: true,
+        address: true,
+        status: true,
+        level: true,
+        balanceLimit: true,
+        approvedAt: true,
+        createdAt: true,
+        updatedAt: true
+      }
+    });
+
+    res.json({
+      success: true,
+      message: 'Agent updated successfully',
+      data: updatedAgent
+    });
+  } catch (error) {
+    console.error('Error updating agent:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 };
