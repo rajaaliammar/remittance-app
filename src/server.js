@@ -2,8 +2,14 @@ import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
-import prisma, { ensureLevelAndBalanceLimitColumns, ensureLevelsTable } from './utils/prisma.js';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import prisma, { ensureLevelAndBalanceLimitColumns, ensureLevelsTable, ensureRegistrationSettingsTable } from './utils/prisma.js';
 import apiRoutes from './routes/index.js';
+
+// Get __dirname equivalent for ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Load environment variables
 dotenv.config();
@@ -51,6 +57,9 @@ app.use(morgan('dev'));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
+// Serve static files (KYC uploads)
+app.use('/uploads', express.static(path.join(__dirname, '../../uploads')));
+
 // Health check route
 app.get('/health', (req, res) => {
   res.json({ 
@@ -87,7 +96,9 @@ async function startServer() {
     console.log('✅ Prisma Client connected to database');
     await ensureLevelAndBalanceLimitColumns();
     await ensureLevelsTable();
+    await ensureRegistrationSettingsTable();
     console.log('✅ Level & balance limit columns ready');
+    console.log('✅ Registration settings table ready');
   } catch (err) {
     console.error('❌ Database setup failed:', err);
     process.exit(1);

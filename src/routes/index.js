@@ -25,6 +25,8 @@ import menuRoutes from './menu.routes.js';
 import paymentGatewayRoutes from './paymentGateway.routes.js';
 import manualGatewayRoutes from './manualGateway.routes.js';
 import levelRoutes from './level.routes.js';
+import registrationSettingRoutes from './registrationSetting.routes.js';
+import kycRoutes from './kyc.routes.js';
 
 const router = express.Router();
 
@@ -57,6 +59,8 @@ router.use('/menus', menuRoutes);
 router.use('/payment-gateways', paymentGatewayRoutes);
 router.use('/manual-gateways', manualGatewayRoutes);
 router.use('/levels', levelRoutes);
+router.use('/registration-setting', registrationSettingRoutes);
+router.use('/kyc', kycRoutes);
 
 // Default route
 router.get('/', (req, res) => {

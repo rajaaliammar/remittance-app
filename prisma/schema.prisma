@@ -293,11 +293,23 @@ model Customer {
   phone           String?
   address         String?
   password        String    // Hashed password
+  pin             String?   // Hashed PIN (4-digit PIN for mobile app)
+  hasPin          Boolean   @default(false) // Flag to indicate if PIN is set
   status          String    @default("pending") // pending, approved, rejected
   approvedAt      DateTime?
   approvedBy      String?
   level           String?   // User level (e.g. 1, 2, Bronze, Silver)
   balanceLimit    String?   // Balance limit for the user
+  // Additional profile fields
+  dateOfBirth     String?
+  gender          String?
+  nationality     String?
+  country         String?
+  region          String?
+  subRegion       String?
+  city            String?
+  // KYC data stored as JSON
+  kycData         Json?     // Store KYC documents and details
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -388,3 +400,46 @@ model Level {
   @@map("levels")
 }
 
+model KYCForm {
+  id              String   @id @default(cuid())
+  name            String   // Form name (e.g., "Valid forms of Customer identifications (ID) USD")
+  for             String   // "User" or "Merchant"
+  status          String   @default("Active") // "Active" or "Inactive"
+  countries       Json     // Array of country codes (e.g., ["USD", "CAD"])
+  fields          Json     // Array of field objects: [{ id, fieldName, inputType, validationType }]
+  priority        Int      @default(1) // Priority/step order (1, 2, 3, 4, 5) - acts as steps
+  maxAmount       Decimal? @db.Decimal(18, 2) // Maximum transaction amount allowed after completing this KYC step
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("kyc_forms")
+}
+
+model RegistrationSetting {
+  id                 String   @id @default(cuid())
+  // Profile fields
+  phoneNumber        Boolean  @default(true)
+  phoneNumberRequired Boolean @default(true)
+  emailAddress       Boolean  @default(true)
+  emailAddressRequired Boolean @default(false)
+  fullName           Boolean  @default(true)
+  fullNameRequired   Boolean  @default(true)
+  dateOfBirth        Boolean  @default(false)
+  dateOfBirthRequired Boolean @default(false)
+  gender             Boolean  @default(false)
+  genderRequired     Boolean  @default(false)
+  nationality        Boolean  @default(false)
+  nationalityRequired Boolean @default(false)
+  country            Boolean  @default(false)
+  countryRequired    Boolean  @default(false)
+  regionState        Boolean  @default(false)
+  regionStateRequired Boolean @default(false)
+  woredaDistrict     Boolean  @default(false)
+  woredaDistrictRequired Boolean @default(false)
+  city               Boolean  @default(false)
+  cityRequired       Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@map("registration_settings")
+}

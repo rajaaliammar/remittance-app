@@ -2,6 +2,8 @@ import express from 'express';
 import { 
   signup, 
   login, 
+  sendOTP,
+  verifyOTP,
   getAllCustomers, 
   getCustomerById, 
   updateCustomer,
@@ -16,6 +18,8 @@ const router = express.Router();
 // Public routes
 router.post('/signup', signup);
 router.post('/login', login);
+router.post('/send-otp', sendOTP);
+router.post('/verify-otp', verifyOTP);
 
 // Protected routes (require authentication)
 router.get('/', authenticateToken, getAllCustomers);

@@ -46,6 +46,42 @@ async function ensureLevelsTable() {
   }
 }
 
+// Ensure registration_settings table exists
+async function ensureRegistrationSettingsTable() {
+  try {
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "registration_settings" (
+        "id" TEXT NOT NULL,
+        "phoneNumber" BOOLEAN NOT NULL DEFAULT true,
+        "phoneNumberRequired" BOOLEAN NOT NULL DEFAULT true,
+        "emailAddress" BOOLEAN NOT NULL DEFAULT true,
+        "emailAddressRequired" BOOLEAN NOT NULL DEFAULT false,
+        "fullName" BOOLEAN NOT NULL DEFAULT true,
+        "fullNameRequired" BOOLEAN NOT NULL DEFAULT true,
+        "dateOfBirth" BOOLEAN NOT NULL DEFAULT false,
+        "dateOfBirthRequired" BOOLEAN NOT NULL DEFAULT false,
+        "gender" BOOLEAN NOT NULL DEFAULT false,
+        "genderRequired" BOOLEAN NOT NULL DEFAULT false,
+        "nationality" BOOLEAN NOT NULL DEFAULT false,
+        "nationalityRequired" BOOLEAN NOT NULL DEFAULT false,
+        "country" BOOLEAN NOT NULL DEFAULT false,
+        "countryRequired" BOOLEAN NOT NULL DEFAULT false,
+        "regionState" BOOLEAN NOT NULL DEFAULT false,
+        "regionStateRequired" BOOLEAN NOT NULL DEFAULT false,
+        "woredaDistrict" BOOLEAN NOT NULL DEFAULT false,
+        "woredaDistrictRequired" BOOLEAN NOT NULL DEFAULT false,
+        "city" BOOLEAN NOT NULL DEFAULT false,
+        "cityRequired" BOOLEAN NOT NULL DEFAULT false,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "registration_settings_pkey" PRIMARY KEY ("id")
+      )
+    `);
+  } catch (e) {
+    console.warn('ensureRegistrationSettingsTable:', e.message);
+  }
+}
+
 // Handle Prisma Client connection (columns are ensured on first connect)
 prisma.$connect()
   .then(() => {
@@ -57,5 +93,5 @@ prisma.$connect()
   });
 
 export default prisma;
-export { ensureLevelAndBalanceLimitColumns, ensureLevelsTable };
+export { ensureLevelAndBalanceLimitColumns, ensureLevelsTable, ensureRegistrationSettingsTable };
 
