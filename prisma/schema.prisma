@@ -300,6 +300,7 @@ model Customer {
   approvedBy      String?
   level           String?   // User level (e.g. 1, 2, Bronze, Silver)
   balanceLimit    String?   // Balance limit for the user
+  availableBalance Decimal? @db.Decimal(18, 2) // Wallet balance for remittance; deducted on send
   // Additional profile fields
   dateOfBirth     String?
   gender          String?
@@ -312,8 +313,29 @@ model Customer {
   kycData         Json?     // Store KYC documents and details
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
+  remittanceTransactions RemittanceTransaction[]
 
   @@map("customers")
+}
+
+model RemittanceTransaction {
+  id                  String    @id @default(cuid())
+  customerId          String
+  customer            Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  type                String    @default("Sent") // Sent, Received
+  transferType        String?   @default("bank") // bank | wallet - same flow, different label in history
+  sendAmount          Decimal   @db.Decimal(18, 2)
+  receiveAmount       Decimal   @db.Decimal(18, 2)
+  currency            String?
+  gatewayId           String?
+  gatewayName         String?
+  recipientInfo       Json?     // { accountNumber, accountHolderName, serviceProvider, sourceOfFund, sendingPurpose }
+  paymentFieldValues  Json?     // Gateway custom field values
+  status              String    @default("Processing") // Processing, Completed, Failed
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@map("remittance_transactions")
 }
 
 model Agent {

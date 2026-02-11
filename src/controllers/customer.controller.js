@@ -265,26 +265,109 @@ export const verifyOTP = async (req, res) => {
   }
 };
 
+// Login with PIN - Authenticate by phone number + 4-digit PIN (no OTP)
+export const loginWithPin = async (req, res) => {
+  try {
+    const { country_code, phone_number, pin } = req.body;
+
+    if (!country_code || phone_number == null || String(phone_number).trim() === '' || !pin) {
+      return res.status(400).json({
+        success: false,
+        message: 'Country code, phone number, and PIN are required.'
+      });
+    }
+
+    const normalizedCountryCode = String(country_code).replace(/^\+/, '').trim();
+    const normalizedPhoneNumber = String(phone_number).trim().replace(/\s+/g, '');
+    const fullPhone = `${normalizedCountryCode}${normalizedPhoneNumber}`;
+
+    const customer = await prisma.customer.findFirst({
+      where: { phone: fullPhone }
+    });
+
+    if (!customer) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid PIN'
+      });
+    }
+
+    if (!customer.hasPin || !customer.pin) {
+      return res.status(401).json({
+        success: false,
+        message: 'PIN not set. Please sign in with OTP first and set a PIN.'
+      });
+    }
+
+    const pinValid = await bcrypt.compare(String(pin).trim(), customer.pin);
+    if (!pinValid) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid PIN'
+      });
+    }
+
+    const token = jwt.sign(
+      {
+        id: customer.id,
+        email: customer.email,
+        username: customer.username,
+        phone: customer.phone,
+        type: 'customer'
+      },
+      process.env.JWT_SECRET || 'your-secret-key-change-in-production',
+      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'Login successful',
+      data: {
+        access_token: token,
+        user: {
+          id: customer.id,
+          email: customer.email,
+          username: customer.username,
+          first_name: customer.firstName,
+          last_name: customer.lastName,
+          phone: customer.phone,
+          status: customer.status,
+          has_pin: !!customer.hasPin,
+          profile_image: null,
+          type: 'customer'
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Error in login with PIN:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Login failed. Please try again.',
+      error: error.message
+    });
+  }
+};
+
 // Complete Profile - Update customer details after OTP verification
 export const completeProfile = async (req, res) => {
   try {
     const customerId = req.user?.id;
-    
-    if (!customerId) {
+
+    if (!customerId || typeof customerId !== 'string') {
       return res.status(401).json({
         success: false,
         message: 'Authentication required'
       });
     }
 
-    const { 
+    const body = req.body || {};
+    const {
       first_name,
-      firstName, // Support both snake_case and camelCase
+      firstName,
       last_name,
-        lastName,
-        email,
+      lastName,
+      email,
       address,
-      // Registration profile fields
       date_of_birth,
       dateOfBirth,
       gender,
@@ -293,55 +376,60 @@ export const completeProfile = async (req, res) => {
       region,
       sub_region,
       subRegion,
-      city,
-      // KYC fields (for later steps)
-      idType,
-      idNumber,
-      idFrontUrl,
-      idBackUrl,
-      selfieUrl,
-      proofOfAddressUrl
-    } = req.body;
+      city
+    } = body;
 
-    // Update customer profile - support both snake_case and camelCase
+    // Build update payload - only include schema fields, coerce to string where needed
     const updateData = {};
-    if (first_name || firstName) updateData.firstName = first_name || firstName;
-    if (last_name || lastName) updateData.lastName = last_name || lastName;
-    if (email) updateData.email = email;
-    if (address) updateData.address = address;
-    
-    // Store additional profile fields
-    if (date_of_birth || dateOfBirth) updateData.dateOfBirth = date_of_birth || dateOfBirth;
-    if (gender) updateData.gender = gender;
-    if (nationality) updateData.nationality = nationality;
-    if (country) updateData.country = country;
-    if (region) updateData.region = region;
-    if (sub_region || subRegion) updateData.subRegion = sub_region || subRegion;
-    if (city) updateData.city = city;
+    if ((first_name !== undefined && first_name !== '') || (firstName !== undefined && firstName !== '')) {
+      updateData.firstName = String(first_name ?? firstName ?? '');
+    }
+    if ((last_name !== undefined && last_name !== '') || (lastName !== undefined && lastName !== '')) {
+      updateData.lastName = String(last_name ?? lastName ?? '');
+    }
+    if (email !== undefined && email !== '') updateData.email = String(email);
+    if (address !== undefined && address !== '') updateData.address = String(address);
+    if ((date_of_birth !== undefined && date_of_birth !== '') || (dateOfBirth !== undefined && dateOfBirth !== '')) {
+      const dob = date_of_birth ?? dateOfBirth;
+      updateData.dateOfBirth = typeof dob === 'string' ? dob : (dob != null ? String(dob) : null);
+    }
+    if (gender !== undefined && gender !== '') updateData.gender = String(gender);
+    if (nationality !== undefined && nationality !== '') updateData.nationality = String(nationality);
+    if (country !== undefined && country !== '') updateData.country = String(country);
+    if (region !== undefined && region !== '') updateData.region = String(region);
+    if ((sub_region !== undefined && sub_region !== '') || (subRegion !== undefined && subRegion !== '')) {
+      updateData.subRegion = String(sub_region ?? subRegion ?? '');
+    }
+    if (city !== undefined && city !== '') updateData.city = String(city);
 
-    const updatedCustomer = await prisma.customer.update({
-      where: { id: customerId },
-      data: updateData,
-      select: {
-        id: true,
-        email: true,
-        username: true,
-        firstName: true,
-        lastName: true,
-        phone: true,
-        address: true,
-        dateOfBirth: true,
-        gender: true,
-        nationality: true,
-        country: true,
-        region: true,
-        subRegion: true,
-        city: true,
-        status: true,
-        createdAt: true,
-        updatedAt: true
-      }
+    // Prisma does not accept undefined in data – remove any undefined values
+    Object.keys(updateData).forEach((k) => {
+      if (updateData[k] === undefined) delete updateData[k];
     });
+
+    let updatedCustomer;
+    if (Object.keys(updateData).length > 0) {
+      updatedCustomer = await prisma.customer.update({
+        where: { id: customerId },
+        data: updateData
+      });
+    } else {
+      updatedCustomer = await prisma.customer.findUnique({
+        where: { id: customerId }
+      });
+      if (!updatedCustomer) {
+        return res.status(404).json({
+          success: false,
+          message: 'Customer not found'
+        });
+      }
+    }
+
+    // Never send password or pin to the client
+    if (updatedCustomer) {
+      delete updatedCustomer.password;
+      delete updatedCustomer.pin;
+    }
 
     return res.status(200).json({
       success: true,
@@ -350,10 +438,19 @@ export const completeProfile = async (req, res) => {
     });
   } catch (error) {
     console.error('Error completing profile:', error);
+    const code = error?.code;
+    let message = 'Failed to update profile. Please try again.';
+    if (code === 'P2025') {
+      message = 'Customer record not found. Please sign in again.';
+    } else if (code === 'P2002') {
+      message = 'This email is already in use. Please use a different email.';
+    } else if (error?.message) {
+      message = error.message;
+    }
     res.status(500).json({
       success: false,
-      message: 'Failed to update profile. Please try again.',
-      error: error.message
+      message,
+      ...(process.env.NODE_ENV !== 'production' && { details: { error: error?.message, code } })
     });
   }
 };
@@ -591,6 +688,45 @@ export const setPin = async (req, res) => {
       success: false,
       message: 'Failed to set PIN',
       error: error.message
+    });
+  }
+};
+
+// Get authenticated customer's available balance (for remittance app home screen)
+export const getBalance = async (req, res) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required',
+      });
+    }
+    const rows = await prisma.$queryRaw`
+      SELECT "availableBalance" FROM customers WHERE id = ${customerId}
+    `;
+    const row = rows?.[0];
+    if (!row) {
+      return res.status(404).json({
+        success: false,
+        message: 'Customer not found',
+      });
+    }
+    const balance = row.availableBalance != null
+      ? Number(row.availableBalance)
+      : 12000;
+    return res.json({
+      success: true,
+      data: {
+        availableBalance: balance,
+        balance,
+      },
+    });
+  } catch (error) {
+    console.error('Error getting balance:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to get balance',
     });
   }
 };

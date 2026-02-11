@@ -3,9 +3,11 @@ import {
   signup as customerSignup,
   sendOTP,
   verifyOTP,
+  loginWithPin,
   completeProfile,
   uploadKycDocument,
   setPin,
+  getBalance,
   upload
 } from '../controllers/customer.controller.js';
 import { authenticateCustomer } from '../middleware/customerAuth.js';
@@ -22,12 +24,16 @@ router.post('/signup/', customerSignup);
 // OTP endpoints
 router.post('/send-otp', sendOTP);
 router.post('/send-otp/', sendOTP);
+router.post('/login-otp', sendOTP);
+router.post('/login-otp/', sendOTP);
 router.post('/verify-otp', verifyOTP);
 router.post('/verify-otp/', verifyOTP);
+router.post('/login-pin', loginWithPin);
+router.post('/login-pin/', loginWithPin);
 
-// Profile completion (requires authentication)
-router.post('/complete-profile', authenticateCustomer, completeProfile);
-router.post('/complete-profile/', authenticateCustomer, completeProfile);
+// Profile completion (requires authentication; optional profile_image for multipart)
+router.post('/complete-profile', authenticateCustomer, upload.single('profile_image'), completeProfile);
+router.post('/complete-profile/', authenticateCustomer, upload.single('profile_image'), completeProfile);
 
 // KYC document upload (requires authentication)
 router.post('/upload-kyc-document', authenticateCustomer, upload.single('document'), uploadKycDocument);
@@ -36,5 +42,9 @@ router.post('/upload-kyc-document/', authenticateCustomer, upload.single('docume
 // Set PIN (requires authentication)
 router.post('/set-pin', authenticateCustomer, setPin);
 router.post('/set-pin/', authenticateCustomer, setPin);
+
+// Get balance (requires authentication) - mobile app home screen
+router.get('/balance', authenticateCustomer, getBalance);
+router.get('/balance/', authenticateCustomer, getBalance);
 
 export default router;
