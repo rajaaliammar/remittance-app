@@ -311,6 +311,7 @@ model Customer {
   city            String?
   // KYC data stored as JSON
   kycData         Json?     // Store KYC documents and details
+  fcmToken        String?   // FCM device token for push notifications
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   remittanceTransactions RemittanceTransaction[]
@@ -476,4 +477,15 @@ model Message {
   @@index([senderId, recipientId])
   @@index([recipientId, senderId])
   @@map("messages")
+}
+
+model FAQ {
+  id        String   @id @default(cuid())
+  question  String   @db.Text
+  answer    String   @db.Text
+  order     Int      @default(0) // Display order (lower = first)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("faqs")
 }

@@ -29,6 +29,7 @@ import levelRoutes from './level.routes.js';
 import registrationSettingRoutes from './registrationSetting.routes.js';
 import kycRoutes from './kyc.routes.js';
 import messageRoutes from './message.routes.js';
+import faqRoutes from './faq.routes.js';
 
 const router = express.Router();
 
@@ -65,6 +66,7 @@ router.use('/levels', levelRoutes);
 router.use('/registration-setting', registrationSettingRoutes);
 router.use('/kyc', kycRoutes);
 router.use('/messages', messageRoutes);
+router.use('/faqs', faqRoutes);
 
 // Default route
 router.get('/', (req, res) => {

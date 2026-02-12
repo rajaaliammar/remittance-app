@@ -820,6 +820,132 @@ export const getProfile = async (req, res) => {
   }
 };
 
+// Save KYC details from app (EnhancedKYCScreen / multi-step flow) into Customer.kycData so Verifications screen shows real data
+export const saveKycDetails = async (req, res) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required',
+      });
+    }
+    const body = req.body || {};
+    const customer = await prisma.customer.findUnique({
+      where: { id: customerId },
+      select: { kycData: true },
+    });
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Customer not found',
+      });
+    }
+    let kycData = customer.kycData ? (Array.isArray(customer.kycData) ? customer.kycData : [customer.kycData]) : [];
+    const originalLength = kycData.length;
+    const now = new Date().toISOString();
+    if (body.enhancedKYC && typeof body.enhancedKYC === 'object') {
+      const fields = [];
+      Object.entries(body.enhancedKYC).forEach(([key, value]) => {
+        if (value != null && value !== '') {
+          fields.push({
+            id: `field_${key}_${Date.now()}`,
+            fieldName: key,
+            inputType: 'text',
+            value: typeof value === 'string' ? value : JSON.stringify(value),
+            fileUrl: typeof value === 'string' && value.startsWith('http') ? value : null,
+            status: 'pending',
+            verifiedAt: null,
+            verifiedBy: null,
+          });
+        }
+      });
+      kycData.push({
+        id: `doc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        verificationType: 'Enhanced KYC',
+        formName: 'Enhanced KYC',
+        country: body.country || 'USD',
+        status: 'pending',
+        submittedAt: now,
+        date: now,
+        documents: fields,
+      });
+    }
+    if ((body.verificationType || body.formName) && !body.enhancedKYC) {
+      const vType = body.verificationType || body.formName;
+      const existing = kycData.find(d => (d.verificationType || d.formName) === vType);
+      if (!existing) {
+        kycData.push({
+          id: `doc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          verificationType: vType,
+          formName: vType,
+          country: body.country || 'USD',
+          status: 'pending',
+          submittedAt: now,
+          date: now,
+          documents: body.fields && Array.isArray(body.fields) ? body.fields : [],
+        });
+      }
+    }
+    if (kycData.length === originalLength) {
+      return res.json({
+        success: true,
+        message: 'KYC details received',
+        data: kycData,
+      });
+    }
+    await prisma.customer.update({
+      where: { id: customerId },
+      data: { kycData },
+    });
+    return res.json({
+      success: true,
+      message: 'KYC details saved successfully',
+      data: kycData,
+    });
+  } catch (error) {
+    console.error('Error saving KYC details:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to save KYC details',
+    });
+  }
+};
+
+// Update FCM push token for the authenticated customer (mobile app)
+export const updatePushToken = async (req, res) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required',
+      });
+    }
+    const { token } = req.body;
+    if (!token || typeof token !== 'string') {
+      return res.status(400).json({
+        success: false,
+        message: 'Token is required',
+      });
+    }
+    await prisma.customer.update({
+      where: { id: customerId },
+      data: { fcmToken: token.trim() },
+    });
+    return res.json({
+      success: true,
+      message: 'Push token updated',
+    });
+  } catch (error) {
+    console.error('Error updating push token:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to update push token',
+    });
+  }
+};
+
 // Get all customers
 export const getAllCustomers = async (req, res) => {
   try {

@@ -1,4 +1,35 @@
 import prisma from '../utils/prisma.js';
+import { sendPushToCustomer } from '../utils/push.js';
+
+// Emit real-time KYC status update to the customer's socket room (for app Verifications screen)
+function emitKYCUpdateToCustomer(req, customerId, payload) {
+  try {
+    const io = req.app && req.app.get && req.app.get('io');
+    if (io) io.to('user:' + customerId).emit('kyc-document:status-updated', payload);
+  } catch (e) {
+    console.warn('[KYC] Socket emit failed:', e?.message);
+  }
+}
+
+// Send push notification to customer when document is approved or rejected (from portal KYC Request)
+async function notifyCustomerKYCStatus(customerId, status, document) {
+  const docName = document?.verificationType || document?.formName || 'Your document';
+  const isApproved = (status || '').toLowerCase() === 'approved';
+  const title = isApproved ? 'Document verified' : 'Document update';
+  const body = isApproved
+    ? `${docName} has been verified.`
+    : `${docName} was not approved. Check Verifications for details.`;
+  await sendPushToCustomer(customerId, {
+    title,
+    body,
+    data: {
+      type: 'kyc',
+      screen: 'Verifications',
+      status: isApproved ? 'approved' : 'rejected',
+      documentId: document?.id || '',
+    },
+  });
+}
 
 // Check if KYCForm model exists
 if (!prisma.kYCForm) {
@@ -192,6 +223,55 @@ export const createKYCForm = async (req, res) => {
 };
 
 // Get customer KYC documents
+// Get current customer's own KYC documents (authenticated customer - for app Verifications screen)
+export const getMyKYCDocuments = async (req, res) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      });
+    }
+
+    const customer = await prisma.customer.findUnique({
+      where: { id: customerId },
+      select: { kycData: true }
+    });
+
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Customer not found'
+      });
+    }
+
+    let raw = customer.kycData;
+    if (typeof raw === 'string') {
+      try {
+        raw = JSON.parse(raw);
+      } catch (_) {
+        raw = null;
+      }
+    }
+    const kycDocuments = raw
+      ? (Array.isArray(raw) ? raw : [raw])
+      : [];
+
+    res.json({
+      success: true,
+      data: kycDocuments,
+      message: 'KYC documents retrieved successfully'
+    });
+  } catch (error) {
+    console.error('Error fetching my KYC documents:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
 export const getCustomerKYCDocuments = async (req, res) => {
   try {
     const { id } = req.params;
@@ -269,6 +349,9 @@ export const approveKYCDocument = async (req, res) => {
       }
     });
 
+    emitKYCUpdateToCustomer(req, customerId, { documentId, status: 'approved', document: kycData[documentIndex] });
+    await notifyCustomerKYCStatus(customerId, 'approved', kycData[documentIndex]);
+
     res.json({
       success: true,
       message: 'KYC document approved successfully',
@@ -320,6 +403,9 @@ export const rejectKYCDocument = async (req, res) => {
         kycData: kycData
       }
     });
+
+    emitKYCUpdateToCustomer(req, customerId, { documentId, status: 'rejected', document: kycData[documentIndex] });
+    await notifyCustomerKYCStatus(customerId, 'rejected', kycData[documentIndex]);
 
     res.json({
       success: true,
@@ -415,6 +501,11 @@ export const approveKYCDocumentField = async (req, res) => {
       }
     });
 
+    emitKYCUpdateToCustomer(req, customerId, { documentId, status: kycData[documentIndex].status, document: kycData[documentIndex] });
+    if (kycData[documentIndex].status === 'approved') {
+      await notifyCustomerKYCStatus(customerId, 'approved', kycData[documentIndex]);
+    }
+
     res.json({
       success: true,
       message: 'KYC document field approved successfully',
@@ -506,6 +597,9 @@ export const rejectKYCDocumentField = async (req, res) => {
       }
     });
 
+    emitKYCUpdateToCustomer(req, customerId, { documentId, status: 'rejected', document: kycData[documentIndex] });
+    await notifyCustomerKYCStatus(customerId, 'rejected', kycData[documentIndex]);
+
     res.json({
       success: true,
       message: 'KYC document field rejected',
@@ -595,6 +689,64 @@ export const submitKYCForm = async (req, res) => {
     });
   } catch (error) {
     console.error('Error submitting KYC form:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
+// List all KYC requests for admin portal (Pending / Approved / Rejected pages). Same data source as app Verifications.
+export const getKYCRequests = async (req, res) => {
+  try {
+    const statusFilter = (req.query.status || '').toLowerCase();
+    const validStatuses = ['pending', 'approved', 'rejected'];
+    const filterStatus = validStatuses.includes(statusFilter) ? statusFilter : null;
+
+    const customers = await prisma.customer.findMany({
+      where: { kycData: { not: null } },
+      select: { id: true, firstName: true, lastName: true, email: true, username: true, phone: true, kycData: true }
+    });
+
+    const requests = [];
+    let no = 0;
+    for (const c of customers) {
+      let raw = c.kycData;
+      if (typeof raw === 'string') {
+        try {
+          raw = JSON.parse(raw);
+        } catch (_) {
+          raw = null;
+        }
+      }
+      const docs = raw ? (Array.isArray(raw) ? raw : [raw]) : [];
+      const name = [c.firstName, c.lastName].filter(Boolean).join(' ') || c.email || c.phone || '—';
+      const username = c.username || c.email || '—';
+      for (const doc of docs) {
+        const status = (doc.status || 'pending').toLowerCase();
+        if (filterStatus && status !== filterStatus) continue;
+        no += 1;
+        requests.push({
+          key: doc.id,
+          no,
+          customerId: c.id,
+          name,
+          username,
+          verificationType: doc.verificationType || doc.formName || 'KYC Document',
+          status: status.charAt(0).toUpperCase() + status.slice(1),
+          documentId: doc.id,
+          submittedAt: doc.submittedAt || doc.date
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      data: requests,
+      message: 'KYC requests retrieved successfully'
+    });
+  } catch (error) {
+    console.error('Error fetching KYC requests:', error);
     res.status(500).json({
       success: false,
       error: error.message

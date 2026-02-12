@@ -5,6 +5,8 @@ import {
   createKYCForm,
   updateKYCForm,
   deleteKYCForm,
+  getMyKYCDocuments,
+  getKYCRequests,
   getCustomerKYCDocuments,
   approveKYCDocument,
   rejectKYCDocument,
@@ -17,6 +19,12 @@ import { authenticateToken } from '../middleware/auth.js';
 import { authenticateCustomer } from '../middleware/customerAuth.js';
 
 const router = express.Router();
+
+// Customer: get own KYC documents (for app Verifications screen)
+router.get('/my-documents', authenticateCustomer, getMyKYCDocuments);
+
+// Admin portal: list all KYC requests (Pending / Approved / Rejected) - same data source as app
+router.get('/requests', authenticateToken, getKYCRequests);
 
 // KYC Form management
 router.get('/forms', authenticateToken, getAllKYCForms);

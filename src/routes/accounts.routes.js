@@ -6,9 +6,11 @@ import {
   loginWithPin,
   completeProfile,
   uploadKycDocument,
+  saveKycDetails,
   setPin,
   getBalance,
   getProfile,
+  updatePushToken,
   upload
 } from '../controllers/customer.controller.js';
 import { authenticateCustomer } from '../middleware/customerAuth.js';
@@ -40,6 +42,10 @@ router.post('/complete-profile/', authenticateCustomer, upload.single('profile_i
 router.post('/upload-kyc-document', authenticateCustomer, upload.single('document'), uploadKycDocument);
 router.post('/upload-kyc-document/', authenticateCustomer, upload.single('document'), uploadKycDocument);
 
+// Save KYC details from app (writes to Customer.kycData for Verifications screen)
+router.post('/kyc-details', authenticateCustomer, saveKycDetails);
+router.post('/kyc-details/', authenticateCustomer, saveKycDetails);
+
 // Set PIN (requires authentication)
 router.post('/set-pin', authenticateCustomer, setPin);
 router.post('/set-pin/', authenticateCustomer, setPin);
@@ -51,5 +57,9 @@ router.get('/balance/', authenticateCustomer, getBalance);
 // Get current user profile (requires authentication) - mobile app
 router.get('/profile', authenticateCustomer, getProfile);
 router.get('/profile/', authenticateCustomer, getProfile);
+
+// Push notification token (requires authentication) - mobile app
+router.put('/push-token', authenticateCustomer, updatePushToken);
+router.put('/push-token/', authenticateCustomer, updatePushToken);
 
 export default router;
