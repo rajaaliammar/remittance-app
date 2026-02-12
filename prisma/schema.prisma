@@ -465,3 +465,15 @@ model RegistrationSetting {
 
   @@map("registration_settings")
 }
+
+model Message {
+  id          String   @id @default(cuid())
+  senderId    String   // Customer id or BackofficeUser id
+  recipientId String
+  content     String   @db.Text
+  createdAt   DateTime @default(now())
+
+  @@index([senderId, recipientId])
+  @@index([recipientId, senderId])
+  @@map("messages")
+}

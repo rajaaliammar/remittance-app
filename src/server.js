@@ -1,4 +1,6 @@
+import http from 'http';
 import express from 'express';
+import { Server as SocketServer } from 'socket.io';
 import cors from 'cors';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
@@ -6,6 +8,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import prisma, { ensureLevelAndBalanceLimitColumns, ensureLevelsTable, ensureRegistrationSettingsTable } from './utils/prisma.js';
 import apiRoutes from './routes/index.js';
+import { addSessionRequest } from './store/sessionRequestStore.js';
 
 // Get __dirname equivalent for ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -72,6 +75,110 @@ app.get('/health', (req, res) => {
 // API routes
 app.use('/api', apiRoutes);
 
+// Create HTTP server and attach Socket.io for chat
+const server = http.createServer(app);
+const io = new SocketServer(server, {
+  cors: { origin: true },
+  path: '/socket.io',
+});
+app.set('io', io);
+io.on('connection', (socket) => {
+  socket.on('join:user', (data) => {
+    const userId = data?.userId != null ? String(data.userId) : null;
+    if (userId) {
+      socket.join(`user:${userId}`);
+      console.log('[Socket] Client joined room user:' + userId);
+    }
+  });
+
+  // WhatsApp-like: save every message to DB, then broadcast so both app and portal get it and history is complete
+  socket.on('sendMessage', async (data, callback) => {
+    try {
+      const senderId = data?.senderId != null ? String(data.senderId) : null;
+      const receiverId = data?.receiverId != null ? String(data.receiverId) : null;
+      const message = data?.message != null ? String(data.message).trim() : '';
+      if (!senderId || !receiverId || !message) {
+        const err = new Error('senderId, receiverId and message are required');
+        if (typeof callback === 'function') callback({ error: err.message });
+        return;
+      }
+      const created = await prisma.message.create({
+        data: { senderId, recipientId: receiverId, content: message },
+      });
+      const timestamp = created.createdAt.getTime ? created.createdAt.getTime() : Date.now();
+      const payload = {
+        id: created.id,
+        senderId: created.senderId,
+        receiverId: created.recipientId,
+        message: created.content,
+        timestamp,
+      };
+      io.emit('receiveMessage', payload);
+      if (typeof callback === 'function') callback(null, payload);
+      console.log('[Socket] Message saved and broadcast to all clients');
+    } catch (err) {
+      console.error('[Socket] sendMessage error:', err);
+      if (typeof callback === 'function') callback({ error: err.message || 'Failed to send message' });
+    }
+  });
+
+  // User (app) requests new session after chat was ended; admin must approve in portal
+  socket.on('requestNewSession', (data, callback) => {
+    try {
+      const userId = data?.userId != null ? String(data.userId) : null;
+      const supportUserId = data?.supportUserId != null ? String(data.supportUserId) : null;
+      if (!userId || !supportUserId) {
+        if (typeof callback === 'function') callback({ error: 'userId and supportUserId are required' });
+        return;
+      }
+      const entry = addSessionRequest({ userId, supportUserId });
+      io.emit('sessionRequestReceived', {
+        requestId: entry.requestId,
+        userId: entry.userId,
+        supportUserId: entry.supportUserId,
+        createdAt: entry.createdAt,
+      });
+      if (typeof callback === 'function') callback(null, { requestId: entry.requestId });
+      console.log('[Socket] New session request from user:', userId, 'requestId:', entry.requestId);
+    } catch (err) {
+      console.error('[Socket] requestNewSession error:', err);
+      if (typeof callback === 'function') callback({ error: err.message || 'Failed to submit request' });
+    }
+  });
+
+  // End chat session: save system message and broadcast so app can disable input
+  const CHAT_ENDED_CONTENT = '__CHAT_ENDED__';
+  socket.on('endChat', async (data, callback) => {
+    try {
+      const senderId = data?.senderId != null ? String(data.senderId) : null;
+      const receiverId = data?.receiverId != null ? String(data.receiverId) : null;
+      if (!senderId || !receiverId) {
+        const err = new Error('senderId and receiverId are required');
+        if (typeof callback === 'function') callback({ error: err.message });
+        return;
+      }
+      const created = await prisma.message.create({
+        data: { senderId, recipientId: receiverId, content: CHAT_ENDED_CONTENT },
+      });
+      const timestamp = created.createdAt.getTime ? created.createdAt.getTime() : Date.now();
+      const payload = {
+        id: created.id,
+        senderId: created.senderId,
+        receiverId: created.recipientId,
+        message: CHAT_ENDED_CONTENT,
+        timestamp,
+        sessionEnded: true,
+      };
+      io.emit('receiveMessage', payload);
+      if (typeof callback === 'function') callback(null, payload);
+      console.log('[Socket] Chat ended, broadcast to all clients');
+    } catch (err) {
+      console.error('[Socket] endChat error:', err);
+      if (typeof callback === 'function') callback({ error: err.message || 'Failed to end chat' });
+    }
+  });
+});
+
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({ 
@@ -104,11 +211,12 @@ async function startServer() {
     process.exit(1);
   }
   const HOST = process.env.HOST || '0.0.0.0';
-  app.listen(PORT, HOST, () => {
+  server.listen(PORT, HOST, () => {
     console.log(`🚀 Server is running on http://localhost:${PORT}`);
     console.log(`📱 For mobile/device: http://<your-mac-ip>:${PORT}/api (e.g. http://192.168.100.167:${PORT}/api)`);
     console.log(`📊 Health check: http://localhost:${PORT}/health`);
     console.log(`🔗 API endpoint: http://localhost:${PORT}/api`);
+    console.log(`🔌 Socket.io: http://localhost:${PORT}`);
   });
 }
 startServer();

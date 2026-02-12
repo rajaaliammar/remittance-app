@@ -38,6 +38,21 @@ export const upload = multer({
 // Static OTP for development/testing
 const STATIC_OTP = '123456';
 
+/**
+ * Normalize phone to canonical form for lookup.
+ * Handles domestic format (e.g. 0912345678) vs international (912345678).
+ * Returns [canonicalFull, altFull] - try both when looking up customer.
+ */
+function getPhoneLookupVariants(countryCode, phoneNumber) {
+  const normalizedCountryCode = String(countryCode || '').replace(/^\+/, '').trim();
+  const normalizedPhoneNumber = String(phoneNumber || '').trim().replace(/\s+/g, '');
+  const fullPhone = `${normalizedCountryCode}${normalizedPhoneNumber}`;
+  const nationalDigits = normalizedPhoneNumber.replace(/\D/g, '');
+  const withoutLeadingZero = nationalDigits.replace(/^0+/, '') || nationalDigits;
+  const altFull = `${normalizedCountryCode}${withoutLeadingZero}`;
+  return [fullPhone, fullPhone !== altFull ? altFull : null];
+}
+
 // Signup - Customer registration (phone number only)
 // Creates a pending customer record
 export const signup = async (req, res) => {
@@ -277,13 +292,17 @@ export const loginWithPin = async (req, res) => {
       });
     }
 
-    const normalizedCountryCode = String(country_code).replace(/^\+/, '').trim();
-    const normalizedPhoneNumber = String(phone_number).trim().replace(/\s+/g, '');
-    const fullPhone = `${normalizedCountryCode}${normalizedPhoneNumber}`;
+    const [fullPhone, altPhone] = getPhoneLookupVariants(country_code, phone_number);
+    const phonesToTry = [fullPhone, altPhone].filter(Boolean);
+    const uniquePhones = [...new Set(phonesToTry)];
 
-    const customer = await prisma.customer.findFirst({
-      where: { phone: fullPhone }
-    });
+    let customer = null;
+    for (const phone of uniquePhones) {
+      customer = await prisma.customer.findFirst({
+        where: { phone }
+      });
+      if (customer) break;
+    }
 
     if (!customer) {
       return res.status(401).json({
@@ -727,6 +746,76 @@ export const getBalance = async (req, res) => {
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to get balance',
+    });
+  }
+};
+
+// Get current customer profile (for mobile app GET /accounts/profile)
+export const getProfile = async (req, res) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required',
+      });
+    }
+    const customer = await prisma.customer.findUnique({
+      where: { id: customerId },
+      select: {
+        id: true,
+        email: true,
+        username: true,
+        firstName: true,
+        lastName: true,
+        phone: true,
+        address: true,
+        status: true,
+        hasPin: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Customer not found',
+      });
+    }
+    // Derive country_code and phone_number from full phone (e.g. +251912345678)
+    let country_code = '';
+    let phone_number = customer.phone || '';
+    if (customer.phone && customer.phone.startsWith('+')) {
+      const match = customer.phone.match(/^(\+\d{1,4})(.*)$/);
+      if (match) {
+        country_code = match[1];
+        phone_number = match[2].replace(/\D/g, '').trim() || match[2];
+      }
+    }
+    const user = {
+      id: customer.id,
+      email: customer.email || null,
+      username: customer.username || null,
+      first_name: customer.firstName || null,
+      last_name: customer.lastName || null,
+      phone_number,
+      country_code: country_code || null,
+      is_verified: customer.status === 'approved',
+      has_pin: !!customer.hasPin,
+      profile_image: null,
+      created_at: customer.createdAt,
+      updated_at: customer.updatedAt,
+      type: 'customer',
+    };
+    return res.json({
+      success: true,
+      data: { user },
+    });
+  } catch (error) {
+    console.error('Error getting profile:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to get profile',
     });
   }
 };

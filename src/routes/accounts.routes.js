@@ -8,6 +8,7 @@ import {
   uploadKycDocument,
   setPin,
   getBalance,
+  getProfile,
   upload
 } from '../controllers/customer.controller.js';
 import { authenticateCustomer } from '../middleware/customerAuth.js';
@@ -46,5 +47,9 @@ router.post('/set-pin/', authenticateCustomer, setPin);
 // Get balance (requires authentication) - mobile app home screen
 router.get('/balance', authenticateCustomer, getBalance);
 router.get('/balance/', authenticateCustomer, getBalance);
+
+// Get current user profile (requires authentication) - mobile app
+router.get('/profile', authenticateCustomer, getProfile);
+router.get('/profile/', authenticateCustomer, getProfile);
 
 export default router;

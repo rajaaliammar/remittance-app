@@ -28,6 +28,7 @@ import remittanceTransactionRoutes from './remittanceTransaction.routes.js';
 import levelRoutes from './level.routes.js';
 import registrationSettingRoutes from './registrationSetting.routes.js';
 import kycRoutes from './kyc.routes.js';
+import messageRoutes from './message.routes.js';
 
 const router = express.Router();
 
@@ -63,6 +64,7 @@ router.use('/remittance-transactions', remittanceTransactionRoutes);
 router.use('/levels', levelRoutes);
 router.use('/registration-setting', registrationSettingRoutes);
 router.use('/kyc', kycRoutes);
+router.use('/messages', messageRoutes);
 
 // Default route
 router.get('/', (req, res) => {
