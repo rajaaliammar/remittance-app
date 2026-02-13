@@ -18,7 +18,7 @@ export const calculateCharge = async (req, res) => {
         const { totalCharge, breakdown, baseCharge, tax, fee } = await calculateTransactionFee({
             amount,
             countryId,
-            transferType: transferType === 'wallet' || transferType === 'bank' ? transferType : undefined
+            transferType: transferType || null
         });
 
         res.json({

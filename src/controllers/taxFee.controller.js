@@ -59,40 +59,72 @@ export const getTaxFeeById = async (req, res) => {
 
 export const createTaxFee = async (req, res) => {
   try {
-    const { name, type, valueType, value, description, status, countryIds, transferType } = req.body;
-    if (!name || !type || !valueType || value == null || value === '') {
-      return res.status(400).json({
-        success: false,
-        message: 'Name, type, valueType and value are required',
-      });
+    const { name, type, valueType, value, tiers, applyTo, description, status, countryIds } = req.body || {};
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ success: false, message: 'Name is required' });
     }
-    if (!['Tax', 'Fee'].includes(type)) {
+    if (!type || !['Tax', 'Fee'].includes(type)) {
       return res.status(400).json({ success: false, message: 'Type must be Tax or Fee' });
     }
-    if (!['percentage', 'fixed'].includes(valueType)) {
-      return res.status(400).json({ success: false, message: 'valueType must be percentage or fixed' });
+    if (!valueType || !['percentage', 'fixed', 'dynamic'].includes(valueType)) {
+      return res.status(400).json({ success: false, message: 'Value type must be percentage, fixed or dynamic' });
     }
-    const validTransferType = ['wallet', 'bank', 'both'].includes(transferType) ? transferType : 'both';
-    const numValue = parseFloat(value);
-    if (isNaN(numValue) || numValue < 0) {
-      return res.status(400).json({ success: false, message: 'Value must be a non-negative number' });
+    const channel = (applyTo && ['bank', 'wallet', 'both'].includes(applyTo)) ? applyTo : 'both';
+
+    let numValue = null;
+    let tiersData = null;
+
+    if (valueType === 'dynamic') {
+      if (!Array.isArray(tiers) || tiers.length === 0) {
+        return res.status(400).json({ success: false, message: 'Dynamic tax requires at least one tier (minAmount, maxAmount, valueType, value)' });
+      }
+      try {
+        tiersData = tiers.map((t) => {
+          const minA = parseFloat(t.minAmount);
+          const maxA = parseFloat(t.maxAmount);
+          const v = parseFloat(t.value);
+          const vt = t.valueType === 'fixed' ? 'fixed' : 'percentage';
+          if (isNaN(minA) || minA < 0 || isNaN(maxA) || maxA < 0 || isNaN(v) || v < 0) {
+            throw new Error('Invalid tier: minAmount, maxAmount and value must be non-negative numbers');
+          }
+          return { minAmount: minA, maxAmount: maxA, valueType: vt, value: v };
+        });
+      } catch (err) {
+        return res.status(400).json({ success: false, message: err.message || 'Invalid tier data' });
+      }
+    } else {
+      if (value == null || value === '') {
+        return res.status(400).json({ success: false, message: 'Value is required for percentage or fixed' });
+      }
+      numValue = parseFloat(value);
+      if (isNaN(numValue) || numValue < 0) {
+        return res.status(400).json({ success: false, message: 'Value must be a non-negative number' });
+      }
     }
+
     const ids = Array.isArray(countryIds) ? countryIds.filter(Boolean) : [];
+    const createData = {
+      name: name.trim(),
+      type,
+      valueType,
+      applyTo: channel,
+      description: description?.trim() || null,
+      status: status || 'Active',
+      ...(ids.length > 0 && {
+        countries: {
+          create: ids.map((countryId) => ({ countryId })),
+        },
+      }),
+    };
+    if (valueType === 'dynamic') {
+      createData.tiers = tiersData;
+      createData.value = null;
+    } else {
+      createData.value = numValue;
+      createData.tiers = null;
+    }
     const item = await prisma.taxFee.create({
-      data: {
-        name: name.trim(),
-        type,
-        valueType,
-        value: numValue,
-        transferType: validTransferType,
-        description: description?.trim() || null,
-        status: status || 'Active',
-        ...(ids.length > 0 && {
-          countries: {
-            create: ids.map((countryId) => ({ countryId })),
-          },
-        }),
-      },
+      data: createData,
       include: {
         countries: {
           include: { country: { select: { id: true, name: true, iso2: true, iso3: true } } },
@@ -110,6 +142,14 @@ export const createTaxFee = async (req, res) => {
     });
   } catch (error) {
     console.error('Error creating tax/fee:', error);
+    const msg = error.message || '';
+    if (msg.includes('Unknown arg') || msg.includes('Unknown field') || msg.includes('column') || msg.includes('applyTo') || msg.includes('tiers')) {
+      return res.status(500).json({
+        success: false,
+        message: 'Database schema may be outdated. Run in Remittance_backend: npx prisma db push',
+        error: msg,
+      });
+    }
     res.status(500).json({ success: false, error: error.message });
   }
 };
@@ -117,7 +157,7 @@ export const createTaxFee = async (req, res) => {
 export const updateTaxFee = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, type, valueType, value, description, status, countryIds } = req.body;
+    const { name, type, valueType, value, tiers, applyTo, description, status, countryIds } = req.body;
     const existing = await prisma.taxFee.findUnique({ where: { id } });
     if (!existing) {
       return res.status(404).json({ success: false, message: 'Tax/Fee not found' });
@@ -131,17 +171,37 @@ export const updateTaxFee = async (req, res) => {
       updateData.type = type;
     }
     if (valueType !== undefined) {
-      if (!['percentage', 'fixed'].includes(valueType)) {
-        return res.status(400).json({ success: false, message: 'valueType must be percentage or fixed' });
+      if (!['percentage', 'fixed', 'dynamic'].includes(valueType)) {
+        return res.status(400).json({ success: false, message: 'valueType must be percentage, fixed or dynamic' });
       }
       updateData.valueType = valueType;
     }
-    if (value !== undefined && value !== null && value !== '') {
-      const numValue = parseFloat(value);
-      if (isNaN(numValue) || numValue < 0) {
-        return res.status(400).json({ success: false, message: 'Value must be a non-negative number' });
+    if (applyTo !== undefined) {
+      if (!['bank', 'wallet', 'both'].includes(applyTo)) {
+        return res.status(400).json({ success: false, message: 'applyTo must be bank, wallet or both' });
       }
-      updateData.value = numValue;
+      updateData.applyTo = applyTo;
+    }
+    if (valueType === 'dynamic' && tiers !== undefined) {
+      if (!Array.isArray(tiers) || tiers.length === 0) {
+        return res.status(400).json({ success: false, message: 'Dynamic tax requires at least one tier' });
+      }
+      updateData.tiers = tiers.map((t) => ({
+        minAmount: parseFloat(t.minAmount),
+        maxAmount: parseFloat(t.maxAmount),
+        valueType: t.valueType === 'fixed' ? 'fixed' : 'percentage',
+        value: parseFloat(t.value),
+      }));
+      updateData.value = null;
+    } else if (valueType !== 'dynamic' && (value !== undefined || (existing.valueType !== 'dynamic' && valueType === undefined))) {
+      if (value !== undefined && value !== null && value !== '') {
+        const numValue = parseFloat(value);
+        if (isNaN(numValue) || numValue < 0) {
+          return res.status(400).json({ success: false, message: 'Value must be a non-negative number' });
+        }
+        updateData.value = numValue;
+        updateData.tiers = null;
+      }
     }
     if (description !== undefined) updateData.description = description?.trim() || null;
     if (status !== undefined) updateData.status = status;

@@ -105,10 +105,11 @@ export const createRemittanceTransaction = async (req, res) => {
       });
     }
 
-    // Calculate fees on backend for security and accuracy
+    // Calculate fees on backend for security and accuracy (transferType filters tax/fee by applyTo: bank | wallet | both)
     const { totalCharge, breakdown } = await calculateTransactionFee({
       amount: send,
-      countryId
+      countryId,
+      transferType: transferType === 'wallet' ? 'wallet' : 'bank'
     });
 
     const totalToDeduct = send + totalCharge;
