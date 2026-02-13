@@ -1,5 +1,5 @@
 import express from 'express';
-import { 
+import {
   signup as customerSignup,
   sendOTP,
   verifyOTP,
@@ -10,9 +10,12 @@ import {
   setPin,
   getBalance,
   getProfile,
+  getVerifications,
   updatePushToken,
-  upload
+  upload,
+  uploadKYC
 } from '../controllers/customer.controller.js';
+import { calculateCharge } from '../controllers/charge.controller.js';
 import { authenticateCustomer } from '../middleware/customerAuth.js';
 
 const router = express.Router();
@@ -42,6 +45,16 @@ router.post('/complete-profile/', authenticateCustomer, upload.single('profile_i
 router.post('/upload-kyc-document', authenticateCustomer, upload.single('document'), uploadKycDocument);
 router.post('/upload-kyc-document/', authenticateCustomer, upload.single('document'), uploadKycDocument);
 
+// Legacy KYC upload (front/back ID)
+router.post('/upload-kyc', authenticateCustomer, upload.fields([
+  { name: 'frontId', maxCount: 1 },
+  { name: 'backId', maxCount: 1 }
+]), uploadKYC);
+router.post('/upload-kyc/', authenticateCustomer, upload.fields([
+  { name: 'frontId', maxCount: 1 },
+  { name: 'backId', maxCount: 1 }
+]), uploadKYC);
+
 // Save KYC details from app (writes to Customer.kycData for Verifications screen)
 router.post('/kyc-details', authenticateCustomer, saveKycDetails);
 router.post('/kyc-details/', authenticateCustomer, saveKycDetails);
@@ -58,8 +71,16 @@ router.get('/balance/', authenticateCustomer, getBalance);
 router.get('/profile', authenticateCustomer, getProfile);
 router.get('/profile/', authenticateCustomer, getProfile);
 
+// Get current user's verifications/KYC documents (requires authentication) - mobile app Verifications screen
+router.get('/verifications', authenticateCustomer, getVerifications);
+router.get('/verifications/', authenticateCustomer, getVerifications);
+
 // Push notification token (requires authentication) - mobile app
 router.put('/push-token', authenticateCustomer, updatePushToken);
 router.put('/push-token/', authenticateCustomer, updatePushToken);
+
+// Charge calculation (public or authenticated)
+router.post('/calculate-charge', calculateCharge);
+router.post('/calculate-charge/', calculateCharge);
 
 export default router;

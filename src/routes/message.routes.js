@@ -7,6 +7,7 @@ const router = express.Router();
 router.get('/support', messageController.getSupportUser);
 router.get('/with', authenticateMessageUser, messageController.getMessagesWithUser);
 router.post('/send', authenticateMessageUser, messageController.sendMessage);
+router.post('/rate', authenticateMessageUser, messageController.submitChatRating);
 
 router.get('/session-requests', authenticateMessageUser, messageController.getSessionRequests);
 router.post('/session-requests/approve', authenticateMessageUser, messageController.approveSessionRequest);

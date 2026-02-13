@@ -5,7 +5,19 @@ import { sendPushToCustomer } from '../utils/push.js';
 function emitKYCUpdateToCustomer(req, customerId, payload) {
   try {
     const io = req.app && req.app.get && req.app.get('io');
-    if (io) io.to('user:' + customerId).emit('kyc-document:status-updated', payload);
+    if (io) {
+      // Original event for compatibility
+      io.to('user:' + customerId).emit('kyc-document:status-updated', payload);
+      
+      // Targeted event according to requested requirements
+      io.to('user:' + customerId).emit('kyc-status-updated', {
+        userId: customerId,
+        status: payload.status,
+        documentId: payload.documentId,
+        document: payload.document
+      });
+      console.log(`[KYC] Emitted real-time update to user:${customerId} (status: ${payload.status})`);
+    }
   } catch (e) {
     console.warn('[KYC] Socket emit failed:', e?.message);
   }

@@ -55,6 +55,8 @@ export const getMessagesWithUser = async (req, res) => {
       recipientId: m.recipientId,
       content: m.content,
       createdAt: m.createdAt.getTime ? m.createdAt.getTime() : m.createdAt,
+      rating: m.rating ?? undefined,
+      ratedAt: m.ratedAt ? (m.ratedAt.getTime ? m.ratedAt.getTime() : m.ratedAt) : undefined,
     }));
     res.json(list);
   } catch (error) {
@@ -150,6 +152,57 @@ export const approveSessionRequest = async (req, res) => {
     return res.json({ success: true, requestId });
   } catch (error) {
     console.error('approveSessionRequest error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+const CHAT_ENDED_CONTENT = '__CHAT_ENDED__';
+
+/**
+ * Submit a rating for the most recently ended chat session (app user = recipient of support).
+ * Body: { supportUserId, rating } where rating is 1-5.
+ */
+export const submitChatRating = async (req, res) => {
+  try {
+    const userId = req.userId;
+    const { supportUserId, rating } = req.body;
+    if (!supportUserId) {
+      return res.status(400).json({ success: false, message: 'supportUserId is required' });
+    }
+    const ratingNum = typeof rating === 'number' ? rating : parseInt(String(rating), 10);
+    if (!Number.isInteger(ratingNum) || ratingNum < 1 || ratingNum > 5) {
+      return res.status(400).json({ success: false, message: 'rating must be an integer between 1 and 5' });
+    }
+    const lastEnded = await prisma.message.findFirst({
+      where: {
+        senderId: supportUserId,
+        recipientId: userId,
+        content: CHAT_ENDED_CONTENT,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!lastEnded) {
+      return res.status(404).json({ success: false, message: 'No ended chat session found to rate' });
+    }
+    if (lastEnded.rating != null) {
+      return res.status(400).json({ success: false, message: 'This session was already rated' });
+    }
+    await prisma.message.update({
+      where: { id: lastEnded.id },
+      data: { rating: ratingNum, ratedAt: new Date() },
+    });
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('chatRated', {
+        messageId: lastEnded.id,
+        userId,
+        supportUserId,
+        rating: ratingNum,
+      });
+    }
+    return res.json({ success: true, rating: ratingNum });
+  } catch (error) {
+    console.error('submitChatRating error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 };

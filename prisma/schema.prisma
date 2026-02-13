@@ -99,6 +99,7 @@ model Country {
   countryServices        CountryService[]
   countryCharge          CountryCharge?
   states                 State[]
+  taxFeeCountries        TaxFeeCountry[]
 
   @@map("countries")
 }
@@ -468,11 +469,13 @@ model RegistrationSetting {
 }
 
 model Message {
-  id          String   @id @default(cuid())
-  senderId    String   // Customer id or BackofficeUser id
+  id          String    @id @default(cuid())
+  senderId    String    // Customer id or BackofficeUser id
   recipientId String
-  content     String   @db.Text
-  createdAt   DateTime @default(now())
+  content     String    @db.Text
+  createdAt   DateTime  @default(now())
+  rating      Int?      // 1-5, set when recipient rates the chat session (for __CHAT_ENDED__ messages)
+  ratedAt     DateTime? // When the rating was submitted
 
   @@index([senderId, recipientId])
   @@index([recipientId, senderId])
@@ -488,4 +491,32 @@ model FAQ {
   updatedAt DateTime @updatedAt
 
   @@map("faqs")
+}
+
+model TaxFee {
+  id           String   @id @default(cuid())
+  name         String
+  type         String   // "Tax" | "Fee"
+  valueType    String   // "percentage" | "fixed" — percentage = dynamic (per transaction amount), fixed = same amount per transaction
+  value        Decimal  @db.Decimal(18, 4) // e.g. 5.00 for 5% or 2.50 for fixed
+  transferType String   @default("both") // "wallet" | "bank" | "both" — apply to wallet transfers, bank transfers, or both
+  description  String?  @db.Text
+  status       String   @default("Active") // Active, Inactive
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  countries    TaxFeeCountry[]
+
+  @@map("tax_fees")
+}
+
+model TaxFeeCountry {
+  id         String   @id @default(cuid())
+  taxFeeId   String
+  taxFee     TaxFee   @relation(fields: [taxFeeId], references: [id], onDelete: Cascade)
+  countryId  String
+  country    Country  @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([taxFeeId, countryId])
+  @@map("tax_fee_countries")
 }

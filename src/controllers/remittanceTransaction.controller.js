@@ -1,4 +1,5 @@
 import prisma from '../utils/prisma.js';
+import { calculateTransactionFee } from '../utils/chargeUtils.js';
 
 /** Start of today UTC */
 function startOfDayUTC(d) {
@@ -92,6 +93,7 @@ export const createRemittanceTransaction = async (req, res) => {
       recipientInfo,
       paymentFieldValues,
       transferType,
+      countryId,
     } = req.body || {};
 
     const send = parseFloat(sendAmount);
@@ -102,6 +104,14 @@ export const createRemittanceTransaction = async (req, res) => {
         message: 'Valid sendAmount and receiveAmount are required',
       });
     }
+
+    // Calculate fees on backend for security and accuracy
+    const { totalCharge, breakdown } = await calculateTransactionFee({
+      amount: send,
+      countryId
+    });
+
+    const totalToDeduct = send + totalCharge;
 
     const delegate = prisma.remittanceTransaction;
     if (!delegate || typeof delegate.create !== 'function') {
@@ -125,10 +135,11 @@ export const createRemittanceTransaction = async (req, res) => {
     const currentBalance = row.availableBalance != null
       ? Number(row.availableBalance)
       : 12000;
-    if (currentBalance < send) {
+
+    if (currentBalance < totalToDeduct) {
       return res.status(400).json({
         success: false,
-        message: `Insufficient balance. Available: ${currentBalance.toFixed(2)}, required: ${send.toFixed(2)}`,
+        message: `Insufficient balance. Available: ${currentBalance.toFixed(2)}, required (including fees): ${totalToDeduct.toFixed(2)}`,
       });
     }
 
@@ -167,9 +178,20 @@ export const createRemittanceTransaction = async (req, res) => {
       }
     }
 
-    const newBalance = currentBalance - send;
+    const newBalance = currentBalance - totalToDeduct;
 
     const txType = (transferType === 'wallet' ? 'wallet' : 'bank');
+
+    // Enrich recipientInfo with fee details for history/receipts
+    const enrichedRecipientInfo = {
+      ...(recipientInfo || {}),
+      fee: totalCharge,
+      feeBreakdown: breakdown,
+      baseAmount: send,
+      totalAmount: totalToDeduct,
+      countryId
+    };
+
     const [transaction] = await prisma.$transaction([
       delegate.create({
         data: {
@@ -181,7 +203,7 @@ export const createRemittanceTransaction = async (req, res) => {
           currency: currency || null,
           gatewayId: gatewayId || null,
           gatewayName: gatewayName || null,
-          recipientInfo: recipientInfo || null,
+          recipientInfo: enrichedRecipientInfo,
           paymentFieldValues: paymentFieldValues || null,
           status: 'Processing',
         },

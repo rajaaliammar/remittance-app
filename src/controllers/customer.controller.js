@@ -20,7 +20,7 @@ const storage = multer.diskStorage({
   }
 });
 
-export const upload = multer({ 
+export const upload = multer({
   storage: storage,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
   fileFilter: (req, file, cb) => {
@@ -59,10 +59,10 @@ export const signup = async (req, res) => {
   try {
     const { country_code, phone_number } = req.body;
 
-      if (!country_code || phone_number == null || String(phone_number).trim() === '') {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Country code and phone number are required.' 
+    if (!country_code || phone_number == null || String(phone_number).trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Country code and phone number are required.'
       });
     }
 
@@ -73,17 +73,17 @@ export const signup = async (req, res) => {
     const placeholderEmail = `phone_${fullPhone.replace(/\D/g, '')}@remittance.pending`;
 
     // Check if user already exists
-      const existingByPhone = await prisma.customer.findFirst({
-        where: { phone: fullPhone }
-      });
+    const existingByPhone = await prisma.customer.findFirst({
+      where: { phone: fullPhone }
+    });
 
-      if (existingByPhone) {
+    if (existingByPhone) {
       return res.status(200).json({
         success: true,
         message: 'Phone number already registered. You can proceed to verify OTP.',
-        data: { 
-          id: existingByPhone.id, 
-          phone: existingByPhone.phone, 
+        data: {
+          id: existingByPhone.id,
+          phone: existingByPhone.phone,
           status: existingByPhone.status,
           alreadyRegistered: true
         }
@@ -91,17 +91,17 @@ export const signup = async (req, res) => {
     }
 
     // Check by placeholder email
-      const existingByEmail = await prisma.customer.findUnique({
-        where: { email: placeholderEmail }
-      });
+    const existingByEmail = await prisma.customer.findUnique({
+      where: { email: placeholderEmail }
+    });
 
-      if (existingByEmail) {
+    if (existingByEmail) {
       return res.status(200).json({
-          success: true,
+        success: true,
         message: 'Phone number already registered. You can proceed to verify OTP.',
-        data: { 
-          id: existingByEmail.id, 
-          phone: existingByEmail.phone, 
+        data: {
+          id: existingByEmail.id,
+          phone: existingByEmail.phone,
           status: existingByEmail.status,
           alreadyRegistered: true
         }
@@ -109,32 +109,32 @@ export const signup = async (req, res) => {
     }
 
     // Create new customer with pending status
-      const hashedPassword = await bcrypt.hash(Math.random().toString(36) + Date.now(), 10);
-      const customer = await prisma.customer.create({
-        data: {
-          email: placeholderEmail,
-          username: `user_${fullPhone.replace(/\D/g, '')}_${Date.now()}`,
-          firstName: 'Pending',
-          lastName: 'User',
-          phone: fullPhone,
-          address: null,
-          password: hashedPassword,
-          status: 'pending'
-        },
-        select: {
-          id: true,
-          email: true,
-          username: true,
-          firstName: true,
-          lastName: true,
-          phone: true,
-          status: true,
-          createdAt: true
-        }
-      });
+    const hashedPassword = await bcrypt.hash(Math.random().toString(36) + Date.now(), 10);
+    const customer = await prisma.customer.create({
+      data: {
+        email: placeholderEmail,
+        username: `user_${fullPhone.replace(/\D/g, '')}_${Date.now()}`,
+        firstName: 'Pending',
+        lastName: 'User',
+        phone: fullPhone,
+        address: null,
+        password: hashedPassword,
+        status: 'pending'
+      },
+      select: {
+        id: true,
+        email: true,
+        username: true,
+        firstName: true,
+        lastName: true,
+        phone: true,
+        status: true,
+        createdAt: true
+      }
+    });
 
-      return res.status(201).json({
-        success: true,
+    return res.status(201).json({
+      success: true,
       message: 'Registration started. Please verify your phone number with OTP.',
       data: {
         ...customer,
@@ -143,10 +143,10 @@ export const signup = async (req, res) => {
     });
   } catch (error) {
     console.error('Error in customer signup:', error);
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       message: 'Registration failed. Please try again.',
-      error: error.message 
+      error: error.message
     });
   }
 };
@@ -175,7 +175,7 @@ export const sendOTP = async (req, res) => {
 
     if (!customer) {
       return res.status(404).json({
-        success: false, 
+        success: false,
         message: 'Phone number not registered. Please sign up first.'
       });
     }
@@ -209,8 +209,8 @@ export const verifyOTP = async (req, res) => {
     const { country_code, phone_number, otp } = req.body;
 
     if (!country_code || !phone_number || !otp) {
-      return res.status(400).json({ 
-        success: false, 
+      return res.status(400).json({
+        success: false,
         message: 'Country code, phone number, and OTP are required'
       });
     }
@@ -474,11 +474,11 @@ export const completeProfile = async (req, res) => {
   }
 };
 
-// Upload KYC Document
+// Upload KYC Document (Single file)
 export const uploadKycDocument = async (req, res) => {
   try {
     const customerId = req.user?.id;
-    
+
     if (!customerId) {
       return res.status(401).json({
         success: false,
@@ -496,11 +496,7 @@ export const uploadKycDocument = async (req, res) => {
     const { category, side } = req.body;
     const fileUrl = `/uploads/kyc/${req.file.filename}`;
 
-    // In a real application, you would:
-    // 1. Upload to cloud storage (S3, Cloudinary, etc.)
-    // 2. Store the URL in database
-    // 3. Associate with customer KYC record
-
+    // Return the URL so the app can use it in subsequent KYC submission calls
     return res.status(200).json({
       success: true,
       message: 'KYC document uploaded successfully',
@@ -521,15 +517,94 @@ export const uploadKycDocument = async (req, res) => {
   }
 };
 
+// Upload National ID (Front and Back) - Used by legacy app flow
+export const uploadKYC = async (req, res) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+
+    if (!req.files || (!req.files.frontId && !req.files.backId)) {
+      return res.status(400).json({ success: false, message: 'ID images are required' });
+    }
+
+    const frontIdFile = req.files.frontId ? req.files.frontId[0] : null;
+    const backIdFile = req.files.backId ? req.files.backId[0] : null;
+
+    const customer = await prisma.customer.findUnique({
+      where: { id: customerId },
+      select: { kycData: true }
+    });
+
+    if (!customer) {
+      return res.status(404).json({ success: false, message: 'Customer not found' });
+    }
+
+    let kycData = customer.kycData ? (Array.isArray(customer.kycData) ? customer.kycData : [customer.kycData]) : [];
+
+    const now = new Date().toISOString();
+    const documents = [];
+
+    if (frontIdFile) {
+      documents.push({
+        id: `field_front_${Date.now()}`,
+        fieldName: 'National ID Front',
+        inputType: 'file',
+        value: frontIdFile.filename,
+        fileUrl: `/uploads/kyc/${frontIdFile.filename}`,
+        status: 'pending'
+      });
+    }
+
+    if (backIdFile) {
+      documents.push({
+        id: `field_back_${Date.now()}`,
+        fieldName: 'National ID Back',
+        inputType: 'file',
+        value: backIdFile.filename,
+        fileUrl: `/uploads/kyc/${backIdFile.filename}`,
+        status: 'pending'
+      });
+    }
+
+    const newDoc = {
+      id: `doc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      verificationType: 'National ID',
+      formName: 'National ID',
+      status: 'pending',
+      submittedAt: now,
+      date: now,
+      documents: documents
+    };
+
+    kycData.push(newDoc);
+
+    await prisma.customer.update({
+      where: { id: customerId },
+      data: { kycData }
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'KYC documents uploaded successfully',
+      data: newDoc
+    });
+  } catch (error) {
+    console.error('Error uploading KYC:', error);
+    res.status(500).json({ success: false, message: 'Failed to upload documents', error: error.message });
+  }
+};
+
 // Login - Customer authentication
 export const login = async (req, res) => {
   try {
     const { username, password } = req.body;
 
     if (!username || !password) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Username and password are required' 
+      return res.status(400).json({
+        success: false,
+        message: 'Username and password are required'
       });
     }
 
@@ -544,25 +619,25 @@ export const login = async (req, res) => {
     });
 
     if (!customer) {
-      return res.status(401).json({ 
-        success: false, 
-        message: 'Invalid credentials' 
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials'
       });
     }
 
     if (customer.status !== 'approved') {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Your account is not approved yet. Please wait for admin approval.' 
+      return res.status(403).json({
+        success: false,
+        message: 'Your account is not approved yet. Please wait for admin approval.'
       });
     }
 
     const isValidPassword = await bcrypt.compare(password, customer.password);
 
     if (!isValidPassword) {
-      return res.status(401).json({ 
-        success: false, 
-        message: 'Invalid credentials' 
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials'
       });
     }
 
@@ -644,7 +719,7 @@ export const setPin = async (req, res) => {
       // Fallback to raw SQL if Prisma client doesn't have pin/hasPin fields yet
       if (prismaError.message && prismaError.message.includes('Unknown argument')) {
         console.log('[setPin] Using raw SQL fallback - Prisma client not regenerated yet');
-        
+
         // Ensure columns exist first
         try {
           await prisma.$executeRawUnsafe(`
@@ -820,6 +895,90 @@ export const getProfile = async (req, res) => {
   }
 };
 
+// Get current customer's verification/KYC documents (for app Verifications screen)
+// Same data as GET /kyc/my-documents - reads from Customer.kycData
+export const getVerifications = async (req, res) => {
+  try {
+    const customerId = req.user?.id;
+    console.log('[getVerifications] ========== START ==========');
+    console.log('[getVerifications] Customer ID from token:', customerId);
+    console.log('[getVerifications] Full req.user:', JSON.stringify(req.user, null, 2));
+
+    if (!customerId) {
+      console.log('[getVerifications] ❌ No customer ID - returning 401');
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required',
+      });
+    }
+
+    const customer = await prisma.customer.findUnique({
+      where: { id: customerId },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        phone: true,
+        email: true,
+        kycData: true
+      },
+    });
+
+    console.log('[getVerifications] Customer found:', !!customer);
+    if (customer) {
+      console.log('[getVerifications] Customer details:', {
+        id: customer.id,
+        name: `${customer.firstName} ${customer.lastName}`,
+        phone: customer.phone,
+        email: customer.email,
+        hasKycData: customer.kycData != null,
+        kycDataType: typeof customer.kycData,
+        kycDataIsArray: Array.isArray(customer.kycData)
+      });
+    }
+
+    if (!customer) {
+      console.log('[getVerifications] ❌ Customer not found in database');
+      return res.status(404).json({
+        success: false,
+        message: 'Customer not found',
+      });
+    }
+
+    let raw = customer.kycData;
+    console.log('[getVerifications] Raw kycData:', JSON.stringify(raw, null, 2));
+
+    if (typeof raw === 'string') {
+      console.log('[getVerifications] kycData is string, attempting to parse...');
+      try {
+        raw = JSON.parse(raw);
+        console.log('[getVerifications] ✅ Parsed successfully');
+      } catch (e) {
+        console.log('[getVerifications] ❌ Failed to parse JSON:', e.message);
+        raw = null;
+      }
+    }
+
+    const kycDocuments = raw ? (Array.isArray(raw) ? raw : [raw]) : [];
+    console.log('[getVerifications] Final kycDocuments count:', kycDocuments.length);
+    console.log('[getVerifications] Final kycDocuments:', JSON.stringify(kycDocuments, null, 2));
+    console.log('[getVerifications] ========== END ==========');
+
+    return res.json({
+      success: true,
+      data: kycDocuments,
+      message: 'Verifications retrieved successfully',
+    });
+  } catch (error) {
+    console.error('[getVerifications] ❌ ERROR:', error);
+    console.error('[getVerifications] Error stack:', error.stack);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to fetch verifications',
+    });
+  }
+};
+
 // Save KYC details from app (EnhancedKYCScreen / multi-step flow) into Customer.kycData so Verifications screen shows real data
 export const saveKycDetails = async (req, res) => {
   try {
@@ -950,7 +1109,7 @@ export const updatePushToken = async (req, res) => {
 export const getAllCustomers = async (req, res) => {
   try {
     const { search } = req.query;
-    
+
     const where = search ? {
       OR: [
         { email: { contains: search, mode: 'insensitive' } },
