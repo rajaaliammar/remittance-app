@@ -10,6 +10,7 @@ import {
   uploadKycDocument,
   saveKycDetails,
   setPin,
+  setPassword,
   getBalance,
   getProfile,
   getVerifications,
@@ -70,6 +71,10 @@ router.post('/kyc-details/', authenticateCustomer, saveKycDetails);
 // Set PIN (requires authentication)
 router.post('/set-pin', authenticateCustomer, setPin);
 router.post('/set-pin/', authenticateCustomer, setPin);
+
+// Set Password (requires authentication)
+router.post('/set-password', authenticateCustomer, setPassword);
+router.post('/set-password/', authenticateCustomer, setPassword);
 
 // Get balance (requires authentication) - mobile app home screen
 router.get('/balance', authenticateCustomer, getBalance);

@@ -1120,6 +1120,101 @@ export const setPin = async (req, res) => {
   }
 };
 
+// Set password for authenticated customer
+export const setPassword = async (req, res) => {
+  try {
+    const { password } = req.body;
+    const customerId = req.user.id; // From authenticateCustomer middleware
+
+    // Validate password (minimum 6 characters)
+    if (!password || typeof password !== 'string' || String(password).trim().length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password is required and must be at least 6 characters'
+      });
+    }
+
+    // Hash the password
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash(String(password).trim(), saltRounds);
+
+    // Update customer password
+    let updatedCustomer;
+    try {
+      updatedCustomer = await prisma.customer.update({
+        where: { id: customerId },
+        data: {
+          password: hashedPassword
+        },
+        select: {
+          id: true,
+          email: true,
+          username: true,
+          phone: true,
+          firstName: true,
+          lastName: true,
+          hasPin: true,
+          status: true
+        }
+      });
+    } catch (prismaError) {
+      // Fallback to raw SQL if needed
+      if (prismaError.message && prismaError.message.includes('Unknown argument')) {
+        console.log('[setPassword] Using raw SQL fallback');
+        
+        // Update using raw SQL
+        await prisma.$executeRawUnsafe(`
+          UPDATE "customers" 
+          SET "password" = $1, "updatedAt" = CURRENT_TIMESTAMP
+          WHERE "id" = $2
+        `, hashedPassword, customerId);
+
+        // Fetch updated customer using raw SQL
+        const result = await prisma.$queryRawUnsafe(`
+          SELECT 
+            id, email, username, phone, 
+            "firstName", "lastName", "hasPin", status
+          FROM "customers"
+          WHERE "id" = $1
+        `, customerId);
+
+        if (result && result.length > 0) {
+          updatedCustomer = {
+            id: result[0].id,
+            email: result[0].email,
+            username: result[0].username,
+            phone: result[0].phone,
+            firstName: result[0].firstName,
+            lastName: result[0].lastName,
+            hasPin: result[0].hasPin === true || result[0].hasPin === 'true' || result[0].hasPin === 1,
+            status: result[0].status
+          };
+        } else {
+          return res.status(404).json({
+            success: false,
+            message: 'Customer not found'
+          });
+        }
+      } else {
+        throw prismaError;
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Password set successfully',
+      data: updatedCustomer
+    });
+  } catch (error) {
+    console.error('Error setting password:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to set password',
+      error: error.message
+    });
+  }
+};
+
 // Get authenticated customer's available balance (for remittance app home screen)
 export const getBalance = async (req, res) => {
   try {
