@@ -13,6 +13,8 @@ import {
   getBalance,
   getProfile,
   getVerifications,
+  getTierAndLimits,
+  getConsumedLimits,
   updatePushToken,
   upload,
   uploadKYC
@@ -80,6 +82,13 @@ router.get('/profile/', authenticateCustomer, getProfile);
 // Get current user's verifications/KYC documents (requires authentication) - mobile app Verifications screen
 router.get('/verifications', authenticateCustomer, getVerifications);
 router.get('/verifications/', authenticateCustomer, getVerifications);
+
+// Get current user's tier and transaction limits (KYC-approved limits for remittance)
+router.get('/tier-limits', authenticateCustomer, getTierAndLimits);
+router.get('/tier-limits/', authenticateCustomer, getTierAndLimits);
+
+// Get consumed (used) limits for current period - app can show remaining
+router.get('/limits/consumed', authenticateCustomer, getConsumedLimits);
 
 // Push notification token (requires authentication) - mobile app
 router.put('/push-token', authenticateCustomer, updatePushToken);

@@ -1,75 +1,13 @@
 import prisma from '../utils/prisma.js';
 import { calculateTransactionFee } from '../utils/chargeUtils.js';
-
-/** Start of today UTC */
-function startOfDayUTC(d) {
-  const x = new Date(d);
-  return new Date(Date.UTC(x.getUTCFullYear(), x.getUTCMonth(), x.getUTCDate()));
-}
-/** Start of week (Monday) UTC */
-function startOfWeekUTC(d) {
-  const x = new Date(d);
-  const day = x.getUTCDay();
-  const mondayOffset = day === 0 ? -6 : 1 - day;
-  const monday = new Date(x);
-  monday.setUTCDate(x.getUTCDate() + mondayOffset);
-  return new Date(Date.UTC(monday.getUTCFullYear(), monday.getUTCMonth(), monday.getUTCDate()));
-}
-/** Start of month UTC */
-function startOfMonthUTC(d) {
-  const x = new Date(d);
-  return new Date(Date.UTC(x.getUTCFullYear(), x.getUTCMonth(), 1));
-}
-
-/**
- * Get customer's transaction limits from their level (daily, weekly, monthly).
- * If customer has no level, use the first level (lowest priority) so "assign to all users" applies.
- * Returns null if no limits configured (no limit enforced).
- */
-async function getCustomerLimits(customerId) {
-  let level = null;
-  const customerRow = await prisma.$queryRaw`
-    SELECT id, "level" FROM customers WHERE id = ${customerId}
-  `.then((rows) => rows?.[0]);
-  if (customerRow?.level) {
-    level = await prisma.level.findUnique({
-      where: { id: customerRow.level },
-      select: { transactionLimits: true },
-    });
-  }
-  if (!level?.transactionLimits) {
-    const firstLevel = await prisma.level.findFirst({
-      orderBy: { priority: 'asc' },
-      select: { transactionLimits: true },
-    });
-    level = firstLevel;
-  }
-  if (!level?.transactionLimits || !Array.isArray(level.transactionLimits) || level.transactionLimits.length === 0) {
-    return null;
-  }
-  const first = level.transactionLimits[0];
-  const daily = first.dailyAmount != null ? Number(first.dailyAmount) : null;
-  const weekly = first.weeklyAmount != null ? Number(first.weeklyAmount) : null;
-  const monthly = first.monthlyAmount != null ? Number(first.monthlyAmount) : null;
-  const currency = first.currency || 'USD';
-  if (daily == null && weekly == null && monthly == null) return null;
-  return { daily, weekly, monthly, currency };
-}
-
-/**
- * Get total sent amount by customer in period [from, to] (UTC).
- */
-async function getSentInPeriod(customerId, from, to) {
-  const result = await prisma.remittanceTransaction.aggregate({
-    where: {
-      customerId,
-      type: 'Sent',
-      createdAt: { gte: from, lte: to },
-    },
-    _sum: { sendAmount: true },
-  });
-  return Number(result._sum?.sendAmount ?? 0);
-}
+import {
+  getCustomerLimits,
+  getSentInPeriod,
+  getApprovedKYCMaxAmount,
+  startOfDayUTC,
+  startOfWeekUTC,
+  startOfMonthUTC,
+} from '../utils/limitsHelper.js';
 
 /**
  * Create a remittance transaction (after user confirms payment in app)
@@ -84,11 +22,12 @@ export const createRemittanceTransaction = async (req, res) => {
       });
     }
 
-    // Block transaction if customer has any KYC document pending
+    // Allow transaction when at least one KYC document is approved; block only when none is approved
     const customer = await prisma.customer.findUnique({
       where: { id: customerId },
       select: { kycData: true },
     });
+    let hasApprovedKYC = false;
     if (customer?.kycData) {
       let raw = customer.kycData;
       if (typeof raw === 'string') {
@@ -99,13 +38,13 @@ export const createRemittanceTransaction = async (req, res) => {
         }
       }
       const docs = raw ? (Array.isArray(raw) ? raw : [raw]) : [];
-      const hasPending = docs.some((doc) => (doc.status || '').toLowerCase() === 'pending');
-      if (hasPending) {
-        return res.status(403).json({
-          success: false,
-          message: 'You cannot make a transaction while your KYC is pending. Please wait for your verification to be approved.',
-        });
-      }
+      hasApprovedKYC = docs.some((doc) => (doc.status || '').toLowerCase() === 'approved');
+    }
+    if (!hasApprovedKYC) {
+      return res.status(403).json({
+        success: false,
+        message: 'You need at least one approved verification to make transactions. Complete and submit KYC, then wait for approval.',
+      });
     }
 
     const {
@@ -126,6 +65,16 @@ export const createRemittanceTransaction = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'Valid sendAmount and receiveAmount are required',
+      });
+    }
+
+    // Enforce approved KYC form's "Max Transaction Amount" (e.g. kyc2 = 2999 USD)
+    const kycMaxAmount = await getApprovedKYCMaxAmount(customerId);
+    if (kycMaxAmount != null && send > kycMaxAmount) {
+      return res.status(400).json({
+        success: false,
+        message: `This amount exceeds your transaction limit. Your approved KYC allows a maximum of ${kycMaxAmount.toFixed(2)} USD per transaction.`,
+        code: 'KYC_TRANSACTION_LIMIT_EXCEEDED',
       });
     }
 

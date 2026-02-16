@@ -6,6 +6,14 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { getWritableKycUploadDir } from '../utils/uploadPath.js';
+import {
+  getCustomerLimits,
+  getSentInPeriod,
+  getApprovedKYCMaxAmount,
+  startOfDayUTC,
+  startOfWeekUTC,
+  startOfMonthUTC,
+} from '../utils/limitsHelper.js';
 
 // Fallback dir that is always available (tmpdir) so uploads never fail with EACCES
 const TMPDIR_KYC = path.join(os.tmpdir(), 'remittance-kyc-uploads', 'kyc');
@@ -309,10 +317,72 @@ export const verifyOTP = async (req, res) => {
   }
 };
 
-// Login with PIN - Authenticate by phone number + 4-digit PIN (no OTP)
+// Login with PIN - Authenticate by phone number + PIN or email + PIN (no OTP)
 export const loginWithPin = async (req, res) => {
   try {
-    const { country_code, phone_number, pin } = req.body;
+    const { country_code, phone_number, email, pin } = req.body;
+    const emailTrimmed = email != null ? String(email).trim().toLowerCase() : '';
+
+    if (emailTrimmed !== '') {
+      if (!pin) {
+        return res.status(400).json({
+          success: false,
+          message: 'Email and PIN are required.'
+        });
+      }
+      const customer = await prisma.customer.findFirst({
+        where: { email: emailTrimmed }
+      });
+      if (!customer) {
+        return res.status(401).json({
+          success: false,
+          message: 'Account not found. Please sign in with password first or check your email.'
+        });
+      }
+      if (!customer.hasPin || !customer.pin) {
+        return res.status(401).json({
+          success: false,
+          message: 'PIN not set. Please sign in with password first and set a PIN.'
+        });
+      }
+      const pinValid = await bcrypt.compare(String(pin).trim(), customer.pin);
+      if (!pinValid) {
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid PIN'
+        });
+      }
+      const token = jwt.sign(
+        {
+          id: customer.id,
+          email: customer.email,
+          username: customer.username,
+          phone: customer.phone,
+          type: 'customer'
+        },
+        process.env.JWT_SECRET || 'your-secret-key-change-in-production',
+        { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+      );
+      return res.status(200).json({
+        success: true,
+        message: 'Login successful',
+        data: {
+          access_token: token,
+          user: {
+            id: customer.id,
+            email: customer.email,
+            username: customer.username,
+            first_name: customer.firstName,
+            last_name: customer.lastName,
+            phone: customer.phone,
+            status: customer.status,
+            has_pin: !!customer.hasPin,
+            profile_image: null,
+            type: 'customer'
+          }
+        }
+      });
+    }
 
     if (!country_code || phone_number == null || String(phone_number).trim() === '' || !pin) {
       return res.status(400).json({
@@ -395,15 +465,34 @@ export const loginWithPin = async (req, res) => {
 };
 
 // Check login info - Returns whether user has PIN set (so app can show Password vs PIN screen).
-// No auth required; used on login screen when user enters phone.
+// No auth required; accepts either (country_code + phone_number) or email.
 export const checkLoginInfo = async (req, res) => {
   try {
-    const { country_code, phone_number } = req.body;
+    const { country_code, phone_number, email } = req.body;
+    const emailTrimmed = email != null ? String(email).trim() : '';
+
+    if (emailTrimmed !== '') {
+      // Lookup by email
+      const customer = await prisma.customer.findFirst({
+        where: { email: emailTrimmed.toLowerCase() },
+        select: { id: true, hasPin: true }
+      });
+      if (!customer) {
+        return res.status(200).json({
+          success: true,
+          data: { hasPin: false, exists: false }
+        });
+      }
+      return res.status(200).json({
+        success: true,
+        data: { hasPin: !!customer.hasPin, exists: true }
+      });
+    }
 
     if (!country_code || phone_number == null || String(phone_number).trim() === '') {
       return res.status(400).json({
         success: false,
-        message: 'Country code and phone number are required.'
+        message: 'Country code and phone number, or email, are required.'
       });
     }
 
@@ -438,10 +527,66 @@ export const checkLoginInfo = async (req, res) => {
   }
 };
 
-// Login with password - First-time or no-PIN login (phone + password).
+// Login with password - First-time or no-PIN login (phone + password or email + password).
 export const loginWithPassword = async (req, res) => {
   try {
-    const { country_code, phone_number, password } = req.body;
+    const { country_code, phone_number, email, password } = req.body;
+    const emailTrimmed = email != null ? String(email).trim().toLowerCase() : '';
+
+    if (emailTrimmed !== '') {
+      if (!password) {
+        return res.status(400).json({
+          success: false,
+          message: 'Email and password are required.'
+        });
+      }
+      const customer = await prisma.customer.findFirst({
+        where: { email: emailTrimmed }
+      });
+      if (!customer) {
+        return res.status(401).json({
+          success: false,
+          message: 'Account not found. Please sign up first.'
+        });
+      }
+      const passwordValid = await bcrypt.compare(String(password).trim(), customer.password);
+      if (!passwordValid) {
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid password.'
+        });
+      }
+      const token = jwt.sign(
+        {
+          id: customer.id,
+          email: customer.email,
+          username: customer.username,
+          phone: customer.phone,
+          type: 'customer'
+        },
+        process.env.JWT_SECRET || 'your-secret-key-change-in-production',
+        { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+      );
+      return res.status(200).json({
+        success: true,
+        message: 'Login successful',
+        data: {
+          access_token: token,
+          user: {
+            id: customer.id,
+            email: customer.email,
+            username: customer.username,
+            first_name: customer.firstName,
+            last_name: customer.lastName,
+            phone: customer.phone,
+            status: customer.status,
+            has_pin: !!customer.hasPin,
+            profile_image: null,
+            type: 'customer'
+          }
+        }
+      });
+    }
 
     if (!country_code || phone_number == null || String(phone_number).trim() === '' || !password) {
       return res.status(400).json({
@@ -1164,6 +1309,79 @@ export const getVerifications = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: error.message || 'Failed to fetch verifications',
+    });
+  }
+};
+
+// Get current user's tier (level) and transaction limits (for app: when KYC is approved, user transacts within these limits)
+// Also returns kycMaxTransactionAmount: max per-transaction amount from approved KYC form (e.g. kyc2 = 2999)
+export const getTierAndLimits = async (req, res) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required',
+      });
+    }
+    const [limits, kycMaxTransactionAmount] = await Promise.all([
+      getCustomerLimits(customerId),
+      getApprovedKYCMaxAmount(customerId),
+    ]);
+    const baseData = {
+      levelId: limits?.levelId ?? null,
+      levelName: limits?.levelName ?? null,
+      daily: limits?.daily ?? null,
+      weekly: limits?.weekly ?? null,
+      monthly: limits?.monthly ?? null,
+      currency: limits?.currency ?? 'USD',
+      kycMaxTransactionAmount: kycMaxTransactionAmount != null ? Number(kycMaxTransactionAmount) : null,
+    };
+    return res.json({
+      success: true,
+      data: baseData,
+    });
+  } catch (error) {
+    console.error('Error getting tier and limits:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to get tier and limits',
+    });
+  }
+};
+
+// Get consumed (used) limits for current period (daily, weekly, monthly) so app can show remaining
+export const getConsumedLimits = async (req, res) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required',
+      });
+    }
+    const now = new Date();
+    const startDay = startOfDayUTC(now);
+    const startWeek = startOfWeekUTC(now);
+    const startMonth = startOfMonthUTC(now);
+    const [usedDaily, usedWeekly, usedMonthly] = await Promise.all([
+      getSentInPeriod(customerId, startDay, now),
+      getSentInPeriod(customerId, startWeek, now),
+      getSentInPeriod(customerId, startMonth, now),
+    ]);
+    return res.json({
+      success: true,
+      data: {
+        usedDaily,
+        usedWeekly,
+        usedMonthly,
+      },
+    });
+  } catch (error) {
+    console.error('Error getting consumed limits:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to get consumed limits',
     });
   }
 };
