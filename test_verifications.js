@@ -1,6 +1,8 @@
 import axios from 'axios';
+import dotenv from 'dotenv';
 
-const BASE_URL = 'https://apibrandpay.appliedline.com/api';
+dotenv.config();
+const BASE_URL = (process.env.EXTERNAL_API_URL || 'https://apibrandpay.appliedline.com').replace(/\/+$/, '') + '/api';
 
 async function testVerifications() {
     try {

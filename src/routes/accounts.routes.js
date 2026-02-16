@@ -4,6 +4,8 @@ import {
   sendOTP,
   verifyOTP,
   loginWithPin,
+  loginWithPassword,
+  checkLoginInfo,
   completeProfile,
   uploadKycDocument,
   saveKycDetails,
@@ -36,6 +38,10 @@ router.post('/verify-otp', verifyOTP);
 router.post('/verify-otp/', verifyOTP);
 router.post('/login-pin', loginWithPin);
 router.post('/login-pin/', loginWithPin);
+router.post('/login-password', loginWithPassword);
+router.post('/login-password/', loginWithPassword);
+router.post('/check-login-info', checkLoginInfo);
+router.post('/check-login-info/', checkLoginInfo);
 
 // Profile completion (requires authentication; optional profile_image for multipart)
 router.post('/complete-profile', authenticateCustomer, upload.single('profile_image'), completeProfile);

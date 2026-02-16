@@ -84,6 +84,30 @@ export const createRemittanceTransaction = async (req, res) => {
       });
     }
 
+    // Block transaction if customer has any KYC document pending
+    const customer = await prisma.customer.findUnique({
+      where: { id: customerId },
+      select: { kycData: true },
+    });
+    if (customer?.kycData) {
+      let raw = customer.kycData;
+      if (typeof raw === 'string') {
+        try {
+          raw = JSON.parse(raw);
+        } catch {
+          raw = null;
+        }
+      }
+      const docs = raw ? (Array.isArray(raw) ? raw : [raw]) : [];
+      const hasPending = docs.some((doc) => (doc.status || '').toLowerCase() === 'pending');
+      if (hasPending) {
+        return res.status(403).json({
+          success: false,
+          message: 'You cannot make a transaction while your KYC is pending. Please wait for your verification to be approved.',
+        });
+      }
+    }
+
     const {
       sendAmount,
       receiveAmount,

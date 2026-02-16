@@ -7,6 +7,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import prisma, { ensureLevelAndBalanceLimitColumns, ensureLevelsTable, ensureRegistrationSettingsTable } from './utils/prisma.js';
+import { getUploadsBase, getWritableKycUploadDir } from './utils/uploadPath.js';
 import apiRoutes from './routes/index.js';
 import { addSessionRequest } from './store/sessionRequestStore.js';
 
@@ -64,8 +65,8 @@ app.use(morgan('dev'));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Serve static files (KYC uploads)
-app.use('/uploads', express.static(path.join(__dirname, '../../uploads')));
+// Serve static files (KYC uploads) – same base as uploadPath so /uploads/kyc/* works
+app.use('/uploads', express.static(getUploadsBase()));
 
 // Health check route
 app.get('/health', (req, res) => {
@@ -214,12 +215,21 @@ async function startServer() {
     console.error('❌ Database setup failed:', err);
     process.exit(1);
   }
+  try {
+    const kycDir = getWritableKycUploadDir();
+    console.log('✅ KYC upload dir ready:', kycDir);
+  } catch (err) {
+    console.error('❌ KYC upload dir not writable:', err.message);
+    process.exit(1);
+  }
   const HOST = process.env.HOST || '0.0.0.0';
   server.listen(PORT, HOST, () => {
     console.log(`🚀 Server is running on http://localhost:${PORT}`);
-    console.log(`📱 For mobile/device: http://<your-mac-ip>:${PORT}/api (e.g. http://192.168.100.167:${PORT}/api)`);
+    console.log(`📱 Android emulator: http://10.0.2.2:${PORT}/api`);
+    console.log(`📱 iOS simulator: http://localhost:${PORT}/api`);
+    console.log(`📱 Physical device (same WiFi): http://<your-mac-ip>:${PORT}/api`);
     console.log(`📊 Health check: http://localhost:${PORT}/health`);
-    console.log(`🔗 API endpoint: http://localhost:${PORT}/api`);
+    console.log(`🔗 API base: http://localhost:${PORT}/api`);
     console.log(`🔌 Socket.io: http://localhost:${PORT}`);
   });
 }

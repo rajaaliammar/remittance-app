@@ -1,0 +1,2 @@
+# Keep this directory so KYC uploads can be stored here when writable.
+# Backend will use this or a tmpdir fallback if this is not writable.

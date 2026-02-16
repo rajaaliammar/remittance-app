@@ -4,13 +4,31 @@ import jwt from 'jsonwebtoken';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
+import { getWritableKycUploadDir } from '../utils/uploadPath.js';
 
-// Configure multer for file uploads
+// Fallback dir that is always available (tmpdir) so uploads never fail with EACCES
+const TMPDIR_KYC = path.join(os.tmpdir(), 'remittance-kyc-uploads', 'kyc');
+
+// Configure multer for file uploads (uses writable dir; never passes EACCES to client)
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadDir = 'uploads/kyc';
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
+    let uploadDir;
+    try {
+      uploadDir = getWritableKycUploadDir();
+      console.log('[KYC Upload] Upload destination:', uploadDir);
+    } catch (err) {
+      console.warn('[KYC Upload] getWritableKycUploadDir failed, using tmpdir:', err?.message);
+      try {
+        if (!fs.existsSync(TMPDIR_KYC)) {
+          fs.mkdirSync(TMPDIR_KYC, { recursive: true, mode: 0o755 });
+        }
+        uploadDir = TMPDIR_KYC;
+        console.log('[KYC Upload] Fallback destination:', uploadDir);
+      } catch (e) {
+        console.error('[KYC Upload] tmpdir fallback failed:', e);
+        return cb(e);
+      }
     }
     cb(null, uploadDir);
   },
@@ -41,7 +59,7 @@ const STATIC_OTP = '123456';
 /**
  * Normalize phone to canonical form for lookup.
  * Handles domestic format (e.g. 0912345678) vs international (912345678).
- * Returns [canonicalFull, altFull] - try both when looking up customer.
+ * Returns array of variants to try when looking up customer.
  */
 function getPhoneLookupVariants(countryCode, phoneNumber) {
   const normalizedCountryCode = String(countryCode || '').replace(/^\+/, '').trim();
@@ -50,14 +68,17 @@ function getPhoneLookupVariants(countryCode, phoneNumber) {
   const nationalDigits = normalizedPhoneNumber.replace(/\D/g, '');
   const withoutLeadingZero = nationalDigits.replace(/^0+/, '') || nationalDigits;
   const altFull = `${normalizedCountryCode}${withoutLeadingZero}`;
-  return [fullPhone, fullPhone !== altFull ? altFull : null];
+  // When app sends national without leading 0 (e.g. 912345678), DB may store 2510912345678
+  const withLeadingZero = withoutLeadingZero ? `${normalizedCountryCode}0${withoutLeadingZero}` : null;
+  const variants = [fullPhone, fullPhone !== altFull ? altFull : null, withLeadingZero].filter(Boolean);
+  return [...new Set(variants)];
 }
 
-// Signup - Customer registration (phone number only)
-// Creates a pending customer record
+// Signup - Customer registration (phone number + password)
+// Creates a pending customer record; password is required for new signups.
 export const signup = async (req, res) => {
   try {
-    const { country_code, phone_number } = req.body;
+    const { country_code, phone_number, password } = req.body;
 
     if (!country_code || phone_number == null || String(phone_number).trim() === '') {
       return res.status(400).json({
@@ -108,8 +129,16 @@ export const signup = async (req, res) => {
       });
     }
 
+    // New signup: password is required (min 6 characters)
+    if (!password || typeof password !== 'string' || String(password).trim().length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password is required and must be at least 6 characters.'
+      });
+    }
+    const hashedPassword = await bcrypt.hash(String(password).trim(), 10);
+
     // Create new customer with pending status
-    const hashedPassword = await bcrypt.hash(Math.random().toString(36) + Date.now(), 10);
     const customer = await prisma.customer.create({
       data: {
         email: placeholderEmail,
@@ -292,12 +321,10 @@ export const loginWithPin = async (req, res) => {
       });
     }
 
-    const [fullPhone, altPhone] = getPhoneLookupVariants(country_code, phone_number);
-    const phonesToTry = [fullPhone, altPhone].filter(Boolean);
-    const uniquePhones = [...new Set(phonesToTry)];
+    const phonesToTry = getPhoneLookupVariants(country_code, phone_number);
 
     let customer = null;
-    for (const phone of uniquePhones) {
+    for (const phone of phonesToTry) {
       customer = await prisma.customer.findFirst({
         where: { phone }
       });
@@ -307,7 +334,7 @@ export const loginWithPin = async (req, res) => {
     if (!customer) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid PIN'
+        message: 'Account not found. Please sign in with OTP first or check your phone number.'
       });
     }
 
@@ -359,6 +386,127 @@ export const loginWithPin = async (req, res) => {
     });
   } catch (error) {
     console.error('Error in login with PIN:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Login failed. Please try again.',
+      error: error.message
+    });
+  }
+};
+
+// Check login info - Returns whether user has PIN set (so app can show Password vs PIN screen).
+// No auth required; used on login screen when user enters phone.
+export const checkLoginInfo = async (req, res) => {
+  try {
+    const { country_code, phone_number } = req.body;
+
+    if (!country_code || phone_number == null || String(phone_number).trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Country code and phone number are required.'
+      });
+    }
+
+    const phonesToTry = getPhoneLookupVariants(country_code, phone_number);
+    let customer = null;
+    for (const phone of phonesToTry) {
+      customer = await prisma.customer.findFirst({
+        where: { phone },
+        select: { id: true, hasPin: true }
+      });
+      if (customer) break;
+    }
+
+    if (!customer) {
+      return res.status(200).json({
+        success: true,
+        data: { hasPin: false, exists: false }
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: { hasPin: !!customer.hasPin, exists: true }
+    });
+  } catch (error) {
+    console.error('Error in checkLoginInfo:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to check login info.',
+      error: error.message
+    });
+  }
+};
+
+// Login with password - First-time or no-PIN login (phone + password).
+export const loginWithPassword = async (req, res) => {
+  try {
+    const { country_code, phone_number, password } = req.body;
+
+    if (!country_code || phone_number == null || String(phone_number).trim() === '' || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Country code, phone number, and password are required.'
+      });
+    }
+
+    const phonesToTry = getPhoneLookupVariants(country_code, phone_number);
+    let customer = null;
+    for (const phone of phonesToTry) {
+      customer = await prisma.customer.findFirst({
+        where: { phone }
+      });
+      if (customer) break;
+    }
+
+    if (!customer) {
+      return res.status(401).json({
+        success: false,
+        message: 'Account not found. Please sign up first.'
+      });
+    }
+
+    const passwordValid = await bcrypt.compare(String(password).trim(), customer.password);
+    if (!passwordValid) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid password.'
+      });
+    }
+
+    const token = jwt.sign(
+      {
+        id: customer.id,
+        email: customer.email,
+        username: customer.username,
+        phone: customer.phone,
+        type: 'customer'
+      },
+      process.env.JWT_SECRET || 'your-secret-key-change-in-production',
+      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'Login successful',
+      data: {
+        access_token: token,
+        user: {
+          id: customer.id,
+          email: customer.email,
+          username: customer.username,
+          first_name: customer.firstName,
+          last_name: customer.lastName,
+          phone: customer.phone,
+          status: customer.status,
+          has_pin: !!customer.hasPin,
+          profile_image: null,
+          type: 'customer'
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Error in login with password:', error);
     res.status(500).json({
       success: false,
       message: 'Login failed. Please try again.',
