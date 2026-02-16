@@ -634,15 +634,42 @@ export const uploadKycDocument = async (req, res) => {
       });
     }
 
+    // Check if file exists and is valid
     if (!req.file) {
+      console.error('[KYC Upload] No file received in request');
       return res.status(400).json({
         success: false,
-        message: 'No file uploaded'
+        message: 'No file uploaded. Please select a valid image or document.'
+      });
+    }
+
+    // Validate file properties
+    if (!req.file.filename || !req.file.path) {
+      console.error('[KYC Upload] Invalid file object:', req.file);
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid file. Please try uploading again.'
+      });
+    }
+
+    // Check file size (multer already limits to 10MB, but add extra validation)
+    if (req.file.size === 0) {
+      console.error('[KYC Upload] Empty file received');
+      return res.status(400).json({
+        success: false,
+        message: 'File is empty. Please upload a valid file.'
       });
     }
 
     const { category, side } = req.body;
     const fileUrl = `/uploads/kyc/${req.file.filename}`;
+
+    console.log(`[KYC Upload] ✅ File uploaded successfully for customer ${customerId}:`, {
+      filename: req.file.filename,
+      size: req.file.size,
+      mimetype: req.file.mimetype,
+      category: category || 'N/A'
+    });
 
     // Return the URL so the app can use it in subsequent KYC submission calls
     return res.status(200).json({
@@ -656,11 +683,25 @@ export const uploadKycDocument = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error uploading KYC document:', error);
+    console.error('[KYC Upload] ❌ Error uploading KYC document:', error);
+    console.error('[KYC Upload] Error details:', {
+      message: error.message,
+      stack: error.stack,
+      customerId: req.user?.id
+    });
+    
+    // Provide more specific error messages
+    let errorMessage = 'Failed to upload document. Please try again.';
+    if (error.code === 'LIMIT_FILE_SIZE') {
+      errorMessage = 'File is too large. Maximum size is 10MB.';
+    } else if (error.message && error.message.includes('file type')) {
+      errorMessage = 'Invalid file type. Please upload an image (JPEG, PNG) or PDF.';
+    }
+
     res.status(500).json({
       success: false,
-      message: 'Failed to upload document. Please try again.',
-      error: error.message
+      message: errorMessage,
+      error: process.env.NODE_ENV !== 'production' ? error.message : undefined
     });
   }
 };
