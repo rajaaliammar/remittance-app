@@ -14,7 +14,9 @@ router.post('/session-requests/approve', authenticateMessageUser, messageControl
 router.post('/session-requests/reject', authenticateMessageUser, messageController.rejectSessionRequest);
 
 router.get('/active-chat', authenticateMessageUser, messageController.getActiveChatSession);
+router.get('/my-conversations', authenticateMessageUser, messageController.getMyConversations);
 router.post('/claim-chat', authenticateMessageUser, messageController.claimChatSession);
 router.post('/release-chat', authenticateMessageUser, messageController.releaseChatSession);
+router.post('/transfer-chat', authenticateMessageUser, messageController.transferChatSession);
 
 export default router;

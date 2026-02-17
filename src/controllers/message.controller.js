@@ -8,6 +8,7 @@ import {
   claimChat,
   releaseChat,
   getActiveChat,
+  transferChat,
 } from '../store/activeChatStore.js';
 
 /**
@@ -316,6 +317,107 @@ export const releaseChatSession = async (req, res) => {
     return res.json({ success: true });
   } catch (error) {
     console.error('releaseChatSession error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/**
+ * Get customers the current backoffice user has chatted with (my conversations).
+ * Auth: backoffice only.
+ */
+export const getMyConversations = async (req, res) => {
+  try {
+    const backoffice = await prisma.backofficeUser.findUnique({
+      where: { id: req.userId },
+      select: { id: true, status: true },
+    });
+    if (!backoffice || backoffice.status !== 'approved') {
+      return res.status(403).json({ success: false, message: 'Admin access required' });
+    }
+    const myId = req.userId;
+    const messages = await prisma.message.findMany({
+      where: {
+        OR: [{ senderId: myId }, { recipientId: myId }],
+      },
+      select: { senderId: true, recipientId: true },
+    });
+    const customerIds = new Set();
+    for (const m of messages) {
+      const other = m.senderId === myId ? m.recipientId : m.senderId;
+      customerIds.add(other);
+    }
+    const ids = Array.from(customerIds);
+    if (ids.length === 0) {
+      return res.json([]);
+    }
+    const customers = await prisma.customer.findMany({
+      where: { id: { in: ids } },
+      select: {
+        id: true,
+        email: true,
+        username: true,
+        firstName: true,
+        lastName: true,
+      },
+    });
+    return res.json(customers);
+  } catch (error) {
+    console.error('getMyConversations error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/**
+ * Transfer an active chat to another backoffice user.
+ * Body: { userId: customerId, targetBackofficeUserId: string }.
+ */
+export const transferChatSession = async (req, res) => {
+  try {
+    const backoffice = await prisma.backofficeUser.findUnique({
+      where: { id: req.userId },
+      select: { id: true, status: true },
+    });
+    if (!backoffice || backoffice.status !== 'approved') {
+      return res.status(403).json({ success: false, message: 'Admin access required' });
+    }
+    const customerId = req.body?.userId;
+    const targetBackofficeUserId = req.body?.targetBackofficeUserId;
+    if (!customerId || !targetBackofficeUserId) {
+      return res.status(400).json({
+        success: false,
+        message: 'userId (customer id) and targetBackofficeUserId are required',
+      });
+    }
+    const targetUser = await prisma.backofficeUser.findUnique({
+      where: { id: targetBackofficeUserId },
+      select: { id: true, status: true },
+    });
+    if (!targetUser || targetUser.status !== 'approved') {
+      return res.status(400).json({
+        success: false,
+        message: 'Target backoffice user not found or not approved',
+      });
+    }
+    const result = transferChat(customerId, req.userId, targetBackofficeUserId);
+    if (!result.success) {
+      if (result.reason === 'not_claimed_by_you') {
+        return res.status(409).json({
+          success: false,
+          message: 'You do not have an active chat with this user. Only the agent currently chatting can transfer.',
+          code: 'CHAT_CLAIMED_BY_OTHER',
+        });
+      }
+      if (result.reason === 'no_active_chat') {
+        return res.status(400).json({
+          success: false,
+          message: 'No active chat session with this user to transfer',
+        });
+      }
+      return res.status(400).json({ success: false, message: result.reason || 'Transfer failed' });
+    }
+    return res.json({ success: true, message: 'Chat transferred successfully' });
+  } catch (error) {
+    console.error('transferChatSession error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 };

@@ -38,3 +38,22 @@ export function isCustomerClaimedBy(customerId, backofficeUserId) {
   if (!active) return false;
   return String(active.claimedBy) === String(backofficeUserId);
 }
+
+/**
+ * Transfer a chat from one backoffice user to another.
+ * Only the current claimant can transfer.
+ */
+export function transferChat(customerId, fromBackofficeUserId, toBackofficeUserId) {
+  const key = String(customerId).trim();
+  if (!key) return { success: false, reason: 'invalid_customer' };
+  const existing = activeChats.get(key);
+  if (!existing) {
+    return { success: false, reason: 'no_active_chat' };
+  }
+  if (String(existing.backofficeUserId) !== String(fromBackofficeUserId)) {
+    return { success: false, reason: 'not_claimed_by_you', claimedBy: existing.backofficeUserId };
+  }
+  const startedAt = new Date().toISOString();
+  activeChats.set(key, { backofficeUserId: String(toBackofficeUserId), startedAt });
+  return { success: true };
+}
