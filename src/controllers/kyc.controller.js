@@ -69,6 +69,7 @@ export const getAllKYCForms = async (req, res) => {
       key: form.id,
       no: index + 1,
       formType: form.name,
+      description: form.description || null,
       for: form.for,
       status: form.status,
       countries: Array.isArray(form.countries) ? form.countries : [],
@@ -118,6 +119,7 @@ export const getKYCFormById = async (req, res) => {
     const formattedForm = {
       key: form.id,
       formType: form.name,
+      description: form.description || null,
       for: form.for,
       status: form.status,
       countries: Array.isArray(form.countries) ? form.countries : [],
@@ -201,6 +203,7 @@ export const createKYCForm = async (req, res) => {
     const form = await prisma.kYCForm.create({
       data: {
         name: name.trim(),
+        description: description ? description.trim() : null,
         for: forType,
         status: kycStatus ? 'Active' : 'Inactive',
         countries: countries,
@@ -217,6 +220,7 @@ export const createKYCForm = async (req, res) => {
         id: form.id,
         key: form.id,
         formType: form.name,
+        description: form.description || null,
         for: form.for,
         status: form.status,
         countries: Array.isArray(form.countries) ? form.countries : [],
@@ -893,6 +897,7 @@ export const getKYCFormsByCountry = async (req, res) => {
     const formattedForms = filteredForms.map(form => ({
       id: form.id,
       name: form.name,
+      description: form.description || null,
       for: form.for,
       status: form.status,
       countries: Array.isArray(form.countries) ? form.countries : [],
@@ -926,7 +931,7 @@ export const updateKYCForm = async (req, res) => {
     }
 
     const { id } = req.params;
-    const { name, for: forType, kycStatus, countries, fields, priority, maxAmount } = req.body;
+    const { name, description, for: forType, kycStatus, countries, fields, priority, maxAmount } = req.body;
 
     const existingForm = await prisma.kYCForm.findUnique({
       where: { id }
@@ -943,6 +948,7 @@ export const updateKYCForm = async (req, res) => {
       where: { id },
       data: {
         ...(name && { name: name.trim() }),
+        ...(description !== undefined && { description: description ? description.trim() : null }),
         ...(forType && { for: forType }),
         ...(kycStatus !== undefined && { status: kycStatus ? 'Active' : 'Inactive' }),
         ...(countries && { countries }),
@@ -960,6 +966,7 @@ export const updateKYCForm = async (req, res) => {
         id: updatedForm.id,
         key: updatedForm.id,
         formType: updatedForm.name,
+        description: updatedForm.description || null,
         for: updatedForm.for,
         status: updatedForm.status,
         countries: Array.isArray(updatedForm.countries) ? updatedForm.countries : [],

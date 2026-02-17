@@ -433,6 +433,7 @@ model Level {
 model KYCForm {
   id              String   @id @default(cuid())
   name            String   // Form name (e.g., "Valid forms of Customer identifications (ID) USD")
+  description     String?  @db.Text // Description of the KYC form (e.g., "Required for wallet activation, deposits, and transfers")
   for             String   // "User" or "Merchant"
   status          String   @default("Active") // "Active" or "Inactive"
   countries       Json     // Array of country codes (e.g., ["USD", "CAD"])
