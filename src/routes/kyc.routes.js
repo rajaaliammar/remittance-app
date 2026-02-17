@@ -10,6 +10,7 @@ import {
   getCustomerKYCDocuments,
   approveKYCDocument,
   rejectKYCDocument,
+  requestCustomerKYC,
   approveKYCDocumentField,
   rejectKYCDocumentField,
   getKYCFormsByCountry,
@@ -42,6 +43,7 @@ router.post('/forms/submit', authenticateCustomer, submitKYCForm);
 router.get('/customers/:id/documents', authenticateToken, getCustomerKYCDocuments);
 router.post('/customers/:customerId/documents/:documentId/approve', authenticateToken, approveKYCDocument);
 router.post('/customers/:customerId/documents/:documentId/reject', authenticateToken, rejectKYCDocument);
+router.post('/customers/:customerId/request-kyc', authenticateToken, requestCustomerKYC);
 // Individual field approval/rejection
 router.post('/customers/:customerId/documents/:documentId/fields/:fieldId/approve', authenticateToken, approveKYCDocumentField);
 router.post('/customers/:customerId/documents/:documentId/fields/:fieldId/reject', authenticateToken, rejectKYCDocumentField);

@@ -10,6 +10,7 @@ import prisma, { ensureLevelAndBalanceLimitColumns, ensureLevelsTable, ensureReg
 import { getUploadsBase, getWritableKycUploadDir } from './utils/uploadPath.js';
 import apiRoutes from './routes/index.js';
 import { addSessionRequest } from './store/sessionRequestStore.js';
+import { releaseChat } from './store/activeChatStore.js';
 
 // Get __dirname equivalent for ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -175,8 +176,9 @@ io.on('connection', (socket) => {
         sessionEnded: true,
       };
       io.emit('receiveMessage', payload);
+      releaseChat(receiverId);
       if (typeof callback === 'function') callback(null, payload);
-      console.log('[Socket] Chat ended, broadcast to all clients');
+      console.log('[Socket] Chat ended, broadcast to all clients, released active chat for', receiverId);
     } catch (err) {
       console.error('[Socket] endChat error:', err);
       if (typeof callback === 'function') callback({ error: err.message || 'Failed to end chat' });

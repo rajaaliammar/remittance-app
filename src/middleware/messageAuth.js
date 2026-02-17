@@ -17,6 +17,7 @@ export const authenticateMessageUser = async (req, res, next) => {
     const customer = await prisma.customer.findUnique({ where: { id: decoded.id }, select: { id: true } });
     if (customer) {
       req.userId = customer.id;
+      req.userType = 'customer';
       return next();
     }
     const backoffice = await prisma.backofficeUser.findUnique({
@@ -25,6 +26,7 @@ export const authenticateMessageUser = async (req, res, next) => {
     });
     if (backoffice && backoffice.status === 'approved') {
       req.userId = backoffice.id;
+      req.userType = 'backoffice';
       return next();
     }
     return res.status(401).json({ success: false, message: 'Invalid token or user not found' });

@@ -312,6 +312,12 @@ model Customer {
   city            String?
   // KYC data stored as JSON
   kycData         Json?     // Store KYC documents and details
+  kycRequestedAt   DateTime? // When admin requested user to re-upload KYC
+  kycRequestedBy   String?   // Admin user ID who requested
+  kycRequestedFormId   String?   // KYC form ID from backend (optional)
+  kycRequestedFormName String?   // KYC form display name (optional)
+  kycRequestedMessage  String?   @db.Text // Optional message from admin
+  kycRequestedFields   Json?     // Requested fields: [{ fieldName, inputType, validationType }]
   fcmToken        String?   // FCM device token for push notifications
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt

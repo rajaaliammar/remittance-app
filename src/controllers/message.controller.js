@@ -4,6 +4,11 @@ import {
   getSessionRequest,
   removeSessionRequest,
 } from '../store/sessionRequestStore.js';
+import {
+  claimChat,
+  releaseChat,
+  getActiveChat,
+} from '../store/activeChatStore.js';
 
 /**
  * Get support user ID for chat.
@@ -67,11 +72,12 @@ export const getMessagesWithUser = async (req, res) => {
 
 /**
  * Send a message. Auth: customer or backoffice. Body: { recipientId, content }.
- * Emits to recipient via Socket.io (caller must pass io from req.app.get('io')).
+ * If sender is backoffice and recipient is a customer, only the backoffice user who has claimed that customer can send.
  */
 export const sendMessage = async (req, res) => {
   try {
     const senderId = req.userId;
+    const userType = req.userType || 'customer';
     const { recipientId, content } = req.body;
     if (!recipientId || content === undefined || content === null) {
       return res.status(400).json({ success: false, message: 'recipientId and content are required' });
@@ -79,6 +85,23 @@ export const sendMessage = async (req, res) => {
     const text = String(content).trim();
     if (!text) {
       return res.status(400).json({ success: false, message: 'content cannot be empty' });
+    }
+    if (userType === 'backoffice') {
+      const recipientIsCustomer = await prisma.customer.findUnique({
+        where: { id: recipientId },
+        select: { id: true },
+      });
+      if (recipientIsCustomer) {
+        const active = getActiveChat(recipientId);
+        if (active && String(active.claimedBy) !== String(senderId)) {
+          return res.status(409).json({
+            success: false,
+            message: 'Another agent is currently chatting with this user. You cannot send messages until they end the chat.',
+            code: 'CHAT_CLAIMED_BY_OTHER',
+            claimedBy: active.claimedBy,
+          });
+        }
+      }
     }
     const message = await prisma.message.create({
       data: { senderId, recipientId, content: text },
@@ -203,6 +226,96 @@ export const submitChatRating = async (req, res) => {
     return res.json({ success: true, rating: ratingNum });
   } catch (error) {
     console.error('submitChatRating error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/**
+ * Get active chat session for a customer (backoffice only). Query: userId (customer id).
+ * Returns { claimed: false } or { claimed: true, claimedBy, startedAt }.
+ */
+export const getActiveChatSession = async (req, res) => {
+  try {
+    const backoffice = await prisma.backofficeUser.findUnique({
+      where: { id: req.userId },
+      select: { id: true, status: true },
+    });
+    if (!backoffice || backoffice.status !== 'approved') {
+      return res.status(403).json({ success: false, message: 'Admin access required' });
+    }
+    const customerId = req.query.userId;
+    if (!customerId) {
+      return res.status(400).json({ success: false, message: 'userId (customer id) is required' });
+    }
+    const active = getActiveChat(customerId);
+    if (!active) {
+      return res.json({ claimed: false });
+    }
+    return res.json({
+      claimed: true,
+      claimedBy: active.claimedBy,
+      startedAt: active.startedAt,
+    });
+  } catch (error) {
+    console.error('getActiveChatSession error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/**
+ * Claim a customer for chat (backoffice only). Body: { userId } (customer id).
+ * Only one backoffice user can have an active chat with a customer at a time.
+ */
+export const claimChatSession = async (req, res) => {
+  try {
+    const backoffice = await prisma.backofficeUser.findUnique({
+      where: { id: req.userId },
+      select: { id: true, status: true },
+    });
+    if (!backoffice || backoffice.status !== 'approved') {
+      return res.status(403).json({ success: false, message: 'Admin access required' });
+    }
+    const customerId = req.body?.userId;
+    if (!customerId) {
+      return res.status(400).json({ success: false, message: 'userId (customer id) is required' });
+    }
+    const result = claimChat(customerId, req.userId);
+    if (!result.success) {
+      return res.status(409).json({
+        success: false,
+        message: 'Another agent is currently chatting with this user. Please wait until they end the chat.',
+        code: 'CHAT_CLAIMED_BY_OTHER',
+        claimedBy: result.claimedBy,
+      });
+    }
+    return res.json({ success: true, claimedBy: result.claimedBy });
+  } catch (error) {
+    console.error('claimChatSession error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/**
+ * Release a customer chat session (backoffice only). Body: { userId } (customer id).
+ * Call when the agent ends the chat so other agents can chat with that customer.
+ */
+export const releaseChatSession = async (req, res) => {
+  try {
+    const backoffice = await prisma.backofficeUser.findUnique({
+      where: { id: req.userId },
+      select: { id: true, status: true },
+    });
+    if (!backoffice || backoffice.status !== 'approved') {
+      return res.status(403).json({ success: false, message: 'Admin access required' });
+    }
+    const customerId = req.body?.userId;
+    if (!customerId) {
+      return res.status(400).json({ success: false, message: 'userId (customer id) is required' });
+    }
+    releaseChat(customerId);
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('releaseChatSession error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 };

@@ -339,7 +339,7 @@ export const loginWithPin = async (req, res) => {
           message: 'Account not found. Please sign in with password first or check your email.'
         });
       }
-      if (!customer.hasPin || !customer.pin) {
+      if (!customer.pin) {
         return res.status(401).json({
           success: false,
           message: 'PIN not set. Please sign in with password first and set a PIN.'
@@ -351,6 +351,13 @@ export const loginWithPin = async (req, res) => {
           success: false,
           message: 'Invalid PIN'
         });
+      }
+      // Ensure hasPin flag is set (fixes cases where pin was set but hasPin wasn't persisted)
+      if (!customer.hasPin) {
+        await prisma.customer.update({
+          where: { id: customer.id },
+          data: { hasPin: true }
+        }).catch(() => {});
       }
       const token = jwt.sign(
         {
@@ -376,7 +383,7 @@ export const loginWithPin = async (req, res) => {
             last_name: customer.lastName,
             phone: customer.phone,
             status: customer.status,
-            has_pin: !!customer.hasPin,
+            has_pin: true,
             profile_image: null,
             type: 'customer'
           }
@@ -408,7 +415,7 @@ export const loginWithPin = async (req, res) => {
       });
     }
 
-    if (!customer.hasPin || !customer.pin) {
+    if (!customer.pin) {
       return res.status(401).json({
         success: false,
         message: 'PIN not set. Please sign in with OTP first and set a PIN.'
@@ -421,6 +428,14 @@ export const loginWithPin = async (req, res) => {
         success: false,
         message: 'Invalid PIN'
       });
+    }
+
+    // Ensure hasPin flag is set (fixes cases where pin was set but hasPin wasn't persisted)
+    if (!customer.hasPin) {
+      await prisma.customer.update({
+        where: { id: customer.id },
+        data: { hasPin: true }
+      }).catch(() => {});
     }
 
     const token = jwt.sign(
@@ -448,7 +463,7 @@ export const loginWithPin = async (req, res) => {
           last_name: customer.lastName,
           phone: customer.phone,
           status: customer.status,
-          has_pin: !!customer.hasPin,
+          has_pin: true,
           profile_image: null,
           type: 'customer'
         }
@@ -1349,7 +1364,13 @@ export const getVerifications = async (req, res) => {
         lastName: true,
         phone: true,
         email: true,
-        kycData: true
+        kycData: true,
+        kycRequestedAt: true,
+        kycRequestedBy: true,
+        kycRequestedFormId: true,
+        kycRequestedFormName: true,
+        kycRequestedMessage: true,
+        kycRequestedFields: true,
       },
     });
 
@@ -1393,9 +1414,26 @@ export const getVerifications = async (req, res) => {
     console.log('[getVerifications] Final kycDocuments:', JSON.stringify(kycDocuments, null, 2));
     console.log('[getVerifications] ========== END ==========');
 
+    const kycRequest =
+      customer.kycRequestedAt != null
+        ? {
+            requestedAt: customer.kycRequestedAt,
+            requestedBy: customer.kycRequestedBy ?? null,
+            formId: customer.kycRequestedFormId ?? null,
+            formName: customer.kycRequestedFormName ?? null,
+            message: customer.kycRequestedMessage ?? null,
+            fields: Array.isArray(customer.kycRequestedFields)
+              ? customer.kycRequestedFields
+              : customer.kycRequestedFields != null
+                ? [customer.kycRequestedFields]
+                : [],
+          }
+        : null;
+
     return res.json({
       success: true,
       data: kycDocuments,
+      kycRequest,
       message: 'Verifications retrieved successfully',
     });
   } catch (error) {

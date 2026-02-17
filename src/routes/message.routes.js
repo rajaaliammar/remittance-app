@@ -13,4 +13,8 @@ router.get('/session-requests', authenticateMessageUser, messageController.getSe
 router.post('/session-requests/approve', authenticateMessageUser, messageController.approveSessionRequest);
 router.post('/session-requests/reject', authenticateMessageUser, messageController.rejectSessionRequest);
 
+router.get('/active-chat', authenticateMessageUser, messageController.getActiveChatSession);
+router.post('/claim-chat', authenticateMessageUser, messageController.claimChatSession);
+router.post('/release-chat', authenticateMessageUser, messageController.releaseChatSession);
+
 export default router;

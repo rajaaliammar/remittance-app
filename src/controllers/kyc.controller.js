@@ -433,6 +433,94 @@ export const rejectKYCDocument = async (req, res) => {
   }
 };
 
+// Admin: request customer to re-upload KYC (form + optional requested fields; sets flag and sends push)
+export const requestCustomerKYC = async (req, res) => {
+  try {
+    const { customerId } = req.params;
+    const body = req.body || {};
+    const formId = body.formId && String(body.formId).trim() ? String(body.formId).trim() : null;
+    const formName = body.formName && String(body.formName).trim() ? String(body.formName).trim() : null;
+    const message = body.message && String(body.message).trim() ? String(body.message).trim() : null;
+    let requestedFields = body.requestedFields;
+    if (Array.isArray(requestedFields)) {
+      requestedFields = requestedFields
+        .map((f) => ({
+          fieldName: f?.fieldName != null ? String(f.fieldName).trim() : '',
+          inputType: f?.inputType != null ? String(f.inputType).trim() : 'Text',
+          validationType: f?.validationType != null ? String(f.validationType).trim() : 'Required',
+        }))
+        .filter((f) => f.fieldName.length > 0);
+    } else {
+      requestedFields = null;
+    }
+
+    const customer = await prisma.customer.findUnique({
+      where: { id: customerId },
+      select: { id: true, firstName: true, lastName: true },
+    });
+
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Customer not found',
+      });
+    }
+
+    const now = new Date();
+    await prisma.customer.update({
+      where: { id: customerId },
+      data: {
+        kycRequestedAt: now,
+        kycRequestedBy: req.user?.id || 'system',
+        kycRequestedFormId: formId,
+        kycRequestedFormName: formName,
+        kycRequestedMessage: message,
+        kycRequestedFields: requestedFields,
+      },
+    });
+
+    let pushBody = message;
+    if (!pushBody && formName) {
+      pushBody = `Please complete the "${formName}" verification in the Verifications section.`;
+    }
+    if (!pushBody && requestedFields && requestedFields.length > 0) {
+      const names = requestedFields.map((f) => f.fieldName).join(', ');
+      pushBody = `Please provide: ${names}. Upload in the Verifications section.`;
+    }
+    if (!pushBody) {
+      pushBody = 'Please upload your KYC documents again in the Verifications section.';
+    }
+
+    await sendPushToCustomer(customerId, {
+      title: 'KYC documents requested',
+      body: pushBody,
+      data: {
+        type: 'kyc_request',
+        screen: 'Verifications',
+        ...(formId && { formId }),
+        ...(formName && { formName: formName.substring(0, 100) }),
+      },
+    });
+
+    emitKYCUpdateToCustomer(req, customerId, {
+      documentId: null,
+      status: 'kyc_requested',
+      document: { formId, formName, message, requestedFields },
+    });
+
+    res.json({
+      success: true,
+      message: 'KYC request sent to customer. They will be notified to upload documents again.',
+    });
+  } catch (error) {
+    console.error('Error requesting KYC:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to send KYC request',
+    });
+  }
+};
+
 // Approve individual KYC document field
 export const approveKYCDocumentField = async (req, res) => {
   try {
