@@ -90,6 +90,7 @@ model Country {
   currencySymbol         String?
   currencyNativeSymbol   String?
   flag                   String?  @db.Text
+  isPopular              Boolean  @default(false) // Flagged/favorite - shown in app's popular countries
   status                 String   @default("Active") // Active, Inactive
   sendable               Boolean  @default(false)
   receivable             Boolean  @default(false)

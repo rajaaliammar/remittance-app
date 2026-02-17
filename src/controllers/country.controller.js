@@ -72,10 +72,10 @@ const searchCountriesFromAPI = async (query, continent = null) => {
   }
 };
 
-// Get all countries
+// Get all countries (supports popular=true to return only popular/flagged countries for app)
 export const getAllCountries = async (req, res) => {
   try {
-    const { search, status, continentId } = req.query;
+    const { search, status, continentId, popular } = req.query;
     
     const where = {};
     if (status) {
@@ -86,6 +86,9 @@ export const getAllCountries = async (req, res) => {
     }
     if (search) {
       where.name = { contains: search, mode: 'insensitive' };
+    }
+    if (popular === 'true' || popular === '1') {
+      where.isPopular = true;
     }
 
     const countries = await prisma.country.findMany({
@@ -255,6 +258,7 @@ export const createCountry = async (req, res) => {
         currencySymbol: currencySymbol || null,
         currencyNativeSymbol: currencyNativeSymbol || null,
         flag: flag || null,
+        isPopular: req.body.isPopular || false,
         status: status || 'Active',
         sendable: sendable || false,
         receivable: receivable || false,
@@ -374,6 +378,7 @@ export const updateCountry = async (req, res) => {
     if (currencyNativeSymbol !== undefined) updateData.currencyNativeSymbol = currencyNativeSymbol;
     if (flag !== undefined) updateData.flag = flag;
     if (status !== undefined) updateData.status = status;
+    if (req.body.isPopular !== undefined) updateData.isPopular = Boolean(req.body.isPopular);
     if (sendable !== undefined) updateData.sendable = sendable;
     if (receivable !== undefined) updateData.receivable = receivable;
     if (services !== undefined) updateData.services = services;

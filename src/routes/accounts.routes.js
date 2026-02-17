@@ -72,7 +72,7 @@ router.post('/kyc-details/', authenticateCustomer, saveKycDetails);
 router.post('/set-pin', authenticateCustomer, setPin);
 router.post('/set-pin/', authenticateCustomer, setPin);
 
-// Set Password (requires authentication)
+// Set or update password (requires authentication) - mobile app registration flow
 router.post('/set-password', authenticateCustomer, setPassword);
 router.post('/set-password/', authenticateCustomer, setPassword);
 

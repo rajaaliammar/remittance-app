@@ -754,10 +754,11 @@ export const submitKYCForm = async (req, res) => {
     // Get existing KYC data or initialize
     let kycData = customer.kycData ? (Array.isArray(customer.kycData) ? customer.kycData : [customer.kycData]) : [];
 
-    // Create new KYC document entry
+    // Create new KYC document entry (formId + formName for accurate matching in app)
     const newDocument = {
       id: `doc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       formId,
+      formName,
       verificationType: formName,
       country: country || 'USD',
       status: 'pending',
