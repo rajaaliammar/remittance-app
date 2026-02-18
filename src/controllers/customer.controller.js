@@ -1744,7 +1744,7 @@ export const getAllCustomers = async (req, res) => {
   }
 };
 
-// Get customer by ID
+// Get customer by ID (full profile for portal - exclude password/pin)
 export const getCustomerById = async (req, res) => {
   try {
     const { id } = req.params;
@@ -1761,10 +1761,21 @@ export const getCustomerById = async (req, res) => {
         address: true,
         status: true,
         approvedAt: true,
+        approvedBy: true,
         level: true,
         balanceLimit: true,
+        availableBalance: true,
+        dateOfBirth: true,
+        gender: true,
+        nationality: true,
+        country: true,
+        region: true,
+        subRegion: true,
+        city: true,
+        kycData: true,
+        kycRequestedAt: true,
         createdAt: true,
-        updatedAt: true
+        updatedAt: true,
       }
     });
 

@@ -31,6 +31,7 @@ import kycRoutes from './kyc.routes.js';
 import messageRoutes from './message.routes.js';
 import faqRoutes from './faq.routes.js';
 import taxFeeRoutes from './taxFee.routes.js';
+import addressRoutes from './address.routes.js';
 
 const router = express.Router();
 
@@ -69,6 +70,7 @@ router.use('/kyc', kycRoutes);
 router.use('/messages', messageRoutes);
 router.use('/faqs', faqRoutes);
 router.use('/tax-fees', taxFeeRoutes);
+router.use('/address', addressRoutes);
 
 // Default route
 router.get('/', (req, res) => {

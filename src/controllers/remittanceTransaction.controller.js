@@ -255,6 +255,7 @@ export const listRemittanceTransactions = async (req, res) => {
 
 /**
  * List all remittance transactions (admin/portal) - for Transaction Log in dashboard
+ * Optional query: customerId - filter by customer for customer profile page
  */
 export const listAllRemittanceTransactions = async (req, res) => {
   try {
@@ -266,12 +267,14 @@ export const listAllRemittanceTransactions = async (req, res) => {
       });
     }
 
-    const { limit = 100, offset = 0 } = req.query;
+    const { limit = 100, offset = 0, customerId } = req.query;
     const take = Math.min(parseInt(limit, 10) || 100, 500);
     const skip = Math.max(parseInt(offset, 10) || 0, 0);
+    const where = customerId && String(customerId).trim() ? { customerId: String(customerId).trim() } : {};
 
     const [transactions, total] = await Promise.all([
       delegate.findMany({
+        where,
         orderBy: { createdAt: 'desc' },
         take,
         skip,
@@ -287,7 +290,7 @@ export const listAllRemittanceTransactions = async (req, res) => {
           },
         },
       }),
-      delegate.count(),
+      delegate.count({ where }),
     ]);
 
     res.json({

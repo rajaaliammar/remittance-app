@@ -1,35 +1,41 @@
 import prisma from '../utils/prisma.js';
 
 /**
- * Helper function to convert raw database results to proper boolean values
- * PostgreSQL might return booleans as strings or other types
+ * Get value from raw row - PostgreSQL raw queries may return lowercase or snake_case column names
  */
+const toBool = (v) => Boolean(v === true || v === 'true' || v === 1 || v === 't');
+const camelToSnake = (s) => s.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+const getRawBool = (raw, key) => {
+  const v = raw[key] ?? raw[key.toLowerCase()] ?? raw[camelToSnake(key)];
+  return toBool(v);
+};
+
 const normalizeSettings = (raw) => {
   if (!raw) return null;
   return {
-    id: raw.id,
-    phoneNumber: Boolean(raw.phoneNumber === true || raw.phoneNumber === 'true' || raw.phoneNumber === 1),
-    phoneNumberRequired: Boolean(raw.phoneNumberRequired === true || raw.phoneNumberRequired === 'true' || raw.phoneNumberRequired === 1),
-    emailAddress: Boolean(raw.emailAddress === true || raw.emailAddress === 'true' || raw.emailAddress === 1),
-    emailAddressRequired: Boolean(raw.emailAddressRequired === true || raw.emailAddressRequired === 'true' || raw.emailAddressRequired === 1),
-    fullName: Boolean(raw.fullName === true || raw.fullName === 'true' || raw.fullName === 1),
-    fullNameRequired: Boolean(raw.fullNameRequired === true || raw.fullNameRequired === 'true' || raw.fullNameRequired === 1),
-    dateOfBirth: Boolean(raw.dateOfBirth === true || raw.dateOfBirth === 'true' || raw.dateOfBirth === 1),
-    dateOfBirthRequired: Boolean(raw.dateOfBirthRequired === true || raw.dateOfBirthRequired === 'true' || raw.dateOfBirthRequired === 1),
-    gender: Boolean(raw.gender === true || raw.gender === 'true' || raw.gender === 1),
-    genderRequired: Boolean(raw.genderRequired === true || raw.genderRequired === 'true' || raw.genderRequired === 1),
-    nationality: Boolean(raw.nationality === true || raw.nationality === 'true' || raw.nationality === 1),
-    nationalityRequired: Boolean(raw.nationalityRequired === true || raw.nationalityRequired === 'true' || raw.nationalityRequired === 1),
-    country: Boolean(raw.country === true || raw.country === 'true' || raw.country === 1),
-    countryRequired: Boolean(raw.countryRequired === true || raw.countryRequired === 'true' || raw.countryRequired === 1),
-    regionState: Boolean(raw.regionState === true || raw.regionState === 'true' || raw.regionState === 1),
-    regionStateRequired: Boolean(raw.regionStateRequired === true || raw.regionStateRequired === 'true' || raw.regionStateRequired === 1),
-    woredaDistrict: Boolean(raw.woredaDistrict === true || raw.woredaDistrict === 'true' || raw.woredaDistrict === 1),
-    woredaDistrictRequired: Boolean(raw.woredaDistrictRequired === true || raw.woredaDistrictRequired === 'true' || raw.woredaDistrictRequired === 1),
-    city: Boolean(raw.city === true || raw.city === 'true' || raw.city === 1),
-    cityRequired: Boolean(raw.cityRequired === true || raw.cityRequired === 'true' || raw.cityRequired === 1),
-    createdAt: raw.createdAt,
-    updatedAt: raw.updatedAt,
+    id: raw.id ?? raw.Id,
+    phoneNumber: getRawBool(raw, 'phoneNumber'),
+    phoneNumberRequired: getRawBool(raw, 'phoneNumberRequired'),
+    emailAddress: getRawBool(raw, 'emailAddress'),
+    emailAddressRequired: getRawBool(raw, 'emailAddressRequired'),
+    fullName: getRawBool(raw, 'fullName'),
+    fullNameRequired: getRawBool(raw, 'fullNameRequired'),
+    dateOfBirth: getRawBool(raw, 'dateOfBirth'),
+    dateOfBirthRequired: getRawBool(raw, 'dateOfBirthRequired'),
+    gender: getRawBool(raw, 'gender'),
+    genderRequired: getRawBool(raw, 'genderRequired'),
+    nationality: getRawBool(raw, 'nationality'),
+    nationalityRequired: getRawBool(raw, 'nationalityRequired'),
+    country: getRawBool(raw, 'country'),
+    countryRequired: getRawBool(raw, 'countryRequired'),
+    regionState: getRawBool(raw, 'regionState'),
+    regionStateRequired: getRawBool(raw, 'regionStateRequired'),
+    woredaDistrict: getRawBool(raw, 'woredaDistrict'),
+    woredaDistrictRequired: getRawBool(raw, 'woredaDistrictRequired'),
+    city: getRawBool(raw, 'city'),
+    cityRequired: getRawBool(raw, 'cityRequired'),
+    createdAt: raw.createdAt ?? raw.createdat,
+    updatedAt: raw.updatedAt ?? raw.updatedat,
   };
 };
 
@@ -132,30 +138,31 @@ export const getUserRegistrationSettings = async (req, res) => {
       }
     }
 
-    // Format response to match mobile app expectations
+    // Always normalize so response has consistent booleans (Prisma or raw may return different shapes)
+    const out = normalizeSettings(settings);
     const response = {
       success: true,
       data: {
-        phoneNumber: settings.phoneNumber,
-        phoneNumberRequired: settings.phoneNumberRequired,
-        emailAddress: settings.emailAddress,
-        emailAddressRequired: settings.emailAddressRequired,
-        fullName: settings.fullName,
-        fullNameRequired: settings.fullNameRequired,
-        dateOfBirth: settings.dateOfBirth,
-        dateOfBirthRequired: settings.dateOfBirthRequired,
-        gender: settings.gender,
-        genderRequired: settings.genderRequired,
-        nationality: settings.nationality,
-        nationalityRequired: settings.nationalityRequired,
-        country: settings.country,
-        countryRequired: settings.countryRequired,
-        regionState: settings.regionState,
-        regionStateRequired: settings.regionStateRequired,
-        woredaDistrict: settings.woredaDistrict,
-        woredaDistrictRequired: settings.woredaDistrictRequired,
-        city: settings.city,
-        cityRequired: settings.cityRequired,
+        phoneNumber: out.phoneNumber,
+        phoneNumberRequired: out.phoneNumberRequired,
+        emailAddress: out.emailAddress,
+        emailAddressRequired: out.emailAddressRequired,
+        fullName: out.fullName,
+        fullNameRequired: out.fullNameRequired,
+        dateOfBirth: out.dateOfBirth,
+        dateOfBirthRequired: out.dateOfBirthRequired,
+        gender: out.gender,
+        genderRequired: out.genderRequired,
+        nationality: out.nationality,
+        nationalityRequired: out.nationalityRequired,
+        country: out.country,
+        countryRequired: out.countryRequired,
+        regionState: out.regionState,
+        regionStateRequired: out.regionStateRequired,
+        woredaDistrict: out.woredaDistrict,
+        woredaDistrictRequired: out.woredaDistrictRequired,
+        city: out.city,
+        cityRequired: out.cityRequired,
       },
     };
 
@@ -265,9 +272,9 @@ export const updateUserRegistrationSettings = async (req, res) => {
           setClauses.push(`"updatedAt" = NOW()`);
           values.push(settings.id);
           
-          // Build the query with proper parameter placeholders
+          // Build the query with proper parameter placeholders (WHERE "id" = $paramIndex)
           const query = `UPDATE "registration_settings" SET ${setClauses.join(', ')} WHERE "id" = $${paramIndex}`;
-          await prisma.$executeRawUnsafe(query, ...values, settings.id);
+          await prisma.$executeRawUnsafe(query, ...values);
           
           const rawSettings = await prisma.$queryRawUnsafe(
             `SELECT * FROM "registration_settings" WHERE "id" = $1`,
@@ -360,30 +367,31 @@ export const updateUserRegistrationSettings = async (req, res) => {
       }
     }
 
+    const out = normalizeSettings(settings);
     res.json({
       success: true,
       message: 'Registration settings updated successfully',
       data: {
-        phoneNumber: settings.phoneNumber,
-        phoneNumberRequired: settings.phoneNumberRequired,
-        emailAddress: settings.emailAddress,
-        emailAddressRequired: settings.emailAddressRequired,
-        fullName: settings.fullName,
-        fullNameRequired: settings.fullNameRequired,
-        dateOfBirth: settings.dateOfBirth,
-        dateOfBirthRequired: settings.dateOfBirthRequired,
-        gender: settings.gender,
-        genderRequired: settings.genderRequired,
-        nationality: settings.nationality,
-        nationalityRequired: settings.nationalityRequired,
-        country: settings.country,
-        countryRequired: settings.countryRequired,
-        regionState: settings.regionState,
-        regionStateRequired: settings.regionStateRequired,
-        woredaDistrict: settings.woredaDistrict,
-        woredaDistrictRequired: settings.woredaDistrictRequired,
-        city: settings.city,
-        cityRequired: settings.cityRequired,
+        phoneNumber: out.phoneNumber,
+        phoneNumberRequired: out.phoneNumberRequired,
+        emailAddress: out.emailAddress,
+        emailAddressRequired: out.emailAddressRequired,
+        fullName: out.fullName,
+        fullNameRequired: out.fullNameRequired,
+        dateOfBirth: out.dateOfBirth,
+        dateOfBirthRequired: out.dateOfBirthRequired,
+        gender: out.gender,
+        genderRequired: out.genderRequired,
+        nationality: out.nationality,
+        nationalityRequired: out.nationalityRequired,
+        country: out.country,
+        countryRequired: out.countryRequired,
+        regionState: out.regionState,
+        regionStateRequired: out.regionStateRequired,
+        woredaDistrict: out.woredaDistrict,
+        woredaDistrictRequired: out.woredaDistrictRequired,
+        city: out.city,
+        cityRequired: out.cityRequired,
       },
     });
   } catch (error) {
