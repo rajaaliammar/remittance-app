@@ -202,6 +202,7 @@ export const createCountry = async (req, res) => {
       currencySymbol,
       currencyNativeSymbol,
       flag,
+      isPopular,
       status,
       sendable,
       receivable,
@@ -245,34 +246,56 @@ export const createCountry = async (req, res) => {
       });
     }
 
-    const country = await prisma.country.create({
-      data: {
-        continentId,
-        name: name.trim(),
-        iso2: iso2.toUpperCase(),
-        iso3: iso3.toUpperCase(),
-        phoneCode: phoneCode || '',
-        currencyName: currencyName || '',
-        currencyCode: currencyCode || '',
-        currencyRate: currencyRate || null,
-        currencySymbol: currencySymbol || null,
-        currencyNativeSymbol: currencyNativeSymbol || null,
-        flag: flag || null,
-        isPopular: req.body.isPopular || false,
-        status: status || 'Active',
-        sendable: sendable || false,
-        receivable: receivable || false,
-        services: services || null
-      },
-      include: {
-        continent: {
-          select: {
-            id: true,
-            name: true
+    const createData = {
+      continentId,
+      name: name.trim(),
+      iso2: iso2.toUpperCase(),
+      iso3: iso3.toUpperCase(),
+      phoneCode: phoneCode || '',
+      currencyName: currencyName || '',
+      currencyCode: currencyCode || '',
+      currencyRate: currencyRate || null,
+      currencySymbol: currencySymbol || null,
+      currencyNativeSymbol: currencyNativeSymbol || null,
+      flag: flag || null,
+      status: status || 'Active',
+      sendable: sendable || false,
+      receivable: receivable || false,
+      services: services || null
+    };
+
+    // Add isPopular if provided, default to false
+    if (isPopular !== undefined) {
+      createData.isPopular = Boolean(isPopular);
+    } else {
+      createData.isPopular = false;
+    }
+
+    let country;
+    try {
+      country = await prisma.country.create({
+        data: createData,
+        include: {
+          continent: {
+            select: {
+              id: true,
+              name: true
+            }
           }
         }
+      });
+    } catch (error) {
+      if (error.message && error.message.includes('isPopular') && error.message.includes('Unknown argument')) {
+        console.error('Prisma client out of sync. isPopular field not recognized.');
+        console.error('Please run: npx prisma migrate deploy && npx prisma generate');
+        return res.status(500).json({
+          success: false,
+          error: 'Database schema out of sync. Please run `npx prisma migrate deploy` and `npx prisma generate` in the backend directory.',
+          details: error.message
+        });
       }
-    });
+      throw error; // Re-throw other errors
+    }
 
     res.status(201).json({
       success: true,
@@ -309,6 +332,7 @@ export const updateCountry = async (req, res) => {
       currencySymbol,
       currencyNativeSymbol,
       flag,
+      isPopular,
       status,
       sendable,
       receivable,
@@ -378,23 +402,37 @@ export const updateCountry = async (req, res) => {
     if (currencyNativeSymbol !== undefined) updateData.currencyNativeSymbol = currencyNativeSymbol;
     if (flag !== undefined) updateData.flag = flag;
     if (status !== undefined) updateData.status = status;
-    if (req.body.isPopular !== undefined) updateData.isPopular = Boolean(req.body.isPopular);
+    if (isPopular !== undefined) updateData.isPopular = Boolean(isPopular);
     if (sendable !== undefined) updateData.sendable = sendable;
     if (receivable !== undefined) updateData.receivable = receivable;
     if (services !== undefined) updateData.services = services;
 
-    const updatedCountry = await prisma.country.update({
-      where: { id },
-      data: updateData,
-      include: {
-        continent: {
-          select: {
-            id: true,
-            name: true
+    let updatedCountry;
+    try {
+      updatedCountry = await prisma.country.update({
+        where: { id },
+        data: updateData,
+        include: {
+          continent: {
+            select: {
+              id: true,
+              name: true
+            }
           }
         }
+      });
+    } catch (error) {
+      if (error.message && error.message.includes('isPopular') && error.message.includes('Unknown argument')) {
+        console.error('Prisma client out of sync. isPopular field not recognized.');
+        console.error('Please run: npx prisma migrate deploy && npx prisma generate');
+        return res.status(500).json({
+          success: false,
+          error: 'Database schema out of sync. Please run `npx prisma migrate deploy` and `npx prisma generate` in the backend directory.',
+          details: error.message
+        });
       }
-    });
+      throw error; // Re-throw other errors
+    }
 
     res.json({
       success: true,
