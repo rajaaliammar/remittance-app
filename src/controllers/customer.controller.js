@@ -86,7 +86,7 @@ function getPhoneLookupVariants(countryCode, phoneNumber) {
 // Creates a pending customer record; password is required for new signups.
 export const signup = async (req, res) => {
   try {
-    const { country_code, phone_number, password } = req.body;
+    const { country_code, phone_number, password, gender, date_of_birth } = req.body;
 
     if (!country_code || phone_number == null || String(phone_number).trim() === '') {
       return res.status(400).json({
@@ -146,18 +146,26 @@ export const signup = async (req, res) => {
     }
     const hashedPassword = await bcrypt.hash(String(password).trim(), 10);
 
+    const createData = {
+      email: placeholderEmail,
+      username: `user_${fullPhone.replace(/\D/g, '')}_${Date.now()}`,
+      firstName: 'Pending',
+      lastName: 'User',
+      phone: fullPhone,
+      address: null,
+      password: hashedPassword,
+      status: 'pending'
+    };
+    if (gender != null && String(gender).trim() !== '') {
+      createData.gender = String(gender).trim();
+    }
+    if (date_of_birth != null && String(date_of_birth).trim() !== '') {
+      createData.dateOfBirth = String(date_of_birth).trim().slice(0, 10);
+    }
+
     // Create new customer with pending status
     const customer = await prisma.customer.create({
-      data: {
-        email: placeholderEmail,
-        username: `user_${fullPhone.replace(/\D/g, '')}_${Date.now()}`,
-        firstName: 'Pending',
-        lastName: 'User',
-        phone: fullPhone,
-        address: null,
-        password: hashedPassword,
-        status: 'pending'
-      },
+      data: createData,
       select: {
         id: true,
         email: true,
