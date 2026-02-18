@@ -68,17 +68,37 @@ const STATIC_OTP = '123456';
  * Normalize phone to canonical form for lookup.
  * Handles domestic format (e.g. 0912345678) vs international (912345678).
  * Returns array of variants to try when looking up customer.
+ * MUST match the format used in signup (digits only, no spaces/dashes).
  */
 function getPhoneLookupVariants(countryCode, phoneNumber) {
+  // Normalize country code - remove + prefix and trim
   const normalizedCountryCode = String(countryCode || '').replace(/^\+/, '').trim();
-  const normalizedPhoneNumber = String(phoneNumber || '').trim().replace(/\s+/g, '');
-  const fullPhone = `${normalizedCountryCode}${normalizedPhoneNumber}`;
-  const nationalDigits = normalizedPhoneNumber.replace(/\D/g, '');
+  // Remove ALL non-digit characters to match signup format exactly
+  const nationalDigits = String(phoneNumber || '').trim().replace(/\D/g, '');
+  
+  if (!normalizedCountryCode || !nationalDigits) {
+    return [];
+  }
+  
+  // Generate variants
+  const variants = [];
+  
+  // 1. Full phone with leading zero (if present)
+  const fullPhone = `${normalizedCountryCode}${nationalDigits}`;
+  variants.push(fullPhone);
+  
+  // 2. Without leading zero
   const withoutLeadingZero = nationalDigits.replace(/^0+/, '') || nationalDigits;
-  const altFull = `${normalizedCountryCode}${withoutLeadingZero}`;
-  // When app sends national without leading 0 (e.g. 912345678), DB may store 2510912345678
-  const withLeadingZero = withoutLeadingZero ? `${normalizedCountryCode}0${withoutLeadingZero}` : null;
-  const variants = [fullPhone, fullPhone !== altFull ? altFull : null, withLeadingZero].filter(Boolean);
+  if (withoutLeadingZero !== nationalDigits) {
+    variants.push(`${normalizedCountryCode}${withoutLeadingZero}`);
+  }
+  
+  // 3. With leading zero (if not already present)
+  if (!nationalDigits.startsWith('0') && withoutLeadingZero) {
+    variants.push(`${normalizedCountryCode}0${withoutLeadingZero}`);
+  }
+  
+  // Remove duplicates and return
   return [...new Set(variants)];
 }
 
@@ -95,11 +115,21 @@ export const signup = async (req, res) => {
       });
     }
 
-    // Normalize phone number
-    const normalizedCountryCode = String(country_code).replace(/^\+/, '');
-    const normalizedPhoneNumber = String(phone_number).trim();
+    // Normalize phone number - MUST match login format exactly
+    // Remove + from country code and trim
+    const normalizedCountryCode = String(country_code || '').replace(/^\+/, '').trim();
+    // Remove all non-digit characters from phone number (spaces, dashes, etc.) to match login format
+    const normalizedPhoneNumber = String(phone_number || '').trim().replace(/\D/g, '');
+    
+    if (!normalizedCountryCode || !normalizedPhoneNumber) {
+      return res.status(400).json({
+        success: false,
+        message: 'Country code and phone number are required.'
+      });
+    }
+    
     const fullPhone = `${normalizedCountryCode}${normalizedPhoneNumber}`;
-    const placeholderEmail = `phone_${fullPhone.replace(/\D/g, '')}@remittance.pending`;
+    const placeholderEmail = `phone_${fullPhone}@remittance.pending`;
 
     // Check if user already exists
     const existingByPhone = await prisma.customer.findFirst({
@@ -208,9 +238,18 @@ export const sendOTP = async (req, res) => {
       });
     }
 
-    // Normalize phone number
-    const normalizedCountryCode = String(country_code).replace(/^\+/, '');
-    const normalizedPhoneNumber = String(phone_number).trim();
+    // Normalize phone number - MUST match signup/login format exactly
+    const normalizedCountryCode = String(country_code || '').replace(/^\+/, '').trim();
+    // Remove all non-digit characters to match signup/login format
+    const normalizedPhoneNumber = String(phone_number || '').trim().replace(/\D/g, '');
+    
+    if (!normalizedCountryCode || !normalizedPhoneNumber) {
+      return res.status(400).json({
+        success: false,
+        message: 'Country code and phone number are required'
+      });
+    }
+    
     const fullPhone = `${normalizedCountryCode}${normalizedPhoneNumber}`;
 
     // Check if customer exists
@@ -260,9 +299,18 @@ export const verifyOTP = async (req, res) => {
       });
     }
 
-    // Normalize phone number
-    const normalizedCountryCode = String(country_code).replace(/^\+/, '');
-    const normalizedPhoneNumber = String(phone_number).trim();
+    // Normalize phone number - MUST match signup/login format exactly
+    const normalizedCountryCode = String(country_code || '').replace(/^\+/, '').trim();
+    // Remove all non-digit characters to match signup/login format
+    const normalizedPhoneNumber = String(phone_number || '').trim().replace(/\D/g, '');
+    
+    if (!normalizedCountryCode || !normalizedPhoneNumber) {
+      return res.status(400).json({
+        success: false,
+        message: 'Country code, phone number, and OTP are required'
+      });
+    }
+    
     const fullPhone = `${normalizedCountryCode}${normalizedPhoneNumber}`;
 
     // Find customer
