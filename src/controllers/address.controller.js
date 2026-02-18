@@ -16,15 +16,38 @@ function addSmartyAuth(params) {
   const authId = (process.env.SMARTY_AUTH_ID || '').trim();
   const authToken = (process.env.SMARTY_AUTH_TOKEN || '').trim();
   const apiKey = (process.env.SMARTY_API_KEY || '').trim();
+  
+  const hasAuthId = !!authId;
+  const hasAuthToken = !!authToken;
+  const hasApiKey = !!apiKey;
+  
+  console.log('[AddressController] Checking SMARTY credentials:', {
+    hasAuthId,
+    hasAuthToken,
+    hasApiKey,
+    authIdLength: authId.length,
+    authTokenLength: authToken.length,
+    apiKeyLength: apiKey.length,
+  });
+  
   if (authId && authToken) {
     params.set('auth-id', authId);
     params.set('auth-token', authToken);
+    console.log('[AddressController] Using auth-id and auth-token for authentication');
     return true;
   }
   if (apiKey) {
     params.set('key', apiKey);
+    console.log('[AddressController] Using API key for authentication');
     return true;
   }
+  
+  console.error('[AddressController] ❌ No SMARTY credentials found!');
+  console.error('[AddressController] Need either:');
+  console.error('[AddressController]   - SMARTY_AUTH_ID + SMARTY_AUTH_TOKEN (Secret Key)');
+  console.error('[AddressController]   - OR SMARTY_API_KEY (Public Key)');
+  console.error('[AddressController] Get credentials from: https://smarty.com/account/keys');
+  
   return false;
 }
 
@@ -62,7 +85,10 @@ export const autocomplete = async (req, res) => {
   try {
     const raw = req.query?.search;
     const search = sanitizeSearch(raw ?? '');
+    console.log('[AddressController] Autocomplete request:', { search, length: search.length });
+    
     if (search.length < MIN_SEARCH_LENGTH) {
+      console.log('[AddressController] Search too short:', search.length);
       return res.status(400).json({
         success: false,
         message: `Search must be at least ${MIN_SEARCH_LENGTH} characters`,
@@ -70,35 +96,86 @@ export const autocomplete = async (req, res) => {
     }
     const params = new URLSearchParams();
     if (!addSmartyAuth(params)) {
-      return res.json({ success: true, suggestions: [] });
+      console.error('[AddressController] ❌ SMARTY credentials not configured! Set SMARTY_AUTH_ID and SMARTY_AUTH_TOKEN in .env');
+      return res.status(503).json({
+        success: false,
+        message: 'Address service unavailable. SMARTY API credentials not configured.',
+        suggestions: [],
+      });
     }
     params.set('search', search);
     const urlString = `https://${SMARTY_AUTOCOMPLETE_HOST}/lookup?${params.toString()}`;
+    console.log('[AddressController] Calling Smarty API:', urlString.replace(/auth-id=[^&]+/g, 'auth-id=***').replace(/auth-token=[^&]+/g, 'auth-token=***'));
+    
     let statusCode = 200;
     let data = null;
     try {
       const result = await httpsGet(urlString, AUTOCOMPLETE_TIMEOUT_MS);
       statusCode = result.statusCode;
       data = result.data;
-    } catch {
-      return res.json({ success: true, suggestions: [] });
+      console.log('[AddressController] Smarty API response:', { statusCode, hasData: !!data, suggestionsCount: Array.isArray(data?.suggestions) ? data.suggestions.length : (Array.isArray(data) ? data.length : 0) });
+    } catch (err) {
+      console.error('[AddressController] ❌ Smarty API request failed:', err.message);
+      return res.status(502).json({
+        success: false,
+        message: 'Failed to connect to address service',
+        suggestions: [],
+      });
     }
     if (statusCode !== 200) {
-      if (statusCode === 401 || statusCode === 402 || statusCode >= 500) {
-        return res.json({ success: true, suggestions: [] });
+      console.error('[AddressController] ❌ Smarty API returned status:', statusCode);
+      console.error('[AddressController] Response data:', JSON.stringify(data, null, 2));
+      
+      if (statusCode === 401 || statusCode === 402) {
+        const errorMsg = data?.message || data?.error || 'Authentication failed';
+        console.error('[AddressController] ❌ Authentication failed!');
+        console.error('[AddressController] This usually means:');
+        console.error('[AddressController]   1. SMARTY_AUTH_ID or SMARTY_AUTH_TOKEN is incorrect');
+        console.error('[AddressController]   2. Credentials are for wrong environment (test vs production)');
+        console.error('[AddressController]   3. Account is suspended or has no credits');
+        console.error('[AddressController] Check your credentials at: https://smarty.com/account/keys');
+        
+        return res.status(503).json({
+          success: false,
+          message: `Address service authentication failed: ${errorMsg}. Please verify your SMARTY credentials in .env file.`,
+          suggestions: [],
+          details: {
+            statusCode,
+            error: errorMsg,
+            hint: 'Check SMARTY_AUTH_ID and SMARTY_AUTH_TOKEN in your .env file, or get new credentials from https://smarty.com/account/keys',
+          },
+        });
       }
       if (statusCode === 429) {
         return res.status(429).json({
           success: false,
           message: 'Too many requests',
+          suggestions: [],
         });
       }
-      return res.json({ success: true, suggestions: [] });
+      if (statusCode >= 500) {
+        return res.status(502).json({
+          success: false,
+          message: 'Address service error',
+          suggestions: [],
+        });
+      }
+      return res.status(502).json({
+        success: false,
+        message: 'Address service returned an error',
+        suggestions: [],
+      });
     }
     const suggestions = Array.isArray(data?.suggestions) ? data.suggestions : (Array.isArray(data) ? data : []);
+    console.log('[AddressController] ✅ Returning suggestions:', suggestions.length);
     return res.json({ success: true, suggestions });
   } catch (err) {
-    return res.json({ success: true, suggestions: [] });
+    console.error('[AddressController] ❌ Unexpected error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      suggestions: [],
+    });
   }
 };
 

@@ -106,7 +106,26 @@ function getPhoneLookupVariants(countryCode, phoneNumber) {
 // Creates a pending customer record; password is required for new signups.
 export const signup = async (req, res) => {
   try {
-    const { country_code, phone_number, password, gender, date_of_birth } = req.body;
+    const {
+      country_code,
+      phone_number,
+      password,
+      first_name,
+      firstName,
+      last_name,
+      lastName,
+      email,
+      address,
+      gender,
+      date_of_birth,
+      dateOfBirth,
+      nationality,
+      country,
+      region,
+      sub_region,
+      subRegion,
+      city
+    } = req.body;
 
     if (!country_code || phone_number == null || String(phone_number).trim() === '') {
       return res.status(400).json({
@@ -130,6 +149,16 @@ export const signup = async (req, res) => {
     
     const fullPhone = `${normalizedCountryCode}${normalizedPhoneNumber}`;
     const placeholderEmail = `phone_${fullPhone}@remittance.pending`;
+    const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+    const resolvedFirstName = String(first_name ?? firstName ?? '').trim();
+    const resolvedLastName = String(last_name ?? lastName ?? '').trim();
+    const resolvedAddress = typeof address === 'string' ? address.trim() : '';
+    const resolvedDob = String(date_of_birth ?? dateOfBirth ?? '').trim();
+    const resolvedNationality = typeof nationality === 'string' ? nationality.trim() : '';
+    const resolvedCountry = typeof country === 'string' ? country.trim() : '';
+    const resolvedRegion = typeof region === 'string' ? region.trim() : '';
+    const resolvedSubRegion = String(sub_region ?? subRegion ?? '').trim();
+    const resolvedCity = typeof city === 'string' ? city.trim() : '';
 
     // Check if user already exists
     const existingByPhone = await prisma.customer.findFirst({
@@ -149,10 +178,24 @@ export const signup = async (req, res) => {
       });
     }
 
+    if (normalizedEmail) {
+      const existingByProvidedEmail = await prisma.customer.findUnique({
+        where: { email: normalizedEmail }
+      });
+      if (existingByProvidedEmail) {
+        return res.status(409).json({
+          success: false,
+          message: 'Email already registered. Please use another email or login.',
+        });
+      }
+    }
+
     // Check by placeholder email
-    const existingByEmail = await prisma.customer.findUnique({
-      where: { email: placeholderEmail }
-    });
+    const existingByEmail = normalizedEmail
+      ? null
+      : await prisma.customer.findUnique({
+          where: { email: placeholderEmail }
+        });
 
     if (existingByEmail) {
       return res.status(200).json({
@@ -177,12 +220,12 @@ export const signup = async (req, res) => {
     const hashedPassword = await bcrypt.hash(String(password).trim(), 10);
 
     const createData = {
-      email: placeholderEmail,
+      email: normalizedEmail || placeholderEmail,
       username: `user_${fullPhone.replace(/\D/g, '')}_${Date.now()}`,
-      firstName: 'Pending',
-      lastName: 'User',
+      firstName: resolvedFirstName || 'Pending',
+      lastName: resolvedLastName || 'User',
       phone: fullPhone,
-      address: null,
+      address: resolvedAddress || null,
       password: hashedPassword,
       status: 'pending'
     };
@@ -191,7 +234,14 @@ export const signup = async (req, res) => {
     }
     if (date_of_birth != null && String(date_of_birth).trim() !== '') {
       createData.dateOfBirth = String(date_of_birth).trim().slice(0, 10);
+    } else if (resolvedDob) {
+      createData.dateOfBirth = resolvedDob.slice(0, 10);
     }
+    if (resolvedNationality) createData.nationality = resolvedNationality;
+    if (resolvedCountry) createData.country = resolvedCountry;
+    if (resolvedRegion) createData.region = resolvedRegion;
+    if (resolvedSubRegion) createData.subRegion = resolvedSubRegion;
+    if (resolvedCity) createData.city = resolvedCity;
 
     // Create new customer with pending status
     const customer = await prisma.customer.create({

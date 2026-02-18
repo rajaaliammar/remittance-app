@@ -166,6 +166,14 @@ export const createRemittanceTransaction = async (req, res) => {
       countryId
     };
 
+    // Ensure charge is stored in paymentFieldValues for easy retrieval
+    const enrichedPaymentFieldValues = {
+      ...(paymentFieldValues || {}),
+      charge: totalCharge,
+      fee: totalCharge,
+      feeBreakdown: breakdown,
+    };
+
     const [transaction] = await prisma.$transaction([
       delegate.create({
         data: {
@@ -178,7 +186,7 @@ export const createRemittanceTransaction = async (req, res) => {
           gatewayId: gatewayId || null,
           gatewayName: gatewayName || null,
           recipientInfo: enrichedRecipientInfo,
-          paymentFieldValues: paymentFieldValues || null,
+          paymentFieldValues: enrichedPaymentFieldValues,
           status: 'Processing',
         },
       }),
@@ -249,6 +257,63 @@ export const listRemittanceTransactions = async (req, res) => {
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to list transactions',
+    });
+  }
+};
+
+/**
+ * Get a single remittance transaction by ID (admin/portal)
+ */
+export const getRemittanceTransactionById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Transaction ID is required',
+      });
+    }
+
+    const delegate = prisma.remittanceTransaction;
+    if (!delegate || typeof delegate.findUnique !== 'function') {
+      return res.status(503).json({
+        success: false,
+        message: 'RemittanceTransaction model not available.',
+      });
+    }
+
+    const transaction = await delegate.findUnique({
+      where: { id },
+      include: {
+        customer: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+            phone: true,
+            address: true,
+          },
+        },
+      },
+    });
+
+    if (!transaction) {
+      return res.status(404).json({
+        success: false,
+        message: 'Transaction not found',
+      });
+    }
+
+    res.json({
+      success: true,
+      data: transaction,
+    });
+  } catch (error) {
+    console.error('Error getting remittance transaction:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to get transaction',
     });
   }
 };
