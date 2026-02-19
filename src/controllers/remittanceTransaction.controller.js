@@ -1,4 +1,6 @@
 import prisma from '../utils/prisma.js';
+import transporter from '../utils/email.js';
+import { getReceiptSettingsValues } from './receiptSetting.controller.js';
 import { calculateTransactionFee } from '../utils/chargeUtils.js';
 import {
   getCustomerLimits,
@@ -368,6 +370,226 @@ export const listAllRemittanceTransactions = async (req, res) => {
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to list transactions',
+    });
+  }
+};
+
+/**
+ * Send transaction receipt email to customer
+ */
+export const sendRemittanceTransactionReceipt = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Transaction ID is required',
+      });
+    }
+
+    const delegate = prisma.remittanceTransaction;
+    if (!delegate || typeof delegate.findUnique !== 'function') {
+      return res.status(503).json({
+        success: false,
+        message: 'RemittanceTransaction model not available.',
+      });
+    }
+
+    const transaction = await delegate.findUnique({
+      where: { id },
+      include: {
+        customer: {
+          select: {
+            firstName: true,
+            lastName: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    if (!transaction) {
+      return res.status(404).json({
+        success: false,
+        message: 'Transaction not found',
+      });
+    }
+
+    const recipientEmail = transaction.customer?.email;
+    if (!recipientEmail) {
+      return res.status(400).json({
+        success: false,
+        message: 'Customer email is not available for this transaction',
+      });
+    }
+
+    const customerName =
+      [transaction.customer?.firstName, transaction.customer?.lastName]
+        .filter(Boolean)
+        .join(' ')
+        .trim() || 'Customer';
+
+    const sendAmount = Number(transaction.sendAmount || 0);
+    const receiveAmount = Number(transaction.receiveAmount || 0);
+    const currency = String(transaction.currency || 'USD').toUpperCase();
+
+    const recipientInfo = (transaction.recipientInfo && typeof transaction.recipientInfo === 'object')
+      ? transaction.recipientInfo
+      : {};
+    const paymentFields = (transaction.paymentFieldValues && typeof transaction.paymentFieldValues === 'object')
+      ? transaction.paymentFieldValues
+      : {};
+
+    const charge = Number(paymentFields.charge || paymentFields.fee || recipientInfo.fee || 0);
+    const total = sendAmount + charge;
+    const status = String(transaction.status || 'Processing');
+    const createdAt = transaction.createdAt ? new Date(transaction.createdAt).toLocaleString('en-US') : '—';
+    const paidAt = transaction.updatedAt ? new Date(transaction.updatedAt).toLocaleString('en-US') : createdAt;
+    const serviceType = transaction.transferType === 'wallet' ? 'Wallet Transfer' : 'Bank Transfer';
+    const receiptSettings = await getReceiptSettingsValues();
+    const senderCountry = String(
+      paymentFields.sendingBranchCountryName ||
+      recipientInfo.sendingBranchCountryName ||
+      recipientInfo.countryName ||
+      '—'
+    );
+    const senderAddress = String(
+      paymentFields.senderAddress ||
+      paymentFields.address ||
+      recipientInfo.senderAddress ||
+      transaction.customer?.address ||
+      '—'
+    );
+    const senderState = String(
+      paymentFields.sendersState ||
+      paymentFields.senderState ||
+      recipientInfo.senderState ||
+      '—'
+    );
+    const senderMobile = String(transaction.customer?.phone || paymentFields.sendingCustomerMobile || '—');
+    const receiverName = String(
+      recipientInfo.accountHolderName ||
+      `${recipientInfo.firstName || ''} ${recipientInfo.lastName || ''}`.trim() ||
+      '—'
+    );
+    const receiverCountry = String(
+      recipientInfo.receivingBranchCountryName ||
+      recipientInfo.countryName ||
+      recipientInfo.country ||
+      '—'
+    );
+    const receiverMobile = String(
+      recipientInfo.phoneNumber ||
+      recipientInfo.mobile ||
+      recipientInfo.receiverPhone ||
+      '—'
+    );
+    const orderNumber = String(paymentFields.orderNumber || transaction.orderNumber || '—');
+    const exchangeRate = sendAmount > 0 && receiveAmount > 0
+      ? (receiveAmount / sendAmount).toFixed(4)
+      : '—';
+    const logoHtml = receiptSettings.logoUrl
+      ? `<img src="${receiptSettings.logoUrl}" alt="Receipt Logo" style="max-height:56px;max-width:220px;display:block;" />`
+      : `<div style="font-size:42px;line-height:1;color:#0b66a2;font-weight:700;">${receiptSettings.brandName}</div>`;
+    const disclosureLines = String(receiptSettings.disclosureText || '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    const emailHtml = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Transaction Receipt</title>
+      </head>
+      <body style="font-family: Arial, sans-serif; line-height: 1.5; color: #111827; background: #f3f4f6; margin: 0; padding: 12px;">
+        <div style="max-width: 980px; margin: 0 auto; background: #ffffff; border: 1px solid #d1d5db; border-radius: 6px; overflow: hidden;">
+          <div style="display:flex;justify-content:space-between;gap:14px;padding:14px 16px;border-bottom:1px solid #e5e7eb;">
+            <div>
+              ${logoHtml}
+              <div style="font-size:11px;color:#64748b;font-weight:600;">${receiptSettings.brandSubTitle}</div>
+            </div>
+            <div style="font-size:12px;color:#475569;text-align:right;">
+              <div>${receiptSettings.companyAddress}</div>
+              <div>Tel: ${receiptSettings.companyPhone}</div>
+              <div>Email: ${receiptSettings.companyEmail}</div>
+              <div style="margin-top:4px;font-weight:600;">${receiptSettings.receiptTitle}</div>
+            </div>
+          </div>
+          <div style="padding:12px;">
+            <p style="margin:0 0 10px;">Hello ${customerName},</p>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+              <div style="border:1px solid #d1d5db;border-radius:6px;overflow:hidden;">
+                <div style="padding:10px 14px;background:#f3f4f6;border-bottom:1px solid #d1d5db;font-size:18px;">Sender Details</div>
+                <div style="padding:8px 14px;border-bottom:1px solid #e5e7eb;"><strong>Customer Number</strong><span style="float:right;">${transaction.customerId || '—'}</span></div>
+                <div style="padding:8px 14px;border-bottom:1px solid #e5e7eb;"><strong>Name</strong><span style="float:right;">${customerName}</span></div>
+                <div style="padding:8px 14px;border-bottom:1px solid #e5e7eb;"><strong>Country</strong><span style="float:right;">${senderCountry}</span></div>
+                <div style="padding:8px 14px;border-bottom:1px solid #e5e7eb;"><strong>Address</strong><span style="float:right;">${senderAddress}</span></div>
+                <div style="padding:8px 14px;border-bottom:1px solid #e5e7eb;"><strong>State</strong><span style="float:right;">${senderState}</span></div>
+                <div style="padding:8px 14px;"><strong>Mobile</strong><span style="float:right;">${senderMobile}</span></div>
+              </div>
+              <div style="border:1px solid #d1d5db;border-radius:6px;overflow:hidden;">
+                <div style="padding:10px 14px;background:#f3f4f6;border-bottom:1px solid #d1d5db;font-size:18px;">Transfer Details</div>
+                <div style="padding:8px 14px;border-bottom:1px solid #e5e7eb;"><strong>Order Number</strong><span style="float:right;">${orderNumber}</span></div>
+                <div style="padding:8px 14px;border-bottom:1px solid #e5e7eb;"><strong>Order Status</strong><span style="float:right;">${status}</span></div>
+                <div style="padding:8px 14px;border-bottom:1px solid #e5e7eb;"><strong>Date Time</strong><span style="float:right;">${createdAt}</span></div>
+                <div style="padding:8px 14px;border-bottom:1px solid #e5e7eb;"><strong>Service</strong><span style="float:right;">${serviceType}</span></div>
+                <div style="padding:8px 14px;border-bottom:1px solid #e5e7eb;"><strong>Payment Method</strong><span style="float:right;">${transaction.gatewayName || '—'}</span></div>
+                <div style="padding:8px 14px;"><strong>Availability of funds</strong><span style="float:right;">${paidAt}</span></div>
+              </div>
+              <div style="border:1px solid #d1d5db;border-radius:6px;overflow:hidden;">
+                <div style="padding:10px 14px;background:#f3f4f6;border-bottom:1px solid #d1d5db;font-size:18px;">Receiver Details</div>
+                <div style="padding:8px 14px;border-bottom:1px solid #e5e7eb;"><strong>Name</strong><span style="float:right;">${receiverName}</span></div>
+                <div style="padding:8px 14px;border-bottom:1px solid #e5e7eb;"><strong>Country</strong><span style="float:right;">${receiverCountry}</span></div>
+                <div style="padding:8px 14px;"><strong>Mobile</strong><span style="float:right;">${receiverMobile}</span></div>
+              </div>
+              <div style="border:1px solid #d1d5db;border-radius:6px;overflow:hidden;">
+                <div style="padding:10px 14px;background:#f3f4f6;border-bottom:1px solid #d1d5db;font-size:18px;">Transfer Breakdown</div>
+                <div style="padding:8px 14px;border-bottom:1px solid #e5e7eb;"><strong>They Receive</strong><span style="float:right;">${receiveAmount.toFixed(2)} ${currency}</span></div>
+                <div style="padding:8px 14px;border-bottom:1px solid #e5e7eb;"><strong>Exchange Rate</strong><span style="float:right;">1 USD = ${exchangeRate === '—' ? '—' : `${exchangeRate} ${currency}`}</span></div>
+                <div style="padding:8px 14px;border-bottom:1px solid #e5e7eb;"><strong>You Send</strong><span style="float:right;">${sendAmount.toFixed(2)} USD</span></div>
+                <div style="padding:8px 14px;border-bottom:1px solid #e5e7eb;"><strong>Fees</strong><span style="float:right;">${charge.toFixed(2)} USD</span></div>
+                <div style="padding:8px 14px;"><strong>Total Paid</strong><span style="float:right;font-size:26px;font-weight:700;">${total.toFixed(2)} USD</span></div>
+              </div>
+            </div>
+
+            <div style="margin-top:12px;border:1px solid #d1d5db;border-radius:6px;padding:10px 12px;background:#f8fafc;">
+              <strong>Note:</strong> ${receiptSettings.noteText}
+            </div>
+            <div style="margin-top:10px;border:1px solid #d1d5db;border-radius:6px;overflow:hidden;">
+              <div style="padding:10px 12px;background:#f3f4f6;border-bottom:1px solid #d1d5db;font-size:24px;">${receiptSettings.disclosureTitle}</div>
+              <div style="padding:10px 12px;font-size:13px;color:#374151;">
+                ${disclosureLines.map((line) => `<p style="margin:0 0 8px;">${line}</p>`).join('')}
+              </div>
+            </div>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    await transporter.sendMail({
+      from: `"BrandPay" <${process.env.SMTP_USER}>`,
+      to: recipientEmail,
+      subject: `BrandPay Receipt - Transaction ${transaction.id}`,
+      html: emailHtml,
+    });
+
+    return res.json({
+      success: true,
+      message: 'Receipt email sent successfully',
+      data: {
+        transactionId: transaction.id,
+        email: recipientEmail,
+      },
+    });
+  } catch (error) {
+    console.error('Error sending transaction receipt email:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to send transaction receipt',
     });
   }
 };
