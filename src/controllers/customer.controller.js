@@ -102,10 +102,60 @@ function getPhoneLookupVariants(countryCode, phoneNumber) {
   return [...new Set(variants)];
 }
 
+const EXTENDED_PROFILE_KEYS = ['placeOfBirth', 'occupation', 'sourceOfFund', 'residentCountry'];
+
+const splitExtendedProfileData = (data = {}) => {
+  const baseData = {};
+  const extendedData = {};
+
+  Object.entries(data).forEach(([key, value]) => {
+    if (EXTENDED_PROFILE_KEYS.includes(key)) {
+      extendedData[key] = value;
+    } else {
+      baseData[key] = value;
+    }
+  });
+
+  return { baseData, extendedData };
+};
+
+const ensureCustomerExtendedProfileColumns = async () => {
+  await prisma.$executeRawUnsafe(`
+    ALTER TABLE "customers"
+    ADD COLUMN IF NOT EXISTS "placeOfBirth" TEXT,
+    ADD COLUMN IF NOT EXISTS "occupation" TEXT,
+    ADD COLUMN IF NOT EXISTS "sourceOfFund" TEXT,
+    ADD COLUMN IF NOT EXISTS "residentCountry" TEXT;
+  `);
+};
+
+const applyExtendedProfileRawUpdate = async (customerId, extendedData = {}) => {
+  const entries = Object.entries(extendedData).filter(([, v]) => v !== undefined);
+  if (!customerId || entries.length === 0) return;
+
+  const setClauses = [];
+  const values = [];
+  let paramIndex = 1;
+
+  entries.forEach(([key, value]) => {
+    setClauses.push(`"${key}" = $${paramIndex}`);
+    values.push(value);
+    paramIndex += 1;
+  });
+
+  setClauses.push(`"updatedAt" = CURRENT_TIMESTAMP`);
+  values.push(customerId);
+
+  const query = `UPDATE "customers" SET ${setClauses.join(', ')} WHERE "id" = $${paramIndex}`;
+  await prisma.$executeRawUnsafe(query, ...values);
+};
+
 // Signup - Customer registration (phone number + password)
 // Creates a pending customer record; password is required for new signups.
 export const signup = async (req, res) => {
   try {
+    await ensureCustomerExtendedProfileColumns();
+
     const {
       country_code,
       phone_number,
@@ -127,6 +177,13 @@ export const signup = async (req, res) => {
       date_of_birth,
       dateOfBirth,
       nationality,
+      place_of_birth,
+      placeOfBirth,
+      occupation,
+      source_of_fund,
+      sourceOfFund,
+      resident_country,
+      residentCountry,
       country,
       region,
       sub_region,
@@ -166,6 +223,10 @@ export const signup = async (req, res) => {
     const resolvedZipCode = String(zip_code ?? zipCode ?? '').trim();
     const resolvedDob = String(date_of_birth ?? dateOfBirth ?? '').trim();
     const resolvedNationality = typeof nationality === 'string' ? nationality.trim() : '';
+    const resolvedPlaceOfBirth = String(place_of_birth ?? placeOfBirth ?? '').trim();
+    const resolvedOccupation = typeof occupation === 'string' ? occupation.trim() : '';
+    const resolvedSourceOfFund = String(source_of_fund ?? sourceOfFund ?? '').trim();
+    const resolvedResidentCountry = String(resident_country ?? residentCountry ?? '').trim();
     const resolvedCountry = typeof country === 'string' ? country.trim() : '';
     const resolvedRegion = typeof region === 'string' ? region.trim() : '';
     const resolvedSubRegion = String(sub_region ?? subRegion ?? '').trim();
@@ -188,6 +249,10 @@ export const signup = async (req, res) => {
         data.dateOfBirth = resolvedDob.slice(0, 10);
       }
       if (resolvedNationality) data.nationality = resolvedNationality;
+      if (resolvedPlaceOfBirth) data.placeOfBirth = resolvedPlaceOfBirth;
+      if (resolvedOccupation) data.occupation = resolvedOccupation;
+      if (resolvedSourceOfFund) data.sourceOfFund = resolvedSourceOfFund;
+      if (resolvedResidentCountry) data.residentCountry = resolvedResidentCountry;
       if (resolvedCountry) data.country = resolvedCountry;
       if (resolvedRegion) data.region = resolvedRegion;
       if (resolvedSubRegion) data.subRegion = resolvedSubRegion;
@@ -202,12 +267,14 @@ export const signup = async (req, res) => {
 
     if (existingByPhone) {
       const updateData = buildOptionalProfileUpdate();
-      if (Object.keys(updateData).length > 0) {
+      const { baseData, extendedData } = splitExtendedProfileData(updateData);
+      if (Object.keys(baseData).length > 0) {
         await prisma.customer.update({
           where: { id: existingByPhone.id },
-          data: updateData,
+          data: baseData,
         });
       }
+      await applyExtendedProfileRawUpdate(existingByPhone.id, extendedData);
       return res.status(200).json({
         success: true,
         message: 'Phone number already registered. You can proceed to verify OTP.',
@@ -241,12 +308,14 @@ export const signup = async (req, res) => {
 
     if (existingByEmail) {
       const updateData = buildOptionalProfileUpdate();
-      if (Object.keys(updateData).length > 0) {
+      const { baseData, extendedData } = splitExtendedProfileData(updateData);
+      if (Object.keys(baseData).length > 0) {
         await prisma.customer.update({
           where: { id: existingByEmail.id },
-          data: updateData,
+          data: baseData,
         });
       }
+      await applyExtendedProfileRawUpdate(existingByEmail.id, extendedData);
       return res.status(200).json({
         success: true,
         message: 'Phone number already registered. You can proceed to verify OTP.',
@@ -291,14 +360,19 @@ export const signup = async (req, res) => {
       createData.dateOfBirth = resolvedDob.slice(0, 10);
     }
     if (resolvedNationality) createData.nationality = resolvedNationality;
+    if (resolvedPlaceOfBirth) createData.placeOfBirth = resolvedPlaceOfBirth;
+    if (resolvedOccupation) createData.occupation = resolvedOccupation;
+    if (resolvedSourceOfFund) createData.sourceOfFund = resolvedSourceOfFund;
+    if (resolvedResidentCountry) createData.residentCountry = resolvedResidentCountry;
     if (resolvedCountry) createData.country = resolvedCountry;
     if (resolvedRegion) createData.region = resolvedRegion;
     if (resolvedSubRegion) createData.subRegion = resolvedSubRegion;
     if (resolvedCity) createData.city = resolvedCity;
 
     // Create new customer with pending status
+    const { baseData: baseCreateData, extendedData: extendedCreateData } = splitExtendedProfileData(createData);
     const customer = await prisma.customer.create({
-      data: createData,
+      data: baseCreateData,
       select: {
         id: true,
         email: true,
@@ -310,6 +384,7 @@ export const signup = async (req, res) => {
         createdAt: true
       }
     });
+    await applyExtendedProfileRawUpdate(customer.id, extendedCreateData);
 
     return res.status(201).json({
       success: true,
@@ -837,6 +912,8 @@ export const loginWithPassword = async (req, res) => {
 // Complete Profile - Update customer details after OTP verification
 export const completeProfile = async (req, res) => {
   try {
+    await ensureCustomerExtendedProfileColumns();
+
     const customerId = req.user?.id;
 
     if (!customerId || typeof customerId !== 'string') {
@@ -865,6 +942,13 @@ export const completeProfile = async (req, res) => {
       dateOfBirth,
       gender,
       nationality,
+      place_of_birth,
+      placeOfBirth,
+      occupation,
+      source_of_fund,
+      sourceOfFund,
+      resident_country,
+      residentCountry,
       country,
       region,
       sub_region,
@@ -898,6 +982,16 @@ export const completeProfile = async (req, res) => {
     }
     if (gender !== undefined && gender !== '') updateData.gender = String(gender);
     if (nationality !== undefined && nationality !== '') updateData.nationality = String(nationality);
+    if ((place_of_birth !== undefined && place_of_birth !== '') || (placeOfBirth !== undefined && placeOfBirth !== '')) {
+      updateData.placeOfBirth = String(place_of_birth ?? placeOfBirth ?? '');
+    }
+    if (occupation !== undefined && occupation !== '') updateData.occupation = String(occupation);
+    if ((source_of_fund !== undefined && source_of_fund !== '') || (sourceOfFund !== undefined && sourceOfFund !== '')) {
+      updateData.sourceOfFund = String(source_of_fund ?? sourceOfFund ?? '');
+    }
+    if ((resident_country !== undefined && resident_country !== '') || (residentCountry !== undefined && residentCountry !== '')) {
+      updateData.residentCountry = String(resident_country ?? residentCountry ?? '');
+    }
     if (country !== undefined && country !== '') updateData.country = String(country);
     if (region !== undefined && region !== '') updateData.region = String(region);
     if ((sub_region !== undefined && sub_region !== '') || (subRegion !== undefined && subRegion !== '')) {
@@ -910,11 +1004,19 @@ export const completeProfile = async (req, res) => {
       if (updateData[k] === undefined) delete updateData[k];
     });
 
+    const { baseData, extendedData } = splitExtendedProfileData(updateData);
+
     let updatedCustomer;
-    if (Object.keys(updateData).length > 0) {
+    if (Object.keys(baseData).length > 0) {
       updatedCustomer = await prisma.customer.update({
         where: { id: customerId },
-        data: updateData
+        data: baseData
+      });
+      await applyExtendedProfileRawUpdate(customerId, extendedData);
+    } else if (Object.keys(extendedData).length > 0) {
+      await applyExtendedProfileRawUpdate(customerId, extendedData);
+      updatedCustomer = await prisma.customer.findUnique({
+        where: { id: customerId }
       });
     } else {
       updatedCustomer = await prisma.customer.findUnique({
@@ -1873,35 +1975,50 @@ export const getCustomerById = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const customer = await prisma.customer.findUnique({
-      where: { id },
-      select: {
-        id: true,
-        email: true,
-        username: true,
-        firstName: true,
-        lastName: true,
-        phone: true,
-        address: true,
-        status: true,
-        approvedAt: true,
-        approvedBy: true,
-        level: true,
-        balanceLimit: true,
-        availableBalance: true,
-        dateOfBirth: true,
-        gender: true,
-        nationality: true,
-        country: true,
-        region: true,
-        subRegion: true,
-        city: true,
-        kycData: true,
-        kycRequestedAt: true,
-        createdAt: true,
-        updatedAt: true,
-      }
-    });
+    await ensureCustomerExtendedProfileColumns();
+
+    const rows = await prisma.$queryRawUnsafe(
+      `
+        SELECT
+          "id",
+          "email",
+          "username",
+          "firstName",
+          "middleName",
+          "lastName",
+          "telephone",
+          "phone",
+          "unitApt",
+          "zipCode",
+          "address",
+          "status",
+          "approvedAt",
+          "approvedBy",
+          "level",
+          "balanceLimit",
+          "availableBalance",
+          "dateOfBirth",
+          "gender",
+          "nationality",
+          "placeOfBirth",
+          "occupation",
+          "sourceOfFund",
+          "residentCountry",
+          "country",
+          "region",
+          "subRegion",
+          "city",
+          "kycData",
+          "kycRequestedAt",
+          "createdAt",
+          "updatedAt"
+        FROM "customers"
+        WHERE "id" = $1
+        LIMIT 1
+      `,
+      id
+    );
+    const customer = rows?.[0] || null;
 
     if (!customer) {
       return res.status(404).json({ success: false, message: 'Customer not found' });

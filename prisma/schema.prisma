@@ -311,6 +311,10 @@ model Customer {
   dateOfBirth     String?
   gender          String?
   nationality     String?
+  placeOfBirth    String?
+  occupation      String?
+  sourceOfFund    String?
+  residentCountry String?
   country         String?
   region          String?
   subRegion       String?
@@ -474,6 +478,14 @@ model RegistrationSetting {
   genderRequired     Boolean  @default(false)
   nationality        Boolean  @default(false)
   nationalityRequired Boolean @default(false)
+  placeOfBirth       Boolean  @default(false)
+  placeOfBirthRequired Boolean @default(false)
+  occupation         Boolean  @default(false)
+  occupationRequired Boolean @default(false)
+  sourceOfFund       Boolean  @default(false)
+  sourceOfFundRequired Boolean @default(false)
+  residentCountry    Boolean  @default(false)
+  residentCountryRequired Boolean @default(false)
   country            Boolean  @default(false)
   countryRequired    Boolean  @default(false)
   regionState        Boolean  @default(false)

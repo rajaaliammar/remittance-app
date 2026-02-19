@@ -34,6 +34,14 @@ const normalizeSettings = (raw) => {
     genderRequired: getRawBool(raw, 'genderRequired'),
     nationality: getRawBool(raw, 'nationality'),
     nationalityRequired: getRawBool(raw, 'nationalityRequired'),
+    placeOfBirth: getRawBool(raw, 'placeOfBirth'),
+    placeOfBirthRequired: getRawBool(raw, 'placeOfBirthRequired'),
+    occupation: getRawBool(raw, 'occupation'),
+    occupationRequired: getRawBool(raw, 'occupationRequired'),
+    sourceOfFund: getRawBool(raw, 'sourceOfFund'),
+    sourceOfFundRequired: getRawBool(raw, 'sourceOfFundRequired'),
+    residentCountry: getRawBool(raw, 'residentCountry'),
+    residentCountryRequired: getRawBool(raw, 'residentCountryRequired'),
     country: getRawBool(raw, 'country'),
     countryRequired: getRawBool(raw, 'countryRequired'),
     regionState: getRawBool(raw, 'regionState'),
@@ -47,32 +55,36 @@ const normalizeSettings = (raw) => {
   };
 };
 
+// Ensure newly added registration-setting columns exist in DB even if migrations/db push were not run yet.
+const ensureRegistrationSettingColumns = async () => {
+  await prisma.$executeRawUnsafe(`
+    ALTER TABLE "registration_settings"
+    ADD COLUMN IF NOT EXISTS "placeOfBirth" BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS "placeOfBirthRequired" BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS "occupation" BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS "occupationRequired" BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS "sourceOfFund" BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS "sourceOfFundRequired" BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS "residentCountry" BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS "residentCountryRequired" BOOLEAN NOT NULL DEFAULT false;
+  `);
+};
+
 /**
  * Get user registration settings
  * Returns the current registration field settings
  */
 export const getUserRegistrationSettings = async (req, res) => {
   try {
-    // Get the first (and only) registration setting record
-    // If none exists, create default settings
-    // Use raw query as fallback if Prisma client not regenerated
-    let settings;
-    try {
-      settings = await prisma.registrationSetting.findFirst();
-    } catch (error) {
-      // If Prisma client doesn't have the model yet, use raw query
-      if (error.message.includes('registrationSetting') || error.message.includes('undefined')) {
-        const rawSettings = await prisma.$queryRawUnsafe(`
-          SELECT * FROM "registration_settings" LIMIT 1
-        `);
-        if (rawSettings && rawSettings.length > 0) {
-          settings = normalizeSettings(rawSettings[0]);
-        } else {
-          settings = null;
-        }
-      } else {
-        throw error;
-      }
+    await ensureRegistrationSettingColumns();
+
+    // Read via raw SQL so newly added columns are returned even if Prisma client is stale.
+    let settings = null;
+    const rawSettings = await prisma.$queryRawUnsafe(`
+      SELECT * FROM "registration_settings" LIMIT 1
+    `);
+    if (rawSettings && rawSettings.length > 0) {
+      settings = normalizeSettings(rawSettings[0]);
     }
 
     if (!settings) {
@@ -100,6 +112,14 @@ export const getUserRegistrationSettings = async (req, res) => {
             genderRequired: false,
             nationality: false,
             nationalityRequired: false,
+            placeOfBirth: false,
+            placeOfBirthRequired: false,
+            occupation: false,
+            occupationRequired: false,
+            sourceOfFund: false,
+            sourceOfFundRequired: false,
+            residentCountry: false,
+            residentCountryRequired: false,
             country: false,
             countryRequired: false,
             regionState: false,
@@ -122,6 +142,8 @@ export const getUserRegistrationSettings = async (req, res) => {
               "telephone", "telephoneRequired", "unitApt", "unitAptRequired",
               "zipCode", "zipCodeRequired", "dateOfBirth", "dateOfBirthRequired",
               "gender", "genderRequired", "nationality", "nationalityRequired",
+              "placeOfBirth", "placeOfBirthRequired", "occupation", "occupationRequired",
+              "sourceOfFund", "sourceOfFundRequired", "residentCountry", "residentCountryRequired",
               "country", "countryRequired", "regionState", "regionStateRequired",
               "woredaDistrict", "woredaDistrictRequired", "city", "cityRequired",
               "createdAt", "updatedAt"
@@ -133,12 +155,16 @@ export const getUserRegistrationSettings = async (req, res) => {
               $18, $19, $20, $21,
               $22, $23, $24, $25,
               $26, $27, $28, $29,
+              $30, $31, $32, $33,
+              $34, $35, $36, $37,
               NOW(), NOW()
             )
           `;
           await prisma.$executeRawUnsafe(query,
             id, true, true, true, false,
             true, true, false, false,
+            false, false, false, false,
+            false, false, false, false,
             false, false, false, false,
             false, false, false, false,
             false, false, false, false,
@@ -185,6 +211,14 @@ export const getUserRegistrationSettings = async (req, res) => {
         genderRequired: out.genderRequired,
         nationality: out.nationality,
         nationalityRequired: out.nationalityRequired,
+        placeOfBirth: out.placeOfBirth,
+        placeOfBirthRequired: out.placeOfBirthRequired,
+        occupation: out.occupation,
+        occupationRequired: out.occupationRequired,
+        sourceOfFund: out.sourceOfFund,
+        sourceOfFundRequired: out.sourceOfFundRequired,
+        residentCountry: out.residentCountry,
+        residentCountryRequired: out.residentCountryRequired,
         country: out.country,
         countryRequired: out.countryRequired,
         regionState: out.regionState,
@@ -213,6 +247,8 @@ export const getUserRegistrationSettings = async (req, res) => {
  */
 export const updateUserRegistrationSettings = async (req, res) => {
   try {
+    await ensureRegistrationSettingColumns();
+
     const {
       phoneNumber,
       phoneNumberRequired,
@@ -234,6 +270,14 @@ export const updateUserRegistrationSettings = async (req, res) => {
       genderRequired,
       nationality,
       nationalityRequired,
+      placeOfBirth,
+      placeOfBirthRequired,
+      occupation,
+      occupationRequired,
+      sourceOfFund,
+      sourceOfFundRequired,
+      residentCountry,
+      residentCountryRequired,
       country,
       countryRequired,
       regionState,
@@ -286,6 +330,14 @@ export const updateUserRegistrationSettings = async (req, res) => {
     if (genderRequired !== undefined) updateData.genderRequired = genderRequired;
     if (nationality !== undefined) updateData.nationality = nationality;
     if (nationalityRequired !== undefined) updateData.nationalityRequired = nationalityRequired;
+    if (placeOfBirth !== undefined) updateData.placeOfBirth = placeOfBirth;
+    if (placeOfBirthRequired !== undefined) updateData.placeOfBirthRequired = placeOfBirthRequired;
+    if (occupation !== undefined) updateData.occupation = occupation;
+    if (occupationRequired !== undefined) updateData.occupationRequired = occupationRequired;
+    if (sourceOfFund !== undefined) updateData.sourceOfFund = sourceOfFund;
+    if (sourceOfFundRequired !== undefined) updateData.sourceOfFundRequired = sourceOfFundRequired;
+    if (residentCountry !== undefined) updateData.residentCountry = residentCountry;
+    if (residentCountryRequired !== undefined) updateData.residentCountryRequired = residentCountryRequired;
     if (country !== undefined) updateData.country = country;
     if (countryRequired !== undefined) updateData.countryRequired = countryRequired;
     if (regionState !== undefined) updateData.regionState = regionState;
@@ -360,6 +412,14 @@ export const updateUserRegistrationSettings = async (req, res) => {
             genderRequired: genderRequired ?? false,
             nationality: nationality ?? false,
             nationalityRequired: nationalityRequired ?? false,
+            placeOfBirth: placeOfBirth ?? false,
+            placeOfBirthRequired: placeOfBirthRequired ?? false,
+            occupation: occupation ?? false,
+            occupationRequired: occupationRequired ?? false,
+            sourceOfFund: sourceOfFund ?? false,
+            sourceOfFundRequired: sourceOfFundRequired ?? false,
+            residentCountry: residentCountry ?? false,
+            residentCountryRequired: residentCountryRequired ?? false,
             country: country ?? false,
             countryRequired: countryRequired ?? false,
             regionState: regionState ?? false,
@@ -382,6 +442,8 @@ export const updateUserRegistrationSettings = async (req, res) => {
               "telephone", "telephoneRequired", "unitApt", "unitAptRequired",
               "zipCode", "zipCodeRequired", "dateOfBirth", "dateOfBirthRequired",
               "gender", "genderRequired", "nationality", "nationalityRequired",
+              "placeOfBirth", "placeOfBirthRequired", "occupation", "occupationRequired",
+              "sourceOfFund", "sourceOfFundRequired", "residentCountry", "residentCountryRequired",
               "country", "countryRequired", "regionState", "regionStateRequired",
               "woredaDistrict", "woredaDistrictRequired", "city", "cityRequired",
               "createdAt", "updatedAt"
@@ -393,6 +455,8 @@ export const updateUserRegistrationSettings = async (req, res) => {
               $18, $19, $20, $21,
               $22, $23, $24, $25,
               $26, $27, $28, $29,
+              $30, $31, $32, $33,
+              $34, $35, $36, $37,
               NOW(), NOW()
             )
           `;
@@ -408,6 +472,10 @@ export const updateUserRegistrationSettings = async (req, res) => {
             dateOfBirth ?? false, dateOfBirthRequired ?? false,
             gender ?? false, genderRequired ?? false,
             nationality ?? false, nationalityRequired ?? false,
+            placeOfBirth ?? false, placeOfBirthRequired ?? false,
+            occupation ?? false, occupationRequired ?? false,
+            sourceOfFund ?? false, sourceOfFundRequired ?? false,
+            residentCountry ?? false, residentCountryRequired ?? false,
             country ?? false, countryRequired ?? false,
             regionState ?? false, regionStateRequired ?? false,
             woredaDistrict ?? false, woredaDistrictRequired ?? false,
@@ -454,6 +522,14 @@ export const updateUserRegistrationSettings = async (req, res) => {
         genderRequired: out.genderRequired,
         nationality: out.nationality,
         nationalityRequired: out.nationalityRequired,
+        placeOfBirth: out.placeOfBirth,
+        placeOfBirthRequired: out.placeOfBirthRequired,
+        occupation: out.occupation,
+        occupationRequired: out.occupationRequired,
+        sourceOfFund: out.sourceOfFund,
+        sourceOfFundRequired: out.sourceOfFundRequired,
+        residentCountry: out.residentCountry,
+        residentCountryRequired: out.residentCountryRequired,
         country: out.country,
         countryRequired: out.countryRequired,
         regionState: out.regionState,
