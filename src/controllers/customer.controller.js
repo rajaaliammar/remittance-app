@@ -102,7 +102,16 @@ function getPhoneLookupVariants(countryCode, phoneNumber) {
   return [...new Set(variants)];
 }
 
-const EXTENDED_PROFILE_KEYS = ['placeOfBirth', 'occupation', 'sourceOfFund', 'residentCountry'];
+const EXTENDED_PROFILE_KEYS = [
+  'middleName',
+  'telephone',
+  'unitApt',
+  'zipCode',
+  'placeOfBirth',
+  'occupation',
+  'sourceOfFund',
+  'residentCountry',
+];
 
 const splitExtendedProfileData = (data = {}) => {
   const baseData = {};
@@ -122,6 +131,10 @@ const splitExtendedProfileData = (data = {}) => {
 const ensureCustomerExtendedProfileColumns = async () => {
   await prisma.$executeRawUnsafe(`
     ALTER TABLE "customers"
+    ADD COLUMN IF NOT EXISTS "middleName" TEXT,
+    ADD COLUMN IF NOT EXISTS "telephone" TEXT,
+    ADD COLUMN IF NOT EXISTS "unitApt" TEXT,
+    ADD COLUMN IF NOT EXISTS "zipCode" TEXT,
     ADD COLUMN IF NOT EXISTS "placeOfBirth" TEXT,
     ADD COLUMN IF NOT EXISTS "occupation" TEXT,
     ADD COLUMN IF NOT EXISTS "sourceOfFund" TEXT,
