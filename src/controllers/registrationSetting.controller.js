@@ -20,6 +20,14 @@ const normalizeSettings = (raw) => {
     emailAddressRequired: getRawBool(raw, 'emailAddressRequired'),
     fullName: getRawBool(raw, 'fullName'),
     fullNameRequired: getRawBool(raw, 'fullNameRequired'),
+    middleName: getRawBool(raw, 'middleName'),
+    middleNameRequired: getRawBool(raw, 'middleNameRequired'),
+    telephone: getRawBool(raw, 'telephone'),
+    telephoneRequired: getRawBool(raw, 'telephoneRequired'),
+    unitApt: getRawBool(raw, 'unitApt'),
+    unitAptRequired: getRawBool(raw, 'unitAptRequired'),
+    zipCode: getRawBool(raw, 'zipCode'),
+    zipCodeRequired: getRawBool(raw, 'zipCodeRequired'),
     dateOfBirth: getRawBool(raw, 'dateOfBirth'),
     dateOfBirthRequired: getRawBool(raw, 'dateOfBirthRequired'),
     gender: getRawBool(raw, 'gender'),
@@ -78,6 +86,14 @@ export const getUserRegistrationSettings = async (req, res) => {
             emailAddressRequired: false,
             fullName: true,
             fullNameRequired: true,
+            middleName: false,
+            middleNameRequired: false,
+            telephone: false,
+            telephoneRequired: false,
+            unitApt: false,
+            unitAptRequired: false,
+            zipCode: false,
+            zipCodeRequired: false,
             dateOfBirth: false,
             dateOfBirthRequired: false,
             gender: false,
@@ -102,7 +118,9 @@ export const getUserRegistrationSettings = async (req, res) => {
           const query = `
             INSERT INTO "registration_settings" (
               "id", "phoneNumber", "phoneNumberRequired", "emailAddress", "emailAddressRequired",
-              "fullName", "fullNameRequired", "dateOfBirth", "dateOfBirthRequired",
+              "fullName", "fullNameRequired", "middleName", "middleNameRequired",
+              "telephone", "telephoneRequired", "unitApt", "unitAptRequired",
+              "zipCode", "zipCodeRequired", "dateOfBirth", "dateOfBirthRequired",
               "gender", "genderRequired", "nationality", "nationalityRequired",
               "country", "countryRequired", "regionState", "regionStateRequired",
               "woredaDistrict", "woredaDistrictRequired", "city", "cityRequired",
@@ -113,12 +131,16 @@ export const getUserRegistrationSettings = async (req, res) => {
               $10, $11, $12, $13,
               $14, $15, $16, $17,
               $18, $19, $20, $21,
+              $22, $23, $24, $25,
+              $26, $27, $28, $29,
               NOW(), NOW()
             )
           `;
           await prisma.$executeRawUnsafe(query,
             id, true, true, true, false,
             true, true, false, false,
+            false, false, false, false,
+            false, false, false, false,
             false, false, false, false,
             false, false, false, false,
             false, false, false, false
@@ -149,6 +171,14 @@ export const getUserRegistrationSettings = async (req, res) => {
         emailAddressRequired: out.emailAddressRequired,
         fullName: out.fullName,
         fullNameRequired: out.fullNameRequired,
+        middleName: out.middleName,
+        middleNameRequired: out.middleNameRequired,
+        telephone: out.telephone,
+        telephoneRequired: out.telephoneRequired,
+        unitApt: out.unitApt,
+        unitAptRequired: out.unitAptRequired,
+        zipCode: out.zipCode,
+        zipCodeRequired: out.zipCodeRequired,
         dateOfBirth: out.dateOfBirth,
         dateOfBirthRequired: out.dateOfBirthRequired,
         gender: out.gender,
@@ -190,6 +220,14 @@ export const updateUserRegistrationSettings = async (req, res) => {
       emailAddressRequired,
       fullName,
       fullNameRequired,
+      middleName,
+      middleNameRequired,
+      telephone,
+      telephoneRequired,
+      unitApt,
+      unitAptRequired,
+      zipCode,
+      zipCodeRequired,
       dateOfBirth,
       dateOfBirthRequired,
       gender,
@@ -234,6 +272,14 @@ export const updateUserRegistrationSettings = async (req, res) => {
     if (emailAddressRequired !== undefined) updateData.emailAddressRequired = emailAddressRequired;
     if (fullName !== undefined) updateData.fullName = fullName;
     if (fullNameRequired !== undefined) updateData.fullNameRequired = fullNameRequired;
+    if (middleName !== undefined) updateData.middleName = middleName;
+    if (middleNameRequired !== undefined) updateData.middleNameRequired = middleNameRequired;
+    if (telephone !== undefined) updateData.telephone = telephone;
+    if (telephoneRequired !== undefined) updateData.telephoneRequired = telephoneRequired;
+    if (unitApt !== undefined) updateData.unitApt = unitApt;
+    if (unitAptRequired !== undefined) updateData.unitAptRequired = unitAptRequired;
+    if (zipCode !== undefined) updateData.zipCode = zipCode;
+    if (zipCodeRequired !== undefined) updateData.zipCodeRequired = zipCodeRequired;
     if (dateOfBirth !== undefined) updateData.dateOfBirth = dateOfBirth;
     if (dateOfBirthRequired !== undefined) updateData.dateOfBirthRequired = dateOfBirthRequired;
     if (gender !== undefined) updateData.gender = gender;
@@ -300,6 +346,14 @@ export const updateUserRegistrationSettings = async (req, res) => {
             emailAddressRequired: emailAddressRequired ?? false,
             fullName: fullName ?? true,
             fullNameRequired: fullNameRequired ?? true,
+            middleName: middleName ?? false,
+            middleNameRequired: middleNameRequired ?? false,
+            telephone: telephone ?? false,
+            telephoneRequired: telephoneRequired ?? false,
+            unitApt: unitApt ?? false,
+            unitAptRequired: unitAptRequired ?? false,
+            zipCode: zipCode ?? false,
+            zipCodeRequired: zipCodeRequired ?? false,
             dateOfBirth: dateOfBirth ?? false,
             dateOfBirthRequired: dateOfBirthRequired ?? false,
             gender: gender ?? false,
@@ -324,7 +378,9 @@ export const updateUserRegistrationSettings = async (req, res) => {
           const query = `
             INSERT INTO "registration_settings" (
               "id", "phoneNumber", "phoneNumberRequired", "emailAddress", "emailAddressRequired",
-              "fullName", "fullNameRequired", "dateOfBirth", "dateOfBirthRequired",
+              "fullName", "fullNameRequired", "middleName", "middleNameRequired",
+              "telephone", "telephoneRequired", "unitApt", "unitAptRequired",
+              "zipCode", "zipCodeRequired", "dateOfBirth", "dateOfBirthRequired",
               "gender", "genderRequired", "nationality", "nationalityRequired",
               "country", "countryRequired", "regionState", "regionStateRequired",
               "woredaDistrict", "woredaDistrictRequired", "city", "cityRequired",
@@ -335,6 +391,8 @@ export const updateUserRegistrationSettings = async (req, res) => {
               $10, $11, $12, $13,
               $14, $15, $16, $17,
               $18, $19, $20, $21,
+              $22, $23, $24, $25,
+              $26, $27, $28, $29,
               NOW(), NOW()
             )
           `;
@@ -343,6 +401,10 @@ export const updateUserRegistrationSettings = async (req, res) => {
             phoneNumber ?? true, phoneNumberRequired ?? true,
             emailAddress ?? true, emailAddressRequired ?? false,
             fullName ?? true, fullNameRequired ?? true,
+            middleName ?? false, middleNameRequired ?? false,
+            telephone ?? false, telephoneRequired ?? false,
+            unitApt ?? false, unitAptRequired ?? false,
+            zipCode ?? false, zipCodeRequired ?? false,
             dateOfBirth ?? false, dateOfBirthRequired ?? false,
             gender ?? false, genderRequired ?? false,
             nationality ?? false, nationalityRequired ?? false,
@@ -378,6 +440,14 @@ export const updateUserRegistrationSettings = async (req, res) => {
         emailAddressRequired: out.emailAddressRequired,
         fullName: out.fullName,
         fullNameRequired: out.fullNameRequired,
+        middleName: out.middleName,
+        middleNameRequired: out.middleNameRequired,
+        telephone: out.telephone,
+        telephoneRequired: out.telephoneRequired,
+        unitApt: out.unitApt,
+        unitAptRequired: out.unitAptRequired,
+        zipCode: out.zipCode,
+        zipCodeRequired: out.zipCodeRequired,
         dateOfBirth: out.dateOfBirth,
         dateOfBirthRequired: out.dateOfBirthRequired,
         gender: out.gender,

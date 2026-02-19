@@ -112,10 +112,17 @@ export const signup = async (req, res) => {
       password,
       first_name,
       firstName,
+      middle_name,
+      middleName,
       last_name,
       lastName,
       email,
       address,
+      telephone,
+      unit_apt,
+      unitApt,
+      zip_code,
+      zipCode,
       gender,
       date_of_birth,
       dateOfBirth,
@@ -151,8 +158,12 @@ export const signup = async (req, res) => {
     const placeholderEmail = `phone_${fullPhone}@remittance.pending`;
     const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
     const resolvedFirstName = String(first_name ?? firstName ?? '').trim();
+    const resolvedMiddleName = String(middle_name ?? middleName ?? '').trim();
     const resolvedLastName = String(last_name ?? lastName ?? '').trim();
     const resolvedAddress = typeof address === 'string' ? address.trim() : '';
+    const resolvedTelephone = typeof telephone === 'string' ? telephone.trim() : '';
+    const resolvedUnitApt = String(unit_apt ?? unitApt ?? '').trim();
+    const resolvedZipCode = String(zip_code ?? zipCode ?? '').trim();
     const resolvedDob = String(date_of_birth ?? dateOfBirth ?? '').trim();
     const resolvedNationality = typeof nationality === 'string' ? nationality.trim() : '';
     const resolvedCountry = typeof country === 'string' ? country.trim() : '';
@@ -160,12 +171,43 @@ export const signup = async (req, res) => {
     const resolvedSubRegion = String(sub_region ?? subRegion ?? '').trim();
     const resolvedCity = typeof city === 'string' ? city.trim() : '';
 
+    // Optional profile fields that can be attached during signup as well.
+    const buildOptionalProfileUpdate = () => {
+      const data = {};
+      if (resolvedFirstName) data.firstName = resolvedFirstName;
+      if (resolvedMiddleName) data.middleName = resolvedMiddleName;
+      if (resolvedLastName) data.lastName = resolvedLastName;
+      if (resolvedTelephone) data.telephone = resolvedTelephone;
+      if (resolvedUnitApt) data.unitApt = resolvedUnitApt;
+      if (resolvedZipCode) data.zipCode = resolvedZipCode;
+      if (resolvedAddress) data.address = resolvedAddress;
+      if (gender != null && String(gender).trim() !== '') data.gender = String(gender).trim();
+      if (date_of_birth != null && String(date_of_birth).trim() !== '') {
+        data.dateOfBirth = String(date_of_birth).trim().slice(0, 10);
+      } else if (resolvedDob) {
+        data.dateOfBirth = resolvedDob.slice(0, 10);
+      }
+      if (resolvedNationality) data.nationality = resolvedNationality;
+      if (resolvedCountry) data.country = resolvedCountry;
+      if (resolvedRegion) data.region = resolvedRegion;
+      if (resolvedSubRegion) data.subRegion = resolvedSubRegion;
+      if (resolvedCity) data.city = resolvedCity;
+      return data;
+    };
+
     // Check if user already exists
     const existingByPhone = await prisma.customer.findFirst({
       where: { phone: fullPhone }
     });
 
     if (existingByPhone) {
+      const updateData = buildOptionalProfileUpdate();
+      if (Object.keys(updateData).length > 0) {
+        await prisma.customer.update({
+          where: { id: existingByPhone.id },
+          data: updateData,
+        });
+      }
       return res.status(200).json({
         success: true,
         message: 'Phone number already registered. You can proceed to verify OTP.',
@@ -198,6 +240,13 @@ export const signup = async (req, res) => {
         });
 
     if (existingByEmail) {
+      const updateData = buildOptionalProfileUpdate();
+      if (Object.keys(updateData).length > 0) {
+        await prisma.customer.update({
+          where: { id: existingByEmail.id },
+          data: updateData,
+        });
+      }
       return res.status(200).json({
         success: true,
         message: 'Phone number already registered. You can proceed to verify OTP.',
@@ -229,6 +278,10 @@ export const signup = async (req, res) => {
       password: hashedPassword,
       status: 'pending'
     };
+    if (resolvedMiddleName) createData.middleName = resolvedMiddleName;
+    if (resolvedTelephone) createData.telephone = resolvedTelephone;
+    if (resolvedUnitApt) createData.unitApt = resolvedUnitApt;
+    if (resolvedZipCode) createData.zipCode = resolvedZipCode;
     if (gender != null && String(gender).trim() !== '') {
       createData.gender = String(gender).trim();
     }
@@ -797,10 +850,17 @@ export const completeProfile = async (req, res) => {
     const {
       first_name,
       firstName,
+      middle_name,
+      middleName,
       last_name,
       lastName,
       email,
       address,
+      telephone,
+      unit_apt,
+      unitApt,
+      zip_code,
+      zipCode,
       date_of_birth,
       dateOfBirth,
       gender,
@@ -817,10 +877,20 @@ export const completeProfile = async (req, res) => {
     if ((first_name !== undefined && first_name !== '') || (firstName !== undefined && firstName !== '')) {
       updateData.firstName = String(first_name ?? firstName ?? '');
     }
+    if ((middle_name !== undefined && middle_name !== '') || (middleName !== undefined && middleName !== '')) {
+      updateData.middleName = String(middle_name ?? middleName ?? '');
+    }
     if ((last_name !== undefined && last_name !== '') || (lastName !== undefined && lastName !== '')) {
       updateData.lastName = String(last_name ?? lastName ?? '');
     }
     if (email !== undefined && email !== '') updateData.email = String(email);
+    if (telephone !== undefined && telephone !== '') updateData.telephone = String(telephone);
+    if ((unit_apt !== undefined && unit_apt !== '') || (unitApt !== undefined && unitApt !== '')) {
+      updateData.unitApt = String(unit_apt ?? unitApt ?? '');
+    }
+    if ((zip_code !== undefined && zip_code !== '') || (zipCode !== undefined && zipCode !== '')) {
+      updateData.zipCode = String(zip_code ?? zipCode ?? '');
+    }
     if (address !== undefined && address !== '') updateData.address = String(address);
     if ((date_of_birth !== undefined && date_of_birth !== '') || (dateOfBirth !== undefined && dateOfBirth !== '')) {
       const dob = date_of_birth ?? dateOfBirth;
@@ -1392,8 +1462,12 @@ export const getProfile = async (req, res) => {
         email: true,
         username: true,
         firstName: true,
+        middleName: true,
         lastName: true,
+        telephone: true,
         phone: true,
+        unitApt: true,
+        zipCode: true,
         address: true,
         status: true,
         hasPin: true,

@@ -14,6 +14,11 @@ async function ensureLevelAndBalanceLimitColumns() {
     'ALTER TABLE "agents" ADD COLUMN IF NOT EXISTS "balanceLimit" TEXT',
     'ALTER TABLE "backoffice_users" ADD COLUMN IF NOT EXISTS "level" TEXT',
     'ALTER TABLE "backoffice_users" ADD COLUMN IF NOT EXISTS "balanceLimit" TEXT',
+    // Customer profile fields used by dynamic registration settings
+    'ALTER TABLE "customers" ADD COLUMN IF NOT EXISTS "middleName" TEXT',
+    'ALTER TABLE "customers" ADD COLUMN IF NOT EXISTS "telephone" TEXT',
+    'ALTER TABLE "customers" ADD COLUMN IF NOT EXISTS "unitApt" TEXT',
+    'ALTER TABLE "customers" ADD COLUMN IF NOT EXISTS "zipCode" TEXT',
   ];
   for (const sql of statements) {
     try {
@@ -58,6 +63,14 @@ async function ensureRegistrationSettingsTable() {
         "emailAddressRequired" BOOLEAN NOT NULL DEFAULT false,
         "fullName" BOOLEAN NOT NULL DEFAULT true,
         "fullNameRequired" BOOLEAN NOT NULL DEFAULT true,
+        "middleName" BOOLEAN NOT NULL DEFAULT false,
+        "middleNameRequired" BOOLEAN NOT NULL DEFAULT false,
+        "telephone" BOOLEAN NOT NULL DEFAULT false,
+        "telephoneRequired" BOOLEAN NOT NULL DEFAULT false,
+        "unitApt" BOOLEAN NOT NULL DEFAULT false,
+        "unitAptRequired" BOOLEAN NOT NULL DEFAULT false,
+        "zipCode" BOOLEAN NOT NULL DEFAULT false,
+        "zipCodeRequired" BOOLEAN NOT NULL DEFAULT false,
         "dateOfBirth" BOOLEAN NOT NULL DEFAULT false,
         "dateOfBirthRequired" BOOLEAN NOT NULL DEFAULT false,
         "gender" BOOLEAN NOT NULL DEFAULT false,
@@ -77,6 +90,24 @@ async function ensureRegistrationSettingsTable() {
         CONSTRAINT "registration_settings_pkey" PRIMARY KEY ("id")
       )
     `);
+
+    const addColumnStatements = [
+      'ALTER TABLE "registration_settings" ADD COLUMN IF NOT EXISTS "middleName" BOOLEAN NOT NULL DEFAULT false',
+      'ALTER TABLE "registration_settings" ADD COLUMN IF NOT EXISTS "middleNameRequired" BOOLEAN NOT NULL DEFAULT false',
+      'ALTER TABLE "registration_settings" ADD COLUMN IF NOT EXISTS "telephone" BOOLEAN NOT NULL DEFAULT false',
+      'ALTER TABLE "registration_settings" ADD COLUMN IF NOT EXISTS "telephoneRequired" BOOLEAN NOT NULL DEFAULT false',
+      'ALTER TABLE "registration_settings" ADD COLUMN IF NOT EXISTS "unitApt" BOOLEAN NOT NULL DEFAULT false',
+      'ALTER TABLE "registration_settings" ADD COLUMN IF NOT EXISTS "unitAptRequired" BOOLEAN NOT NULL DEFAULT false',
+      'ALTER TABLE "registration_settings" ADD COLUMN IF NOT EXISTS "zipCode" BOOLEAN NOT NULL DEFAULT false',
+      'ALTER TABLE "registration_settings" ADD COLUMN IF NOT EXISTS "zipCodeRequired" BOOLEAN NOT NULL DEFAULT false',
+    ];
+    for (const sql of addColumnStatements) {
+      try {
+        await prisma.$executeRawUnsafe(sql);
+      } catch (colErr) {
+        console.warn('ensureRegistrationSettingsTable (add column):', colErr.message);
+      }
+    }
   } catch (e) {
     console.warn('ensureRegistrationSettingsTable:', e.message);
   }

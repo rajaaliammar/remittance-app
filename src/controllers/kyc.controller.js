@@ -152,7 +152,7 @@ export const createKYCForm = async (req, res) => {
       });
     }
 
-    const { name, for: forType, kycStatus, countries, fields, priority, maxAmount } = req.body;
+    const { name, description, for: forType, kycStatus, countries, fields, priority, maxAmount } = req.body;
 
     if (!name || !forType) {
       return res.status(400).json({
@@ -200,6 +200,20 @@ export const createKYCForm = async (req, res) => {
       finalPriority = maxPriority + 1;
     }
 
+    const normalizedFields = fields
+      .map((field) => ({
+        ...field,
+        fieldName: String(field?.fieldName || '').trim(),
+      }))
+      .filter((field) => field.fieldName.length > 0);
+
+    if (normalizedFields.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'At least one field with a valid field name is required'
+      });
+    }
+
     const form = await prisma.kYCForm.create({
       data: {
         name: name.trim(),
@@ -207,7 +221,7 @@ export const createKYCForm = async (req, res) => {
         for: forType,
         status: kycStatus ? 'Active' : 'Inactive',
         countries: countries,
-        fields: fields,
+        fields: normalizedFields,
         priority: finalPriority,
         maxAmount: maxAmount ? parseFloat(maxAmount) : null
       }

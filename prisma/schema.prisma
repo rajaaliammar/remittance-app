@@ -291,8 +291,12 @@ model Customer {
   email           String    @unique
   username        String?   @unique
   firstName       String?
+  middleName      String?
   lastName        String?
+  telephone       String?
   phone           String?
+  unitApt         String?
+  zipCode         String?
   address         String?
   password        String    // Hashed password
   pin             String?   // Hashed PIN (4-digit PIN for mobile app)
@@ -456,6 +460,14 @@ model RegistrationSetting {
   emailAddressRequired Boolean @default(false)
   fullName           Boolean  @default(true)
   fullNameRequired   Boolean  @default(true)
+  middleName         Boolean  @default(false)
+  middleNameRequired Boolean  @default(false)
+  telephone          Boolean  @default(false)
+  telephoneRequired  Boolean  @default(false)
+  unitApt            Boolean  @default(false)
+  unitAptRequired    Boolean  @default(false)
+  zipCode            Boolean  @default(false)
+  zipCodeRequired    Boolean  @default(false)
   dateOfBirth        Boolean  @default(false)
   dateOfBirthRequired Boolean @default(false)
   gender             Boolean  @default(false)
