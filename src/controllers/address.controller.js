@@ -167,6 +167,18 @@ export const autocomplete = async (req, res) => {
       });
     }
     const suggestions = Array.isArray(data?.suggestions) ? data.suggestions : (Array.isArray(data) ? data : []);
+    const preview = suggestions.slice(0, 5).map((item, index) => ({
+      index,
+      street_line: item?.street_line || '',
+      secondary: item?.secondary || '',
+      entries: item?.entries ?? null,
+      city: item?.city || '',
+      state: item?.state || '',
+      zipcode: item?.zipcode || '',
+      hasUnitOrApt: !!(item?.secondary && String(item.secondary).trim()),
+    }));
+    console.log('[AddressController] Suggestions preview (unit/apt check):', JSON.stringify(preview, null, 2));
+    console.log('[AddressController] Suggestions with unit/apt:', suggestions.filter((item) => !!(item?.secondary && String(item.secondary).trim())).length);
     console.log('[AddressController] ✅ Returning suggestions:', suggestions.length);
     return res.json({ success: true, suggestions });
   } catch (err) {
