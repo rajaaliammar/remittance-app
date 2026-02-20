@@ -11,6 +11,24 @@ import {
   startOfMonthUTC,
 } from '../utils/limitsHelper.js';
 
+const senderCustomerSelect = {
+  id: true,
+  firstName: true,
+  middleName: true,
+  lastName: true,
+  email: true,
+  phone: true,
+  telephone: true,
+  address: true,
+  unitApt: true,
+  zipCode: true,
+  dateOfBirth: true,
+  nationality: true,
+  country: true,
+  region: true,
+  city: true,
+};
+
 /**
  * Create a remittance transaction (after user confirms payment in app)
  */
@@ -288,14 +306,7 @@ export const getRemittanceTransactionById = async (req, res) => {
       where: { id },
       include: {
         customer: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            email: true,
-            phone: true,
-            address: true,
-          },
+          select: senderCustomerSelect,
         },
       },
     });
@@ -347,13 +358,7 @@ export const listAllRemittanceTransactions = async (req, res) => {
         skip,
         include: {
           customer: {
-            select: {
-              id: true,
-              firstName: true,
-              lastName: true,
-              email: true,
-              phone: true,
-            },
+            select: senderCustomerSelect,
           },
         },
       }),
@@ -399,11 +404,7 @@ export const sendRemittanceTransactionReceipt = async (req, res) => {
       where: { id },
       include: {
         customer: {
-          select: {
-            firstName: true,
-            lastName: true,
-            email: true,
-          },
+          select: senderCustomerSelect,
         },
       },
     });
