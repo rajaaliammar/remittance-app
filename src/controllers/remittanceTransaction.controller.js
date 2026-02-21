@@ -11,6 +11,100 @@ import {
   startOfMonthUTC,
 } from '../utils/limitsHelper.js';
 
+const US_STATE_NAME_TO_CODE = {
+  ALABAMA: 'AL',
+  ALASKA: 'AK',
+  ARIZONA: 'AZ',
+  ARKANSAS: 'AR',
+  CALIFORNIA: 'CA',
+  COLORADO: 'CO',
+  CONNECTICUT: 'CT',
+  DELAWARE: 'DE',
+  FLORIDA: 'FL',
+  GEORGIA: 'GA',
+  HAWAII: 'HI',
+  IDAHO: 'ID',
+  ILLINOIS: 'IL',
+  INDIANA: 'IN',
+  IOWA: 'IA',
+  KANSAS: 'KS',
+  KENTUCKY: 'KY',
+  LOUISIANA: 'LA',
+  MAINE: 'ME',
+  MARYLAND: 'MD',
+  MASSACHUSETTS: 'MA',
+  MICHIGAN: 'MI',
+  MINNESOTA: 'MN',
+  MISSISSIPPI: 'MS',
+  MISSOURI: 'MO',
+  MONTANA: 'MT',
+  NEBRASKA: 'NE',
+  NEVADA: 'NV',
+  'NEW HAMPSHIRE': 'NH',
+  'NEW JERSEY': 'NJ',
+  'NEW MEXICO': 'NM',
+  'NEW YORK': 'NY',
+  'NORTH CAROLINA': 'NC',
+  'NORTH DAKOTA': 'ND',
+  OHIO: 'OH',
+  OKLAHOMA: 'OK',
+  OREGON: 'OR',
+  PENNSYLVANIA: 'PA',
+  'RHODE ISLAND': 'RI',
+  'SOUTH CAROLINA': 'SC',
+  'SOUTH DAKOTA': 'SD',
+  TENNESSEE: 'TN',
+  TEXAS: 'TX',
+  UTAH: 'UT',
+  VERMONT: 'VT',
+  VIRGINIA: 'VA',
+  WASHINGTON: 'WA',
+  'WEST VIRGINIA': 'WV',
+  WISCONSIN: 'WI',
+  WYOMING: 'WY',
+  'DISTRICT OF COLUMBIA': 'DC',
+};
+
+const normalizeStateInput = (value) =>
+  String(value || '')
+    .toUpperCase()
+    .replace(/\./g, ' ')
+    .replace(/[^A-Z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const resolveStateInitial = (value) => {
+  const normalized = normalizeStateInput(value);
+  if (!normalized) return null;
+  if (/^[A-Z]{2}$/.test(normalized)) return normalized;
+  if (US_STATE_NAME_TO_CODE[normalized]) return US_STATE_NAME_TO_CODE[normalized];
+  const token = normalized.split(' ').find((part) => /^[A-Z]{2}$/.test(part));
+  if (token) return token;
+  for (const [name, code] of Object.entries(US_STATE_NAME_TO_CODE)) {
+    if (normalized.includes(name)) return code;
+  }
+  return null;
+};
+
+const getStateDisclosureText = async (rawStateValue) => {
+  const stateInitial = resolveStateInitial(rawStateValue);
+  if (!stateInitial) return null;
+  try {
+    const rows = await prisma.$queryRawUnsafe(
+      `
+        SELECT "disclosureText"
+        FROM "state_disclosures"
+        WHERE UPPER(TRIM("stateInitial")) = UPPER(TRIM($1))
+        LIMIT 1
+      `,
+      stateInitial,
+    );
+    return rows?.[0]?.disclosureText ? String(rows[0].disclosureText) : null;
+  } catch {
+    return null;
+  }
+};
+
 const senderCustomerSelect = {
   id: true,
   firstName: true,
@@ -492,7 +586,9 @@ export const sendRemittanceTransactionReceipt = async (req, res) => {
     const logoHtml = receiptSettings.logoUrl
       ? `<img src="${receiptSettings.logoUrl}" alt="Receipt Logo" style="max-height:56px;max-width:220px;display:block;" />`
       : `<div style="font-size:42px;line-height:1;color:#0b66a2;font-weight:700;">${receiptSettings.brandName}</div>`;
-    const disclosureLines = String(receiptSettings.disclosureText || '')
+    const stateDisclosureText = await getStateDisclosureText(senderState);
+    const disclosureContent = stateDisclosureText || receiptSettings.disclosureText;
+    const disclosureLines = String(disclosureContent || '')
       .split('\n')
       .map((line) => line.trim())
       .filter(Boolean);
