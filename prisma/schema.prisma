@@ -553,3 +553,36 @@ model TaxFeeCountry {
   @@unique([taxFeeId, countryId])
   @@map("tax_fee_countries")
 }
+
+model OrchestrationJob {
+  id                     String    @id @default(cuid())
+  type                   String    @default("pre_transaction") // e.g. pre_transaction
+  status                 String    @default("pending") // pending, running, completed, failed
+  customerId             String?
+  context                Json?     // Request context (sendAmount, currency, gatewayId, etc.)
+  result                 Json?     // Orchestration result (allowed, message, etc.)
+  message                String?   @db.Text // Human-readable message on failure
+  remittanceTransactionId String?  // Set after transaction is created
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+  events                 OrchestrationEvent[]
+
+  @@index([customerId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("orchestration_jobs")
+}
+
+model OrchestrationEvent {
+  id        String   @id @default(cuid())
+  jobId     String?
+  job       OrchestrationJob? @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  eventType String   // e.g. orchestration_started, pre_transaction_check, orchestration_completed
+  payload   Json?    // Event-specific data
+  createdAt DateTime @default(now())
+
+  @@index([jobId])
+  @@index([eventType])
+  @@index([createdAt])
+  @@map("orchestration_events")
+}

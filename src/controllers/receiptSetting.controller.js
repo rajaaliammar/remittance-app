@@ -18,7 +18,7 @@ const DEFAULT_RECEIPT_SETTINGS = {
     'Please contact us if you have questions about this transaction. Important information about our refund policy is available here.',
   mobileScamTitle: 'Be Wary of Internet Scams',
   mobileScamBullets:
-    'DO NOT make a payment to claim lottery winnings or prize money.\nDO NOT respond to internet or phone offers you are not sure are honest.\nDO NOT make a payment to someone you do not know or cannot verify.',
+    'DO NOT make a payment to claim lottery or prize winnings, or on a promise of receiving a large amount of money.\nDO NOT respond to an Internet or phone offer that you aren\'t sure is honest.\nDO NOT make a payment to someone you don\'t know or whose identity you can\'t verify.',
   mobileRightsFooter:
     'You can cancel for a full refund anytime unless the funds have been picked up or deposited.',
   mobilePdfLogoUrl: '',
@@ -50,7 +50,7 @@ const ensureReceiptSettingsTable = async () => {
       "mobileRightsTitle" TEXT NOT NULL DEFAULT 'Your Consumer Rights',
       "mobileRightsIntro" TEXT NOT NULL DEFAULT 'Please contact us if you have questions about this transaction.',
       "mobileScamTitle" TEXT NOT NULL DEFAULT 'Be Wary of Internet Scams',
-      "mobileScamBullets" TEXT NOT NULL DEFAULT 'DO NOT make a payment to someone you do not know or cannot verify.',
+      "mobileScamBullets" TEXT NOT NULL DEFAULT 'DO NOT make a payment to claim lottery or prize winnings, or on a promise of receiving a large amount of money.' || chr(10) || 'DO NOT respond to an Internet or phone offer that you aren''t sure is honest.' || chr(10) || 'DO NOT make a payment to someone you don''t know or whose identity you can''t verify.',
       "mobileRightsFooter" TEXT NOT NULL DEFAULT 'You can cancel for a full refund anytime unless the funds have been picked up or deposited.',
       "mobilePdfLogoUrl" TEXT NOT NULL DEFAULT '',
       "mobilePdfBrandName" TEXT NOT NULL DEFAULT 'PaySii',
@@ -82,7 +82,10 @@ const ensureReceiptSettingsTable = async () => {
 const normalizeSettings = (raw) => {
   const out = {};
   FIELD_KEYS.forEach((key) => {
-    const value = raw?.[key];
+    let value = raw?.[key];
+    if (key === 'mobileScamBullets' && (value == null || String(value).indexOf('\n') === -1)) {
+      value = DEFAULT_RECEIPT_SETTINGS.mobileScamBullets;
+    }
     out[key] = value == null ? DEFAULT_RECEIPT_SETTINGS[key] : String(value);
   });
   return out;

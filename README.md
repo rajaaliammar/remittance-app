@@ -4,6 +4,7 @@ Express.js backend application with Prisma ORM for the remittance system.
 
 ## Features
 
+- **Orchestration layer** – Every remittance transaction runs through orchestration before balance debit; jobs and events are stored in `orchestration_jobs` and `orchestration_events`. See [docs/ORCHESTRATION.md](docs/ORCHESTRATION.md) for the technical checklist and developer note.
 - Express.js web framework
 - Prisma ORM for database management
 - PostgreSQL database support

@@ -10,6 +10,7 @@ import {
   startOfWeekUTC,
   startOfMonthUTC,
 } from '../utils/limitsHelper.js';
+import { runOrchestrationBeforeTransaction } from '../utils/orchestration.js';
 
 const US_STATE_NAME_TO_CODE = {
   ALABAMA: 'AL',
@@ -124,7 +125,9 @@ const senderCustomerSelect = {
 };
 
 /**
- * Create a remittance transaction (after user confirms payment in app)
+ * Create a remittance transaction (after user confirms payment in app).
+ * All customer send flows use this path. Orchestration runs before every transaction;
+ * see runOrchestrationBeforeTransaction() and docs/ORCHESTRATION.md.
  */
 export const createRemittanceTransaction = async (req, res) => {
   try {
@@ -288,6 +291,86 @@ export const createRemittanceTransaction = async (req, res) => {
       feeBreakdown: breakdown,
     };
 
+    // Orchestration: run before every transaction; store job and events when tables exist
+    const orchestrationContext = {
+      customerId,
+      sendAmount: send,
+      receiveAmount: receive,
+      currency,
+      gatewayId,
+      gatewayName,
+      transferType: txType,
+      countryId,
+      recipientInfo,
+    };
+
+    console.log('[Orchestration] createRemittanceTransaction: entering orchestration phase | customerId=', customerId, '| sendAmount=', send, '| totalToDeduct=', totalToDeduct);
+
+    let canStoreOrchestration =
+      prisma.orchestrationJob &&
+      typeof prisma.orchestrationJob.create === 'function' &&
+      prisma.orchestrationEvent &&
+      typeof prisma.orchestrationEvent.create === 'function';
+
+    let job = null;
+    if (canStoreOrchestration) {
+      try {
+        job = await prisma.orchestrationJob.create({
+          data: {
+            type: 'pre_transaction',
+            status: 'running',
+            customerId,
+            context: orchestrationContext,
+          },
+        });
+        await prisma.orchestrationEvent.create({
+          data: { jobId: job.id, eventType: 'orchestration_started', payload: {} },
+        });
+      } catch (storeErr) {
+        console.warn('Orchestration store skipped (tables may be missing):', storeErr.message);
+        canStoreOrchestration = false;
+      }
+    }
+
+    const orchestration = await runOrchestrationBeforeTransaction(orchestrationContext);
+
+    console.log('[Orchestration] createRemittanceTransaction: orchestration result | allowed=', orchestration.allowed, orchestration.message ? `| message=${orchestration.message}` : '');
+
+    if (!orchestration.allowed) {
+      if (canStoreOrchestration && job) {
+        try {
+          await prisma.orchestrationEvent.create({
+            data: { jobId: job.id, eventType: 'orchestration_denied', payload: { message: orchestration.message } },
+          });
+          await prisma.orchestrationJob.update({
+            where: { id: job.id },
+            data: { status: 'failed', result: orchestration, message: orchestration.message || 'Transaction not allowed by orchestration.' },
+          });
+        } catch (e) {
+          console.warn('Orchestration update on deny skipped:', e.message);
+        }
+      }
+      return res.status(403).json({
+        success: false,
+        message: orchestration.message || 'Transaction not allowed by orchestration.',
+        code: 'ORCHESTRATION_DENIED',
+      });
+    }
+
+    if (canStoreOrchestration && job) {
+      try {
+        await prisma.orchestrationEvent.create({
+          data: { jobId: job.id, eventType: 'orchestration_completed', payload: { allowed: true } },
+        });
+        await prisma.orchestrationJob.update({
+          where: { id: job.id },
+          data: { status: 'completed', result: orchestration },
+        });
+      } catch (e) {
+        console.warn('Orchestration update on allow skipped:', e.message);
+      }
+    }
+
     const [transaction] = await prisma.$transaction([
       delegate.create({
         data: {
@@ -308,6 +391,20 @@ export const createRemittanceTransaction = async (req, res) => {
         UPDATE customers SET "availableBalance" = ${newBalance} WHERE id = ${customerId}
       `,
     ]);
+
+    if (canStoreOrchestration && job) {
+      try {
+        await prisma.orchestrationJob.update({
+          where: { id: job.id },
+          data: { remittanceTransactionId: transaction.id },
+        });
+        console.log('[Orchestration] createRemittanceTransaction: job linked to transaction | jobId=', job.id, '| transactionId=', transaction.id);
+      } catch (e) {
+        console.warn('Orchestration link to transaction skipped:', e.message);
+      }
+    }
+
+    console.log('[Orchestration] createRemittanceTransaction: completed successfully | transactionId=', transaction.id);
 
     res.status(201).json({
       success: true,
