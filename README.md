@@ -101,6 +101,11 @@ To create a new migration:
 npm run prisma:migrate
 ```
 
+**Accounting tables:** If the portal shows "Accounting tables must exist", run one of these in `Remittance_backend`:
+
+- **With migrations:** `npx prisma migrate dev --name add_accounting_tables` then `npx prisma generate`
+- **Quick setup (no migration history):** `npx prisma db push` then `npx prisma generate`
+
 To view your database in Prisma Studio:
 ```bash
 npm run prisma:studio

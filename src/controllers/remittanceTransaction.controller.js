@@ -11,6 +11,11 @@ import {
   startOfMonthUTC,
 } from '../utils/limitsHelper.js';
 import { runOrchestrationBeforeTransaction } from '../utils/orchestration.js';
+import {
+  createAccountingEntryFromTransaction,
+  updateAccountingEntriesForTransactionStatus,
+  createRefundAccountingEntries,
+} from '../utils/accounting.js';
 
 const US_STATE_NAME_TO_CODE = {
   ALABAMA: 'AL',
@@ -196,7 +201,7 @@ export const createRemittanceTransaction = async (req, res) => {
     }
 
     // Calculate fees on backend for security and accuracy (transferType filters tax/fee by applyTo: bank | wallet | both)
-    const { totalCharge, breakdown } = await calculateTransactionFee({
+    const { totalCharge, breakdown, tax: taxAmount, fee: feeAmount } = await calculateTransactionFee({
       amount: send,
       countryId,
       transferType: transferType === 'wallet' ? 'wallet' : 'bank'
@@ -404,7 +409,24 @@ export const createRemittanceTransaction = async (req, res) => {
       }
     }
 
+    // Accounting: create revenue (fee + tax) and expense entries from this transaction (so app transactions appear in portal)
+    try {
+      await createAccountingEntryFromTransaction(transaction, 'pending', {
+        totalCharge,
+        tax: typeof taxAmount === 'number' ? taxAmount : undefined,
+        fee: typeof feeAmount === 'number' ? feeAmount : undefined,
+      });
+    } catch (accErr) {
+      console.warn('Accounting entry creation skipped:', accErr.message);
+    }
+
     console.log('[Orchestration] createRemittanceTransaction: completed successfully | transactionId=', transaction.id);
+
+    const io = req.app && req.app.get && req.app.get('io');
+    if (io) {
+      io.emit('accounting:updated');
+      console.log('[Socket] Emitted accounting:updated after transaction create');
+    }
 
     res.status(201).json({
       success: true,
@@ -518,6 +540,128 @@ export const getRemittanceTransactionById = async (req, res) => {
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to get transaction',
+    });
+  }
+};
+
+/**
+ * Reject a remittance transaction (admin/portal). Sets status to Failed and refunds customer balance.
+ * Only allowed when status is Processing.
+ */
+export const rejectRemittanceTransaction = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Transaction ID is required',
+      });
+    }
+
+    const delegate = prisma.remittanceTransaction;
+    if (!delegate || typeof delegate.findUnique !== 'function') {
+      return res.status(503).json({
+        success: false,
+        message: 'RemittanceTransaction model not available.',
+      });
+    }
+
+    const transaction = await delegate.findUnique({
+      where: { id },
+      include: {
+        customer: {
+          select: { id: true, availableBalance: true },
+        },
+      },
+    });
+
+    if (!transaction) {
+      return res.status(404).json({
+        success: false,
+        message: 'Transaction not found',
+      });
+    }
+
+    const status = (transaction.status || '').toLowerCase();
+    if (status !== 'processing' && status !== 'awaiting') {
+      return res.status(400).json({
+        success: false,
+        message: `Transaction cannot be rejected. Current status: ${transaction.status}. Only Processing or Awaiting transactions can be rejected.`,
+      });
+    }
+
+    const customerId = transaction.customerId;
+    const sendAmount = Number(transaction.sendAmount ?? 0);
+    const recipientInfo = transaction.recipientInfo && typeof transaction.recipientInfo === 'object'
+      ? transaction.recipientInfo
+      : {};
+    const paymentFieldValues = transaction.paymentFieldValues && typeof transaction.paymentFieldValues === 'object'
+      ? transaction.paymentFieldValues
+      : {};
+    const fee = Number(recipientInfo.fee ?? paymentFieldValues.charge ?? paymentFieldValues.fee ?? 0);
+    const totalToRefund = sendAmount + fee;
+
+    const rows = await prisma.$queryRaw`
+      SELECT "availableBalance" FROM customers WHERE id = ${customerId}
+    `;
+    const currentBalance = rows?.[0]?.availableBalance != null ? Number(rows[0].availableBalance) : 0;
+    const newBalance = currentBalance + totalToRefund;
+
+    const txOperations = [
+      delegate.update({
+        where: { id },
+        data: { status: 'Failed', updatedAt: new Date() },
+      }),
+      prisma.$executeRaw`
+        UPDATE customers SET "availableBalance" = ${newBalance}, "updatedAt" = NOW() WHERE id = ${customerId}
+      `,
+    ];
+
+    // Mark related orchestration job(s) as failed so Orchestration Jobs table shows rejected state
+    if (prisma.orchestrationJob && typeof prisma.orchestrationJob.updateMany === 'function') {
+      txOperations.push(
+        prisma.orchestrationJob.updateMany({
+          where: { remittanceTransactionId: id },
+          data: { status: 'failed', message: 'Transaction rejected by admin.', updatedAt: new Date() },
+        })
+      );
+    }
+
+    await prisma.$transaction(txOperations);
+
+    // Accounting: mark related entries as reversed and create refund entry
+    try {
+      await updateAccountingEntriesForTransactionStatus(id, 'Failed');
+      await createRefundAccountingEntries(transaction, req.user?.id);
+    } catch (accErr) {
+      console.warn('Accounting update on reject skipped:', accErr.message);
+    }
+
+    const updated = await delegate.findUnique({
+      where: { id },
+      include: {
+        customer: {
+          select: senderCustomerSelect,
+        },
+      },
+    });
+
+    const io = req.app && req.app.get && req.app.get('io');
+    if (io) {
+      io.emit('accounting:updated');
+      console.log('[Socket] Emitted accounting:updated after transaction reject');
+    }
+
+    res.json({
+      success: true,
+      message: 'Transaction rejected. Customer balance has been refunded.',
+      data: updated,
+    });
+  } catch (error) {
+    console.error('Error rejecting remittance transaction:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to reject transaction',
     });
   }
 };

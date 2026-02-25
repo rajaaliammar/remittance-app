@@ -35,6 +35,7 @@ import taxFeeRoutes from './taxFee.routes.js';
 import addressRoutes from './address.routes.js';
 import stateDisclosureRoutes from './stateDisclosure.routes.js';
 import orchestrationRoutes from './orchestration.routes.js';
+import accountingRoutes from './accounting.routes.js';
 
 const router = express.Router();
 
@@ -77,6 +78,7 @@ router.use('/tax-fees', taxFeeRoutes);
 router.use('/address', addressRoutes);
 router.use('/state-disclosures', stateDisclosureRoutes);
 router.use('/orchestration', orchestrationRoutes);
+router.use('/accounting', accountingRoutes);
 
 // Default route
 router.get('/', (req, res) => {

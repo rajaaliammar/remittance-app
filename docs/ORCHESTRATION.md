@@ -18,6 +18,8 @@ This document describes how the **orchestration layer** is integrated in the Rem
 
 So: **every remittance transaction that debits the customer balance passes through the orchestration layer.**
 
+**Accounting:** Every successful app transaction (POST `/api/remittance-transactions`) creates at least one row in `accounting_entries` (fee, tax, expense, or a zero-amount “transaction” entry). The backend emits `accounting:updated` over Socket.io so the portal (Remittence-portal) Accounting Dashboard and Entries pages refetch and show all transactions without manual sync.
+
 ---
 
 ## 2. Database Tables (Orchestration & Related)

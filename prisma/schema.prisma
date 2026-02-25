@@ -351,8 +351,53 @@ model RemittanceTransaction {
   status              String    @default("Processing") // Processing, Completed, Failed
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
+  accountingEntries   AccountingEntry[]
 
   @@map("remittance_transactions")
+}
+
+model AccountingEntry {
+  id                      String   @id @default(cuid())
+  entryType               String   // "revenue", "expense", "fee", "commission", "refund"
+  category                String?  // e.g., "transaction_fee", "gateway_fee", "operational_cost"
+  amount                  Decimal  @db.Decimal(18, 2)
+  currency                String   @default("USD")
+  description             String?  @db.Text
+  referenceType           String?  // "remittance_transaction", "payment", "withdrawal", "manual"
+  referenceId             String?  // ID of the referenced transaction
+  remittanceTransactionId String?
+  remittanceTransaction   RemittanceTransaction? @relation(fields: [remittanceTransactionId], references: [id])
+  status                  String   @default("completed") // "pending", "completed", "reversed"
+  createdBy               String?  // BackofficeUser ID for manual entries
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  @@index([entryType])
+  @@index([category])
+  @@index([referenceType, referenceId])
+  @@index([remittanceTransactionId])
+  @@index([createdAt])
+  @@map("accounting_entries")
+}
+
+model AccountingPeriod {
+  id              String   @id @default(cuid())
+  periodType      String   // "daily", "weekly", "monthly", "yearly"
+  periodStart     DateTime
+  periodEnd       DateTime
+  totalRevenue    Decimal  @db.Decimal(18, 2) @default(0)
+  totalExpenses   Decimal  @db.Decimal(18, 2) @default(0)
+  totalFees       Decimal  @db.Decimal(18, 2) @default(0)
+  netProfit       Decimal  @db.Decimal(18, 2) @default(0)
+  currency        String   @default("USD")
+  status          String   @default("open") // "open", "closed", "locked"
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([periodType, periodStart, periodEnd])
+  @@index([periodType])
+  @@index([periodStart, periodEnd])
+  @@map("accounting_periods")
 }
 
 model Agent {
