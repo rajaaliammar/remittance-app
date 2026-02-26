@@ -328,11 +328,28 @@ model Customer {
   kycRequestedMessage  String?   @db.Text // Optional message from admin
   kycRequestedFields   Json?     // Requested fields: [{ fieldName, inputType, validationType }]
   fcmToken        String?   // FCM device token for push notifications
+  lastDeviceInfo  Json?     // Last reported device: { deviceType, brand, model, os, osVersion, userAgent, appVersion }
+  lastLocation    Json?     // Last reported location: { latitude, longitude, city, country, region, address }
+  lastSeenAt      DateTime? // When the app last reported device/location
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   remittanceTransactions RemittanceTransaction[]
+  notifications   CustomerNotification[]
 
   @@map("customers")
+}
+
+model CustomerNotification {
+  id         String    @id @default(cuid())
+  customerId String
+  customer   Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  title      String
+  body       String    @db.Text
+  imageUrl   String?   @db.Text // Optional image URL for rich notification
+  sentAt     DateTime  @default(now())
+  readAt     DateTime? // When user viewed it in the app (optional)
+
+  @@map("customer_notifications")
 }
 
 model RemittanceTransaction {

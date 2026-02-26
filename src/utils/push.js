@@ -41,6 +41,8 @@ function getMessaging() {
 
 /**
  * Send a push notification to an FCM token.
+ * Uses both notification and data payloads so the message is delivered and shown by the system
+ * even when the app is closed; the user sees it in the notification tray and when they open the app.
  * @param {string} fcmToken - Device FCM token
  * @param {{ title: string, body?: string, data?: object }} options - title, body, and optional data payload
  * @returns {Promise<boolean>} - true if sent, false if skipped/failed
@@ -55,18 +57,30 @@ function stringifyData(obj) {
   return out;
 }
 
-export async function sendPushToToken(fcmToken, { title, body = '', data = {} }) {
+export async function sendPushToToken(fcmToken, { title, body = '', image, data = {} }) {
   const m = getMessaging();
   if (!m || !fcmToken) return false;
   try {
-    const dataPayload = stringifyData({ ...data, title: String(title), body: String(body) });
+    const dataPayload = stringifyData({
+      ...data,
+      title: String(title),
+      body: String(body),
+      ...(image && { image: String(image) }),
+    });
+    const notification = { title, body };
+    if (image && typeof image === 'string' && image.trim()) {
+      notification.image = image.trim();
+    }
     const message = {
-      notification: { title, body },
+      notification,
       data: dataPayload,
-      android: { data: dataPayload },
+      android: {
+        data: dataPayload,
+        ...(notification.image && { notification: { title, body, image: notification.image } }),
+      },
       apns: {
         payload: { aps: { sound: 'default' } },
-        fcmOptions: {},
+        fcmOptions: notification.image ? { image: notification.image } : {},
       },
       token: fcmToken,
     };
@@ -86,10 +100,10 @@ export async function sendPushToToken(fcmToken, { title, body = '', data = {} })
 /**
  * Send a push notification to a customer by ID (uses stored fcmToken).
  * @param {string} customerId - Customer id
- * @param {{ title: string, body?: string, data?: object }} options - title, body, and optional data (e.g. type, screen)
+ * @param {{ title: string, body?: string, image?: string, data?: object }} options - title, body, optional image URL, and optional data
  * @returns {Promise<boolean>} - true if sent, false if skipped/failed
  */
-export async function sendPushToCustomer(customerId, { title, body = '', data = {} }) {
+export async function sendPushToCustomer(customerId, { title, body = '', image, data = {} }) {
   if (!customerId) return false;
   try {
     const customer = await prisma.customer.findUnique({
@@ -97,7 +111,7 @@ export async function sendPushToCustomer(customerId, { title, body = '', data = 
       select: { fcmToken: true },
     });
     if (!customer?.fcmToken) return false;
-    return sendPushToToken(customer.fcmToken, { title, body, data });
+    return sendPushToToken(customer.fcmToken, { title, body, image, data });
   } catch (e) {
     console.warn('[PUSH] sendPushToCustomer failed:', e?.message || e);
     return false;

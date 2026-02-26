@@ -5,7 +5,7 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
-import { getWritableKycUploadDir } from '../utils/uploadPath.js';
+import { getWritableKycUploadDir, getNotificationUploadDir } from '../utils/uploadPath.js';
 import {
   getCustomerLimits,
   getSentInPeriod,
@@ -14,6 +14,7 @@ import {
   startOfWeekUTC,
   startOfMonthUTC,
 } from '../utils/limitsHelper.js';
+import { sendPushToCustomer } from '../utils/push.js';
 
 // Fallback dir that is always available (tmpdir) so uploads never fail with EACCES
 const TMPDIR_KYC = path.join(os.tmpdir(), 'remittance-kyc-uploads', 'kyc');
@@ -59,6 +60,32 @@ export const upload = multer({
       cb(new Error('Only images (JPEG, JPG, PNG) and PDF files are allowed'));
     }
   }
+});
+
+// Multer for notification image upload (portal admin)
+const notificationStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    try {
+      cb(null, getNotificationUploadDir());
+    } catch (e) {
+      cb(e);
+    }
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+    cb(null, 'notification-' + Date.now() + '-' + Math.round(Math.random() * 1E9) + ext);
+  },
+});
+export const uploadNotificationImageMulter = multer({
+  storage: notificationStorage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (req, file, cb) => {
+    const allowed = /jpeg|jpg|png|gif|webp/;
+    const ext = allowed.test(path.extname(file.originalname).toLowerCase());
+    const mime = allowed.test(file.mimetype);
+    if (ext && mime) return cb(null, true);
+    cb(new Error('Only images (JPEG, PNG, GIF, WebP) are allowed'));
+  },
 });
 
 // Static OTP for development/testing
@@ -139,6 +166,12 @@ const ensureCustomerExtendedProfileColumns = async () => {
     ADD COLUMN IF NOT EXISTS "occupation" TEXT,
     ADD COLUMN IF NOT EXISTS "sourceOfFund" TEXT,
     ADD COLUMN IF NOT EXISTS "residentCountry" TEXT;
+  `);
+  await prisma.$executeRawUnsafe(`
+    ALTER TABLE "customers"
+    ADD COLUMN IF NOT EXISTS "lastDeviceInfo" JSONB,
+    ADD COLUMN IF NOT EXISTS "lastLocation" JSONB,
+    ADD COLUMN IF NOT EXISTS "lastSeenAt" TIMESTAMPTZ;
   `);
 };
 
@@ -1073,6 +1106,20 @@ export const completeProfile = async (req, res) => {
   }
 };
 
+// Portal admin: upload notification image (returns URL for use in send-notification)
+export const uploadNotificationImage = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No image file uploaded.' });
+    }
+    const url = '/uploads/notifications/' + req.file.filename;
+    res.json({ success: true, url });
+  } catch (error) {
+    console.error('Error uploading notification image:', error);
+    res.status(500).json({ success: false, message: error?.message || 'Upload failed.' });
+  }
+};
+
 // Upload KYC Document (Single file)
 export const uploadKycDocument = async (req, res) => {
   try {
@@ -1940,6 +1987,32 @@ export const updatePushToken = async (req, res) => {
   }
 };
 
+// Report device info and optional location (authenticated customer - mobile app)
+export const reportDeviceInfo = async (req, res) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+    const { deviceInfo, location } = req.body || {};
+    const updateData = { lastSeenAt: new Date() };
+    if (deviceInfo != null && typeof deviceInfo === 'object') {
+      updateData.lastDeviceInfo = deviceInfo;
+    }
+    if (location != null && typeof location === 'object') {
+      updateData.lastLocation = location;
+    }
+    await prisma.customer.update({
+      where: { id: customerId },
+      data: updateData,
+    });
+    return res.json({ success: true, message: 'Device info updated' });
+  } catch (error) {
+    console.error('Error reporting device info:', error);
+    res.status(500).json({ success: false, message: error.message || 'Failed to update device info' });
+  }
+};
+
 // Get all customers
 export const getAllCustomers = async (req, res) => {
   try {
@@ -2023,6 +2096,10 @@ export const getCustomerById = async (req, res) => {
           "city",
           "kycData",
           "kycRequestedAt",
+          "fcmToken",
+          "lastDeviceInfo",
+          "lastLocation",
+          "lastSeenAt",
           "createdAt",
           "updatedAt"
         FROM "customers"
@@ -2040,6 +2117,120 @@ export const getCustomerById = async (req, res) => {
     res.json({ success: true, data: customer });
   } catch (error) {
     console.error('Error fetching customer:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// Get customer device/location info by email (for backoffice user profile when same person has customer account)
+export const getCustomerDeviceInfoByEmail = async (req, res) => {
+  try {
+    const email = req.query?.email;
+    if (!email || typeof email !== 'string') {
+      return res.status(400).json({ success: false, message: 'Email query is required' });
+    }
+    const customer = await prisma.customer.findFirst({
+      where: { email: email.trim() },
+      select: { lastDeviceInfo: true, lastLocation: true, lastSeenAt: true },
+    });
+    if (!customer) {
+      return res.json({ success: true, data: {} });
+    }
+    res.json({ success: true, data: customer });
+  } catch (error) {
+    console.error('Error fetching customer device info by email:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// Admin: send push notification to customer's app (with optional image). Saves to CustomerNotification so it appears in app list.
+export const sendNotificationToCustomer = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, body, image } = req.body || {};
+    if (!id) {
+      return res.status(400).json({ success: false, message: 'Customer ID is required' });
+    }
+    const customer = await prisma.customer.findUnique({
+      where: { id },
+      select: { id: true, fcmToken: true, firstName: true, lastName: true },
+    });
+    if (!customer) {
+      return res.status(404).json({ success: false, message: 'Customer not found' });
+    }
+    const notificationTitle = typeof title === 'string' && title.trim() ? title.trim() : 'BrandPay';
+    const notificationBody = typeof body === 'string' ? body.trim() : '';
+    const imageUrl = typeof image === 'string' && image.trim() ? image.trim() : null;
+
+    // Save to CustomerNotification so it appears in the app's notifications list (use string id for consistency)
+    const customerIdStr = String(id);
+    const created = await prisma.customerNotification.create({
+      data: {
+        customerId: customerIdStr,
+        title: notificationTitle,
+        body: notificationBody,
+        imageUrl,
+      },
+    });
+
+    // Emit via Socket.IO so the app can show the notification in real time (customer must have joined room user:${id})
+    try {
+      const io = req.app?.get?.('io');
+      if (io) {
+        const payload = {
+          id: created.id,
+          title: notificationTitle,
+          body: notificationBody,
+          imageUrl: imageUrl || null,
+          sentAt: created.sentAt?.toISOString?.() || new Date().toISOString(),
+        };
+        io.to(`user:${customerIdStr}`).emit('admin:notification', payload);
+      }
+    } catch (e) {
+      console.warn('[Notification] Socket emit failed:', e?.message || e);
+    }
+
+    if (!customer.fcmToken) {
+      return res.json({
+        success: true,
+        message: 'Notification saved. It will appear in the app when the customer opens it. They have not registered a device yet.',
+      });
+    }
+    const sent = await sendPushToCustomer(id, {
+      title: notificationTitle,
+      body: notificationBody,
+      image: imageUrl || undefined,
+    });
+    if (!sent) {
+      return res.status(502).json({
+        success: false,
+        message: 'Failed to deliver notification (device may be offline or token invalid). Notification is saved and will show in the app.',
+      });
+    }
+    res.json({ success: true, message: 'Notification sent to customer\'s app.' });
+  } catch (error) {
+    console.error('Error sending notification to customer:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// Get list of notifications for the authenticated customer (for in-app notifications screen)
+export const getCustomerNotifications = async (req, res) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+    const id = String(customerId);
+    const limit = Math.min(parseInt(req.query?.limit, 10) || 50, 100);
+    const notifications = await prisma.customerNotification.findMany({
+      where: { customerId: id },
+      orderBy: { sentAt: 'desc' },
+      take: limit,
+      select: { id: true, title: true, body: true, imageUrl: true, sentAt: true, readAt: true },
+    });
+    res.json({ success: true, data: notifications });
+  } catch (error) {
+    console.error('Error fetching customer notifications:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 };

@@ -17,6 +17,8 @@ import {
   getTierAndLimits,
   getConsumedLimits,
   updatePushToken,
+  reportDeviceInfo,
+  getCustomerNotifications,
   upload,
   uploadKYC
 } from '../controllers/customer.controller.js';
@@ -98,6 +100,15 @@ router.get('/limits/consumed', authenticateCustomer, getConsumedLimits);
 // Push notification token (requires authentication) - mobile app
 router.put('/push-token', authenticateCustomer, updatePushToken);
 router.put('/push-token/', authenticateCustomer, updatePushToken);
+
+// Device info and location (requires authentication) - mobile app reports device/location
+router.post('/device-info', authenticateCustomer, reportDeviceInfo);
+router.post('/device-info/', authenticateCustomer, reportDeviceInfo);
+router.put('/device-info', authenticateCustomer, reportDeviceInfo);
+router.put('/device-info/', authenticateCustomer, reportDeviceInfo);
+
+// Notifications list (requires authentication) - for in-app notifications screen
+router.get('/notifications', authenticateCustomer, getCustomerNotifications);
 
 // Charge calculation (public or authenticated)
 router.post('/calculate-charge', calculateCharge);

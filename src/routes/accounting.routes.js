@@ -2,6 +2,7 @@ import express from 'express';
 import {
   getAccountingSummary,
   getAccountingEntries,
+  getDebitCreditSummary,
   createAccountingEntry,
   getAccountingEntryById,
   updateAccountingEntry,
@@ -21,6 +22,7 @@ router.use(authenticateToken);
 
 router.get('/summary', getAccountingSummary);
 router.get('/entries', getAccountingEntries);
+router.get('/debit-credit', getDebitCreditSummary);
 router.post('/entries', createAccountingEntry);
 router.get('/entries/:id', getAccountingEntryById);
 router.put('/entries/:id', updateAccountingEntry);

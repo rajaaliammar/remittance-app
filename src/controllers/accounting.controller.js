@@ -112,7 +112,7 @@ export const getAccountingSummary = async (req, res) => {
         expensesByCurrency[cur] = (expensesByCurrency[cur] || 0) + amt;
         totalExpenses += curNorm === currency ? amt : 0;
       }
-      if (groupBy && groupBy !== 'none' && PERIOD_TYPES.includes(groupBy) && !isPrincipalOnly) {
+      if (groupBy && groupBy !== 'none' && PERIOD_TYPES.includes(groupBy)) {
         const key = getPeriodKey(d, groupBy);
         if (!byPeriod[key]) byPeriod[key] = { revenue: 0, expenses: 0, fees: 0 };
         if (e.entryType === 'revenue' || e.entryType === 'fee' || e.entryType === 'commission') {
@@ -224,17 +224,47 @@ export const getAccountingEntries = async (req, res) => {
         skip,
         include: {
           remittanceTransaction: {
-            select: { id: true, sendAmount: true, receiveAmount: true, status: true, transferType: true, gatewayName: true },
+            select: {
+              id: true,
+              sendAmount: true,
+              receiveAmount: true,
+              status: true,
+              transferType: true,
+              gatewayName: true,
+              type: true,
+              customer: {
+                select: { id: true, email: true, firstName: true, lastName: true },
+              },
+            },
           },
         },
       }),
       prisma.accountingEntry.count({ where }),
     ]);
 
-    const data = entries.map((e) => ({
-      ...e,
-      amount: toNumber(e.amount),
-    }));
+    const data = entries.map((e) => {
+      const amount = toNumber(e.amount);
+      let debitUser = null;
+      let creditUser = null;
+      const txn = e.remittanceTransaction;
+      if (txn && txn.customer) {
+        const customerDisplay = [txn.customer.firstName, txn.customer.lastName].filter(Boolean).join(' ') || txn.customer.email || txn.customer.id;
+        const customerInfo = { id: txn.customer.id, email: txn.customer.email, displayName: customerDisplay };
+        if (txn.type === 'Sent') {
+          debitUser = customerInfo;
+          creditUser = { id: null, email: null, displayName: 'Recipient' };
+        } else if (txn.type === 'Received') {
+          creditUser = customerInfo;
+          debitUser = { id: null, email: null, displayName: 'Sender' };
+        }
+      }
+      return {
+        ...e,
+        amount,
+        debitUser,
+        creditUser,
+      };
+    });
     res.json({ success: true, data, total });
   } catch (error) {
     console.error('getAccountingEntries error:', error);
@@ -242,6 +272,105 @@ export const getAccountingEntries = async (req, res) => {
       return res.json({ success: true, data: [], total: 0 });
     }
     res.status(500).json({ success: false, message: error.message || 'Failed to list entries' });
+  }
+};
+
+/**
+ * GET /api/accounting/debit-credit
+ * Total debit and credit values plus per-user breakdown. Clicking Debit/Credit on dashboard can show this.
+ */
+export const getDebitCreditSummary = async (req, res) => {
+  try {
+    if (!hasAccountingModel()) {
+      return res.json({
+        success: true,
+        data: {
+          totalDebit: 0,
+          totalCredit: 0,
+          currency: req.query.currency || 'USD',
+          byDebitedUser: [],
+          byCreditedUser: [],
+        },
+      });
+    }
+    const { startDate, endDate, currency: queryCurrency = 'USD' } = req.query;
+    const currency = normCurrency(queryCurrency);
+    const dateFilter = buildDateFilter(startDate, endDate);
+    const where = { status: { not: 'reversed' } };
+    if (dateFilter) where.createdAt = dateFilter;
+
+    const entries = await prisma.accountingEntry.findMany({
+      where,
+      select: {
+        amount: true,
+        currency: true,
+        remittanceTransaction: {
+          select: {
+            type: true,
+            customer: {
+              select: { id: true, email: true, firstName: true, lastName: true },
+            },
+          },
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+      take: 50000,
+    });
+
+    let totalDebit = 0;
+    let totalCredit = 0;
+    const debitByUser = new Map();
+    const creditByUser = new Map();
+
+    for (const e of entries) {
+      const amt = toNumber(e.amount);
+      const cur = (e.currency || 'USD').toUpperCase();
+      const curNorm = normCurrency(cur);
+      const amountInReportCurrency = curNorm === currency ? amt : amt; // keep same for now; could convert
+      const txn = e.remittanceTransaction;
+      let debitUser = null;
+      let creditUser = null;
+      if (txn && txn.customer) {
+        const customerDisplay = [txn.customer.firstName, txn.customer.lastName].filter(Boolean).join(' ') || txn.customer.email || txn.customer.id;
+        debitUser = txn.type === 'Sent' ? { id: txn.customer.id, displayName: customerDisplay } : { id: 'sender', displayName: 'Sender' };
+        creditUser = txn.type === 'Sent' ? { id: 'recipient', displayName: 'Recipient' } : { id: txn.customer.id, displayName: customerDisplay };
+      }
+      if (debitUser) {
+        totalDebit += amountInReportCurrency;
+        const key = debitUser.id || debitUser.displayName;
+        if (!debitByUser.has(key)) debitByUser.set(key, { userId: debitUser.id, displayName: debitUser.displayName, total: 0 });
+        debitByUser.get(key).total += amountInReportCurrency;
+      }
+      if (creditUser) {
+        totalCredit += amountInReportCurrency;
+        const key = creditUser.id || creditUser.displayName;
+        if (!creditByUser.has(key)) creditByUser.set(key, { userId: creditUser.id, displayName: creditUser.displayName, total: 0 });
+        creditByUser.get(key).total += amountInReportCurrency;
+      }
+    }
+
+    const byDebitedUser = Array.from(debitByUser.values()).map((o) => ({ ...o, total: Math.round(o.total * 100) / 100 }));
+    const byCreditedUser = Array.from(creditByUser.values()).map((o) => ({ ...o, total: Math.round(o.total * 100) / 100 }));
+
+    res.json({
+      success: true,
+      data: {
+        totalDebit: Math.round(totalDebit * 100) / 100,
+        totalCredit: Math.round(totalCredit * 100) / 100,
+        currency,
+        byDebitedUser,
+        byCreditedUser,
+      },
+    });
+  } catch (error) {
+    console.error('getDebitCreditSummary error:', error);
+    if (error.code === 'P2021' || error.meta?.code === 'P2021') {
+      return res.json({
+        success: true,
+        data: { totalDebit: 0, totalCredit: 0, currency: req.query.currency || 'USD', byDebitedUser: [], byCreditedUser: [] },
+      });
+    }
+    res.status(500).json({ success: false, message: error.message || 'Failed to get debit/credit summary' });
   }
 };
 

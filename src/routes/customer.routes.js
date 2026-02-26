@@ -5,7 +5,9 @@ import {
   sendOTP,
   verifyOTP,
   getAllCustomers, 
-  getCustomerById, 
+  getCustomerById,
+  getCustomerDeviceInfoByEmail,
+  sendNotificationToCustomer,
   updateCustomer,
   approveCustomer, 
   rejectCustomer, 
@@ -23,7 +25,9 @@ router.post('/verify-otp', verifyOTP);
 
 // Protected routes (require authentication)
 router.get('/', authenticateToken, getAllCustomers);
+router.get('/device-info-by-email', authenticateToken, getCustomerDeviceInfoByEmail);
 router.get('/:id', authenticateToken, getCustomerById);
+router.post('/:id/send-notification', authenticateToken, sendNotificationToCustomer);
 router.patch('/:id', authenticateToken, updateCustomer);
 router.post('/approve/:id', authenticateToken, approveCustomer);
 router.post('/reject/:id', authenticateToken, rejectCustomer);

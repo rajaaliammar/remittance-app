@@ -36,6 +36,7 @@ import addressRoutes from './address.routes.js';
 import stateDisclosureRoutes from './stateDisclosure.routes.js';
 import orchestrationRoutes from './orchestration.routes.js';
 import accountingRoutes from './accounting.routes.js';
+import uploadRoutes from './upload.routes.js';
 
 const router = express.Router();
 
@@ -79,6 +80,7 @@ router.use('/address', addressRoutes);
 router.use('/state-disclosures', stateDisclosureRoutes);
 router.use('/orchestration', orchestrationRoutes);
 router.use('/accounting', accountingRoutes);
+router.use('/upload', uploadRoutes);
 
 // Default route
 router.get('/', (req, res) => {

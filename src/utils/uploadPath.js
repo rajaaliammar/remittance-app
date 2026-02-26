@@ -132,3 +132,15 @@ export function getUploadsBase() {
   if (!resolvedUploadsBase) resolveUploadDirs();
   return resolvedUploadsBase || path.join(os.tmpdir(), 'remittance-kyc-uploads');
 }
+
+/** Directory for notification images (admin uploads from portal). Served at /uploads/notifications/ */
+export function getNotificationUploadDir() {
+  const base = getUploadsBase();
+  const dir = path.join(base, 'notifications');
+  if (!ensureWritableDir(dir)) {
+    try {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o755 });
+    } catch (_) {}
+  }
+  return path.resolve(dir);
+}
