@@ -1970,13 +1970,28 @@ export const updatePushToken = async (req, res) => {
         message: 'Token is required',
       });
     }
-    await prisma.customer.update({
+    
+    const trimmedToken = token.trim();
+    console.log('[PUSH] 📥 Received FCM token update request from customer:', customerId);
+    console.log('[PUSH] Token preview:', trimmedToken.substring(0, 30) + '...');
+    
+    const updated = await prisma.customer.update({
       where: { id: customerId },
-      data: { fcmToken: token.trim() },
+      data: { fcmToken: trimmedToken },
+      select: { id: true, email: true, firstName: true, lastName: true, fcmToken: true },
     });
+    
+    console.log('[PUSH] ✅ FCM token saved successfully for customer:', {
+      id: updated.id,
+      email: updated.email,
+      name: `${updated.firstName || ''} ${updated.lastName || ''}`.trim() || 'N/A',
+      tokenSaved: !!updated.fcmToken
+    });
+    
     return res.json({
       success: true,
       message: 'Push token updated',
+      customerId: updated.id,
     });
   } catch (error) {
     console.error('Error updating push token:', error);
@@ -2150,19 +2165,78 @@ export const sendNotificationToCustomer = async (req, res) => {
     if (!id) {
       return res.status(400).json({ success: false, message: 'Customer ID is required' });
     }
-    const customer = await prisma.customer.findUnique({
+    // First try to find customer by ID
+    let customer = await prisma.customer.findUnique({
       where: { id },
-      select: { id: true, fcmToken: true, firstName: true, lastName: true },
+      select: { id: true, fcmToken: true, firstName: true, lastName: true, email: true, phone: true },
     });
+    
     if (!customer) {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
+    
+    console.log('[Notification] 🔍 Customer found:', {
+      id: customer.id,
+      email: customer.email,
+      phone: customer.phone,
+      name: `${customer.firstName || ''} ${customer.lastName || ''}`.trim() || customer.email,
+      hasFcmToken: !!customer.fcmToken,
+      fcmTokenPreview: customer.fcmToken ? customer.fcmToken.substring(0, 30) + '...' : 'NONE',
+      fcmTokenLength: customer.fcmToken ? customer.fcmToken.length : 0
+    });
+    
+    // If no token, try to find if there's another customer record with same email/phone that has a token
+    // This handles cases where user might have multiple accounts or token was saved to different record
+    if (!customer.fcmToken) {
+      console.log('[Notification] 🔍 No token found. Searching for other records with same email/phone...');
+      
+      const orConditions = [];
+      if (customer.email) orConditions.push({ email: customer.email });
+      if (customer.phone) orConditions.push({ phone: customer.phone });
+      
+      if (orConditions.length > 0) {
+        const customersWithToken = await prisma.customer.findMany({
+          where: {
+            OR: orConditions,
+            fcmToken: { not: null },
+            NOT: { id: customer.id }, // Exclude current customer
+          },
+          select: { id: true, fcmToken: true, email: true, phone: true },
+          take: 1,
+        });
+        
+        if (customersWithToken.length > 0) {
+          const customerWithToken = customersWithToken[0];
+          console.log('[Notification] ✅ Found token in another customer record:', {
+            originalId: customer.id,
+            tokenRecordId: customerWithToken.id,
+            email: customerWithToken.email,
+            phone: customerWithToken.phone,
+          });
+          // Use the token from the other record
+          customer.fcmToken = customerWithToken.fcmToken;
+        } else {
+          console.log('[Notification] ❌ No token found in any related customer records');
+        }
+      }
+    }
+    
     const notificationTitle = typeof title === 'string' && title.trim() ? title.trim() : 'BrandPay';
     const notificationBody = typeof body === 'string' ? body.trim() : '';
     const imageUrl = typeof image === 'string' && image.trim() ? image.trim() : null;
 
     // Save to CustomerNotification so it appears in the app's notifications list (use string id for consistency)
     const customerIdStr = String(id);
+    
+    // Check if customerNotification model is available (Prisma client must be regenerated)
+    if (!prisma.customerNotification) {
+      console.error('Prisma client missing customerNotification model. Run: npx prisma generate');
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Database model not available. Please regenerate Prisma client: npx prisma generate' 
+      });
+    }
+    
     const created = await prisma.customerNotification.create({
       data: {
         customerId: customerIdStr,
@@ -2171,6 +2245,8 @@ export const sendNotificationToCustomer = async (req, res) => {
         imageUrl,
       },
     });
+    
+    console.log('[Notification] ✅ Notification saved to database:', created.id);
 
     // Emit via Socket.IO so the app can show the notification in real time (customer must have joined room user:${id})
     try {
@@ -2184,29 +2260,73 @@ export const sendNotificationToCustomer = async (req, res) => {
           sentAt: created.sentAt?.toISOString?.() || new Date().toISOString(),
         };
         io.to(`user:${customerIdStr}`).emit('admin:notification', payload);
+        console.log('[Notification] ✅ Socket.IO notification emitted to room:', `user:${customerIdStr}`);
+      } else {
+        console.warn('[Notification] ⚠️ Socket.IO not available');
       }
     } catch (e) {
       console.warn('[Notification] Socket emit failed:', e?.message || e);
     }
 
+    // Try to send push notification if token exists
     if (!customer.fcmToken) {
+      console.warn('[Notification] ⚠️ Customer has no FCM token. Notification saved but not pushed.');
+      console.warn('[Notification] Customer needs to:');
+      console.warn('[Notification]   1. Open the app');
+      console.warn('[Notification]   2. Log in');
+      console.warn('[Notification]   3. Token will be saved automatically');
       return res.json({
         success: true,
-        message: 'Notification saved. It will appear in the app when the customer opens it. They have not registered a device yet.',
+        message: 'Notification saved. It will appear in the app when the customer opens it. They have not registered a device yet. Please ask the customer to open the app and log in to receive push notifications.',
+        saved: true,
+        pushed: false,
+        reason: 'No FCM token registered'
       });
     }
-    const sent = await sendPushToCustomer(id, {
+    
+    console.log('[Notification] 📤 Attempting to send push notification...');
+    const pushResult = await sendPushToCustomer(id, {
       title: notificationTitle,
       body: notificationBody,
       image: imageUrl || undefined,
     });
-    if (!sent) {
+    
+    if (!pushResult || !pushResult.success) {
+      const errorCode = pushResult?.code || 'UNKNOWN';
+      const errorMessage = pushResult?.error || 'Failed to deliver notification';
+      const errorDetails = pushResult?.details || '';
+      
+      console.error('[Notification] ❌ Failed to send push notification');
+      console.error('[Notification] Error code:', errorCode);
+      console.error('[Notification] Error message:', errorMessage);
+      if (errorDetails) {
+        console.error('[Notification] Error details:', errorDetails);
+      }
+      
+      // If token is invalid, suggest clearing it
+      if (errorCode === 'messaging/registration-token-not-registered' || 
+          errorCode === 'messaging/invalid-registration-token') {
+        console.warn('[Notification] 💡 Consider clearing the invalid FCM token from customer record');
+      }
+      
       return res.status(502).json({
         success: false,
-        message: 'Failed to deliver notification (device may be offline or token invalid). Notification is saved and will show in the app.',
+        message: errorMessage + ' Notification is saved and will show in the app.',
+        saved: true,
+        pushed: false,
+        reason: errorMessage,
+        errorCode: errorCode,
+        errorDetails: errorDetails
       });
     }
-    res.json({ success: true, message: 'Notification sent to customer\'s app.' });
+    
+    console.log('[Notification] ✅ Push notification sent successfully');
+    res.json({ 
+      success: true, 
+      message: 'Notification sent to customer\'s app.',
+      saved: true,
+      pushed: true
+    });
   } catch (error) {
     console.error('Error sending notification to customer:', error);
     res.status(500).json({ success: false, error: error.message });

@@ -113,16 +113,58 @@ async function ensureRegistrationSettingsTable() {
   }
 }
 
+// Ensure customer_notifications table exists
+async function ensureCustomerNotificationsTable() {
+  try {
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "customer_notifications" (
+        "id" TEXT NOT NULL,
+        "customerId" TEXT NOT NULL,
+        "title" TEXT NOT NULL,
+        "body" TEXT NOT NULL,
+        "imageUrl" TEXT,
+        "sentAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "readAt" TIMESTAMP(3),
+        CONSTRAINT "customer_notifications_pkey" PRIMARY KEY ("id")
+      )
+    `);
+    
+    // Add foreign key constraint if it doesn't exist
+    try {
+      await prisma.$executeRawUnsafe(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint 
+            WHERE conname = 'customer_notifications_customerId_fkey'
+          ) THEN
+            ALTER TABLE "customer_notifications" 
+            ADD CONSTRAINT "customer_notifications_customerId_fkey" 
+            FOREIGN KEY ("customerId") 
+            REFERENCES "customers"("id") 
+            ON DELETE CASCADE;
+          END IF;
+        END $$;
+      `);
+    } catch (fkErr) {
+      console.warn('ensureCustomerNotificationsTable (foreign key):', fkErr.message);
+    }
+  } catch (e) {
+    console.warn('ensureCustomerNotificationsTable:', e.message);
+  }
+}
+
 // Handle Prisma Client connection (columns are ensured on first connect)
 prisma.$connect()
   .then(() => {
     console.log('✅ Prisma Client connected to database');
     return ensureLevelAndBalanceLimitColumns();
   })
+  .then(() => ensureCustomerNotificationsTable())
   .catch((error) => {
     console.error('❌ Failed to connect to database:', error);
   });
 
 export default prisma;
-export { ensureLevelAndBalanceLimitColumns, ensureLevelsTable, ensureRegistrationSettingsTable };
+export { ensureLevelAndBalanceLimitColumns, ensureLevelsTable, ensureRegistrationSettingsTable, ensureCustomerNotificationsTable };
 

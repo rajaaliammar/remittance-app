@@ -32,3 +32,7 @@ prisma/migrations/
 dist/
 build/
 
+# Firebase
+firebase-service-account.json
+*-firebase-adminsdk-*.json
+firebase-adminsdk-*.json
