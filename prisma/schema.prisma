@@ -366,6 +366,9 @@ model RemittanceTransaction {
   recipientInfo       Json?     // { accountNumber, accountHolderName, serviceProvider, sourceOfFund, sendingPurpose }
   paymentFieldValues  Json?     // Gateway custom field values
   status              String    @default("Processing") // Processing, Completed, Failed
+  // Accounting 2 enhancements
+  exchangeRate        Decimal?  @db.Decimal(18, 6) // Rate at transaction time
+  exchangeRateSource  String?   // Source of exchange rate
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
   accountingEntries   AccountingEntry[]
@@ -386,6 +389,17 @@ model AccountingEntry {
   remittanceTransaction   RemittanceTransaction? @relation(fields: [remittanceTransactionId], references: [id])
   status                  String   @default("completed") // "pending", "completed", "reversed"
   createdBy               String?  // BackofficeUser ID for manual entries
+  // Accounting 2 enhancements
+  exchangeRate            Decimal? @db.Decimal(18, 6) // Exchange rate used at transaction time
+  exchangeRateGainLoss    Decimal? @db.Decimal(18, 2) // Calculated gain/loss from rate changes
+  agentId                 String?  // Link to agent for commission tracking
+  agentCommission         Decimal? @db.Decimal(18, 2) // Agent's share
+  companyCommission       Decimal? @db.Decimal(18, 2) // Company's share
+  walletBalanceBefore     Decimal? @db.Decimal(18, 2) // Wallet balance before transaction
+  walletBalanceAfter      Decimal? @db.Decimal(18, 2) // Wallet balance after transaction
+  accountId               String?  // Link to chart of accounts
+  account                 AccountingAccount? @relation(fields: [accountId], references: [id])
+  auditLog                Json?    // Store audit trail data
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 
@@ -394,6 +408,8 @@ model AccountingEntry {
   @@index([referenceType, referenceId])
   @@index([remittanceTransactionId])
   @@index([createdAt])
+  @@index([agentId])
+  @@index([accountId])
   @@map("accounting_entries")
 }
 
@@ -417,6 +433,85 @@ model AccountingPeriod {
   @@map("accounting_periods")
 }
 
+// Accounting 2: Chart of Accounts
+model AccountingAccount {
+  id          String   @id @default(cuid())
+  accountCode String   @unique // e.g., "1000", "2000"
+  accountName String
+  accountType String   // "asset", "liability", "equity", "revenue", "expense"
+  parentId    String?  // For hierarchical accounts
+  parent      AccountingAccount? @relation("AccountHierarchy", fields: [parentId], references: [id])
+  children    AccountingAccount[] @relation("AccountHierarchy")
+  status      String   @default("active") // "active", "inactive"
+  entries     AccountingEntry[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([accountType])
+  @@index([accountCode])
+  @@map("accounting_accounts")
+}
+
+// Accounting 2: Audit Log
+model AuditLog {
+  id              String   @id @default(cuid())
+  entityType      String   // "accounting_entry", "transaction", "reconciliation"
+  entityId        String
+  action          String   // "create", "update", "delete", "reconcile"
+  userId          String?  // BackofficeUser or Customer ID
+  userType        String?  // "admin", "customer", "system"
+  changes         Json?    // Before/after values
+  ipAddress       String?
+  userAgent       String?
+  description     String?  @db.Text
+  createdAt       DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// Accounting 2: Reconciliation Records
+model ReconciliationRecord {
+  id                String   @id @default(cuid())
+  reconciliationType String  // "bank", "payment_partner", "wallet"
+  externalSource    String   // Bank name, partner name, wallet provider
+  externalReference String?  // External transaction ID
+  internalReference String?  // Internal transaction/entry ID
+  amount            Decimal  @db.Decimal(18, 2)
+  currency          String
+  status            String   @default("pending") // "pending", "matched", "unmatched", "discrepancy"
+  discrepancyAmount Decimal? @db.Decimal(18, 2)
+  notes             String?  @db.Text
+  reconciledAt      DateTime?
+  reconciledBy      String? // BackofficeUser ID
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([reconciliationType, status])
+  @@index([externalReference])
+  @@index([internalReference])
+  @@map("reconciliation_records")
+}
+
+// Accounting 2: Wallet Balance Snapshots
+model WalletBalanceSnapshot {
+  id              String   @id @default(cuid())
+  customerId      String?
+  agentId         String?
+  balance         Decimal  @db.Decimal(18, 2)
+  currency        String
+  snapshotType    String   // "daily", "transaction", "reconciliation"
+  referenceId     String?  // Transaction or reconciliation ID
+  notes           String?   @db.Text
+  createdAt       DateTime @default(now())
+
+  @@index([customerId, createdAt])
+  @@index([agentId, createdAt])
+  @@map("wallet_balance_snapshots")
+}
+
 model Agent {
   id              String    @id @default(cuid())
   email           String    @unique
@@ -431,6 +526,9 @@ model Agent {
   approvedBy      String?
   level           String?   // User level (e.g. 1, 2, Bronze, Silver)
   balanceLimit    String?   // Balance limit for the user
+  // Accounting 2 enhancements
+  commissionRate  Decimal?  @db.Decimal(5, 2) // Commission percentage (e.g., 2.5 for 2.5%)
+  totalCommissionEarned Decimal? @db.Decimal(18, 2) // Total commissions earned
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 

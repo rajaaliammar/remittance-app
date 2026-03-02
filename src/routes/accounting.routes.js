@@ -13,6 +13,11 @@ import {
   getReconciliationReport,
   exportAccountingData,
   syncFromTransactions,
+  getGeneralLedger,
+  getSubsidiaryLedger,
+  getCashFlowStatement,
+  getBalanceSheet,
+  backfillAccountingEntries,
 } from '../controllers/accounting.controller.js';
 import { authenticateToken } from '../middleware/auth.js';
 
@@ -22,6 +27,10 @@ router.use(authenticateToken);
 
 router.get('/summary', getAccountingSummary);
 router.get('/entries', getAccountingEntries);
+router.get('/general-ledger', getGeneralLedger);
+router.get('/subsidiary-ledger', getSubsidiaryLedger);
+router.get('/cash-flow', getCashFlowStatement);
+router.get('/balance-sheet', getBalanceSheet);
 router.get('/debit-credit', getDebitCreditSummary);
 router.post('/entries', createAccountingEntry);
 router.get('/entries/:id', getAccountingEntryById);
@@ -33,5 +42,6 @@ router.get('/profit-loss', getProfitLossReport);
 router.get('/reconcile', getReconciliationReport);
 router.get('/export', exportAccountingData);
 router.post('/sync-from-transactions', syncFromTransactions);
+router.post('/backfill-accounts', backfillAccountingEntries);
 
 export default router;
