@@ -10,6 +10,8 @@ const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(path.join(__dirname, '..', '..'));
 const projectKycDir = path.resolve(projectRoot, 'uploads', 'kyc');
 const tmpdirKycDir = path.resolve(os.tmpdir(), 'remittance-kyc-uploads', 'kyc');
+const projectAgentKycDir = path.resolve(projectRoot, 'uploads', 'agentKyc');
+const tmpdirAgentKycDir = path.resolve(os.tmpdir(), 'remittance-kyc-uploads', 'agentKyc');
 
 let resolvedKycDir = null;
 let resolvedUploadsBase = null;
@@ -143,4 +145,80 @@ export function getNotificationUploadDir() {
     } catch (_) {}
   }
   return path.resolve(dir);
+}
+
+/**
+ * Returns agent KYC upload directory (absolute path).
+ * Always uses project folder to ensure files are accessible via static serving.
+ * Unlike customer KYC, agentKyc should always be in the project folder.
+ */
+export function getAgentKycUploadDir() {
+  // 1) Explicit env (absolute path)
+  if (process.env.AGENT_KYC_UPLOAD_DIR) {
+    const agentKycDir = path.resolve(process.env.AGENT_KYC_UPLOAD_DIR);
+    if (ensureWritableDir(agentKycDir)) {
+      return agentKycDir;
+    }
+  }
+
+  // 2) Always use project uploads/agentKyc (required for static file serving)
+  // Try to create it if it doesn't exist
+  try {
+    if (!fs.existsSync(projectAgentKycDir)) {
+      fs.mkdirSync(projectAgentKycDir, { recursive: true, mode: 0o755 });
+    }
+    if (ensureWritableDir(projectAgentKycDir)) {
+      return projectAgentKycDir;
+    }
+  } catch (err) {
+    console.error('[Upload] Failed to create/access project agentKyc dir:', err.message);
+  }
+
+  // If project folder fails, try tmpdir as last resort (but log warning)
+  console.warn('[Upload] WARNING: Project agentKyc folder not writable, using tmpdir. Files may not be accessible via static serving.');
+  try {
+    if (!fs.existsSync(tmpdirAgentKycDir)) {
+      fs.mkdirSync(tmpdirAgentKycDir, { recursive: true, mode: 0o755 });
+    }
+  } catch (_) {}
+  return tmpdirAgentKycDir;
+}
+
+/**
+ * Returns a writable agent KYC upload directory (absolute path).
+ * Never throws for permission errors – always falls back to tmpdir.
+ */
+export function getWritableAgentKycUploadDir() {
+  let current = getAgentKycUploadDir();
+
+  // Ensure path is absolute
+  if (!path.isAbsolute(current)) {
+    console.warn('[Upload] Warning: getAgentKycUploadDir returned relative path:', current);
+    current = path.resolve(process.cwd(), current);
+  }
+
+  try {
+    if (!fs.existsSync(current)) {
+      console.log('[Upload] Creating agentKyc dir:', current);
+      fs.mkdirSync(current, { recursive: true, mode: 0o755 });
+    }
+    fs.accessSync(current, fs.constants.W_OK);
+    return current;
+  } catch (err) {
+    console.error(`[Upload] Failed to access/create ${current}:`, err.message);
+
+    // Switch to tmpdir and retry
+    try {
+      if (!fs.existsSync(tmpdirAgentKycDir)) {
+        fs.mkdirSync(tmpdirAgentKycDir, { recursive: true, mode: 0o755 });
+      }
+      fs.accessSync(tmpdirAgentKycDir, fs.constants.W_OK);
+    } catch (_) {
+      try {
+        fs.mkdirSync(tmpdirAgentKycDir, { recursive: true, mode: 0o777 });
+      } catch (__) { }
+    }
+    console.warn('[Upload] Using tmpdir fallback for agentKyc:', tmpdirAgentKycDir);
+    return tmpdirAgentKycDir;
+  }
 }

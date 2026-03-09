@@ -520,15 +520,50 @@ model Agent {
   lastName        String?
   phone           String?
   address         String?
-  password        String    // Hashed password
-  status          String    @default("pending") // pending, approved, rejected
+  password        String?   // Hashed password (optional for invited agents)
+  status          String    @default("pending") // pending, profile_completed, approved, rejected
   approvedAt      DateTime?
   approvedBy      String?
   level           String?   // User level (e.g. 1, 2, Bronze, Silver)
   balanceLimit    String?   // Balance limit for the user
   // Accounting 2 enhancements
   commissionRate  Decimal?  @db.Decimal(5, 2) // Commission percentage (e.g., 2.5 for 2.5%)
+  dollarRate      Decimal?  @db.Decimal(18, 4) // Dollar rate per USD set by agent (e.g., 57.00 or 57.5000)
   totalCommissionEarned Decimal? @db.Decimal(18, 2) // Total commissions earned
+  // Invite fields
+  inviteToken     String?   @unique
+  inviteTokenExp  DateTime?
+  invitedBy       String?   // Admin who invited
+  invitedAt       DateTime?
+  profileCompletedAt DateTime?
+  // Additional personal details
+  businessName    String?
+  country         String?
+  city            String?
+  gender          String?   // male, female, other
+  dateOfBirth     DateTime?
+  // Business details
+  businessType    String?   // Shop, forex, agent, mobile_shop
+  businessLicenseNumber String?
+  taxIdentification String? // TIN
+  businessAddress String?
+  // Document uploads
+  idType          String?   // national_id, passport
+  nationalIdFront String?   // URL to uploaded file
+  nationalIdBack  String?   // URL to uploaded file (only for national ID)
+  passportPhoto   String?   // URL to uploaded file (only for passport)
+  businessLicenseFile String? // URL to uploaded file
+  selfiePhoto     String?   // URL to uploaded file
+  shopPhoto       String?   // URL to uploaded file
+  // Document status fields (for KYC verification)
+  nationalIdFrontStatus String? @default("pending") // pending, approved, rejected
+  nationalIdBackStatus  String? @default("pending")
+  passportPhotoStatus   String? @default("pending")
+  businessLicenseFileStatus String? @default("pending")
+  selfiePhotoStatus     String? @default("pending")
+  shopPhotoStatus       String? @default("pending")
+  // Temporary storage for onboarding data until migration (will be moved to individual fields)
+  onboardingData        Json?   // Store onboarding data as JSON temporarily
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 

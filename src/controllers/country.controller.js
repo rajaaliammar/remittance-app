@@ -159,6 +159,58 @@ export const getCountrySuggestions = async (req, res) => {
   }
 };
 
+// Get all countries from REST Countries API (third-party)
+export const getAllCountriesFromAPI = async (req, res) => {
+  try {
+    const response = await fetch('https://restcountries.com/v3.1/all?fields=name,cca2,cca3,idd,flags,currencies');
+    const countries = await response.json();
+
+    if (!Array.isArray(countries)) {
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Failed to fetch countries from API' 
+      });
+    }
+
+    const formattedCountries = countries
+      .filter(country => {
+        // Only include countries that have calling codes
+        const callingCodes = country.idd || {};
+        return callingCodes.root || (callingCodes.suffixes && callingCodes.suffixes.length > 0);
+      })
+      .map(country => {
+        // Get calling codes
+        const callingCodes = country.idd || {};
+        const root = callingCodes.root || '';
+        const suffixes = callingCodes.suffixes || [];
+        const phoneCode = root && suffixes.length > 0 ? `${root}${suffixes[0]}` : root || '';
+        
+        // Get currency information
+        const currencies = country.currencies || {};
+        const currencyCode = Object.keys(currencies)[0] || '';
+        const currency = currencies[currencyCode] || {};
+
+        return {
+          name: country.name?.common || '',
+          iso2: country.cca2 || '',
+          iso3: country.cca3 || '',
+          phoneCode: phoneCode ? `+${phoneCode}` : '',
+          flag: country.flags?.png || country.flags?.svg || '',
+          currencyCode: currencyCode,
+          currencyName: currency.name || '',
+          currencySymbol: currency.symbol || '',
+        };
+      })
+      .filter(country => country.phoneCode && country.name) // Only include countries with phone codes
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    res.json({ success: true, data: formattedCountries });
+  } catch (error) {
+    console.error('Error fetching all countries from API:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
 // Get country details from API
 export const getCountryDetails = async (req, res) => {
   try {

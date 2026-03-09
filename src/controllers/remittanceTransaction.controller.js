@@ -16,6 +16,11 @@ import {
   updateAccountingEntriesForTransactionStatus,
   createRefundAccountingEntries,
 } from '../utils/accounting.js';
+import {
+  createRemittanceInitiateJournal,
+  createRemittanceCompleteJournal,
+  createRemittanceRefundJournal,
+} from '../utils/ledgerService.js';
 
 const US_STATE_NAME_TO_CODE = {
   ALABAMA: 'AL',
@@ -420,6 +425,38 @@ export const createRemittanceTransaction = async (req, res) => {
       console.warn('Accounting entry creation skipped:', accErr.message);
     }
 
+    // Ledger Service: Phase 1 - Remittance Initiate
+    try {
+      // transaction.currency is the receive currency (destination), send is always USD
+      const sendCurrency = 'USD'; // Base currency for sending (always USD)
+      const receiveCurrency = currency || transaction.currency || 'USD'; // Destination currency (user selected: ETB, GBP, etc.)
+      const exchangeRate = receive > 0 && send > 0 ? (receive / send).toFixed(6) : null;
+      
+      console.log('[Ledger Service] Phase 1 (initiate) - Preparing journal entry:');
+      console.log(`  Transaction ID: ${transaction.id}`);
+      console.log(`  Job ID: ${job?.id || 'N/A'}`);
+      console.log(`  Actor ID (Customer): ${customerId}`);
+      console.log(`  Send Amount: ${send} ${sendCurrency}`);
+      console.log(`  Fee Amount: ${feeAmount || totalCharge}`);
+      console.log(`  Receive Amount: ${receive} ${receiveCurrency}`);
+      console.log(`  Exchange Rate: ${exchangeRate || 'N/A'}`);
+      
+      await createRemittanceInitiateJournal({
+        transactionId: transaction.id,
+        jobId: job?.id,
+        actorId: customerId,
+        sendAmount: send,
+        feeAmount: feeAmount || totalCharge,
+        currency: sendCurrency, // Always USD for send
+        receiveAmount: receive,
+        receiveCurrency: receiveCurrency, // Destination currency (ETB, GBP, etc. - user selected)
+        exchangeRate,
+      });
+    } catch (ledgerErr) {
+      console.warn('[Ledger Service] Phase 1 (initiate) journal creation failed:', ledgerErr.message);
+      // Don't fail the transaction if ledger call fails
+    }
+
     console.log('[Orchestration] createRemittanceTransaction: completed successfully | transactionId=', transaction.id);
 
     const io = req.app && req.app.get && req.app.get('io');
@@ -545,6 +582,157 @@ export const getRemittanceTransactionById = async (req, res) => {
 };
 
 /**
+ * Update a remittance transaction (admin/portal)
+ * Can update status and other fields. When status changes to Completed, Phase 2 ledger entry is created.
+ */
+export const updateRemittanceTransaction = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Transaction ID is required',
+      });
+    }
+
+    const delegate = prisma.remittanceTransaction;
+    if (!delegate || typeof delegate.findUnique !== 'function') {
+      return res.status(503).json({
+        success: false,
+        message: 'RemittanceTransaction model not available.',
+      });
+    }
+
+    const transaction = await delegate.findUnique({
+      where: { id },
+      include: {
+        customer: {
+          select: { id: true },
+        },
+      },
+    });
+
+    if (!transaction) {
+      return res.status(404).json({
+        success: false,
+        message: 'Transaction not found',
+      });
+    }
+
+    const { status, ...otherUpdates } = req.body || {};
+    const oldStatus = (transaction.status || '').toLowerCase();
+    const newStatus = status ? String(status).toLowerCase() : oldStatus;
+    const statusChanged = oldStatus !== newStatus;
+
+    const updateData = {
+      ...otherUpdates,
+      ...(statusChanged && { status: String(status) }),
+      ...(statusChanged && { updatedAt: new Date() }),
+    };
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No fields to update',
+      });
+    }
+
+    const updated = await delegate.update({
+      where: { id },
+      data: updateData,
+      include: {
+        customer: {
+          select: senderCustomerSelect,
+        },
+      },
+    });
+
+    // If status changed to Completed, update accounting and create Phase 2 ledger entry
+    if (statusChanged && newStatus === 'completed') {
+      try {
+        await updateAccountingEntriesForTransactionStatus(id, 'Completed');
+      } catch (accErr) {
+        console.warn('Accounting update on complete skipped:', accErr.message);
+      }
+
+      // Ledger Service: Phase 2 - Remittance Complete
+      try {
+        // Get orchestration job ID if available
+        let jobId = null;
+        if (prisma.orchestrationJob && typeof prisma.orchestrationJob.findFirst === 'function') {
+          const job = await prisma.orchestrationJob.findFirst({
+            where: { remittanceTransactionId: id },
+            select: { id: true },
+          });
+          jobId = job?.id;
+        }
+
+        const sendAmount = Number(transaction.sendAmount ?? 0);
+        const receiveAmount = Number(transaction.receiveAmount ?? 0);
+        const receiveCurrency = transaction.currency || 'USD';
+        
+        // Extract exchange rate information from transaction
+        // If exchangeRate is stored, use it; otherwise calculate from amounts
+        const exchangeRate = transaction.exchangeRate 
+          ? Number(transaction.exchangeRate) 
+          : (sendAmount > 0 && receiveAmount > 0 ? receiveAmount / sendAmount : null);
+        
+        // For Phase 2, we need costRate and offeredRate
+        // If not available, use exchangeRate for both (or extract from paymentFieldValues)
+        const paymentFieldValues = transaction.paymentFieldValues && typeof transaction.paymentFieldValues === 'object'
+          ? transaction.paymentFieldValues
+          : {};
+        const costRate = paymentFieldValues.costRate || paymentFieldValues.cost_rate || exchangeRate;
+        const offeredRate = paymentFieldValues.offeredRate || paymentFieldValues.offered_rate || exchangeRate || costRate;
+        const payoutPartnerId = paymentFieldValues.payoutPartnerId || paymentFieldValues.payout_partner_id || 'payout_partner_id';
+
+        await createRemittanceCompleteJournal({
+          transactionId: id,
+          jobId,
+          actorId: req.user?.id || 'backoffice_user',
+          sendAmount,
+          receiveAmount,
+          receiveCurrency,
+          costRate: costRate ? Number(costRate) : null,
+          offeredRate: offeredRate ? Number(offeredRate) : null,
+          payoutPartnerId,
+        });
+      } catch (ledgerErr) {
+        console.warn('[Ledger Service] Phase 2 (complete) journal creation failed:', ledgerErr.message);
+        // Don't fail the update if ledger call fails
+      }
+    }
+
+    // If status changed to Failed/Refunded, update accounting
+    if (statusChanged && ['failed', 'refunded', 'canceled'].includes(newStatus)) {
+      try {
+        await updateAccountingEntriesForTransactionStatus(id, String(status));
+      } catch (accErr) {
+        console.warn('Accounting update on status change skipped:', accErr.message);
+      }
+    }
+
+    const io = req.app && req.app.get && req.app.get('io');
+    if (io) {
+      io.emit('accounting:updated');
+      console.log('[Socket] Emitted accounting:updated after transaction update');
+    }
+
+    res.json({
+      success: true,
+      message: 'Transaction updated successfully',
+      data: updated,
+    });
+  } catch (error) {
+    console.error('Error updating remittance transaction:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to update transaction',
+    });
+  }
+};
+
+/**
  * Reject a remittance transaction (admin/portal). Sets status to Failed and refunds customer balance.
  * Only allowed when status is Processing.
  */
@@ -635,6 +823,32 @@ export const rejectRemittanceTransaction = async (req, res) => {
       await createRefundAccountingEntries(transaction, req.user?.id);
     } catch (accErr) {
       console.warn('Accounting update on reject skipped:', accErr.message);
+    }
+
+    // Ledger Service: Phase 3 - Remittance Refund
+    try {
+      // Get orchestration job ID if available
+      let jobId = null;
+      if (prisma.orchestrationJob && typeof prisma.orchestrationJob.findFirst === 'function') {
+        const job = await prisma.orchestrationJob.findFirst({
+          where: { remittanceTransactionId: id },
+          select: { id: true },
+        });
+        jobId = job?.id;
+      }
+
+      await createRemittanceRefundJournal({
+        transactionId: id,
+        jobId,
+        actorId: req.user?.id || 'backoffice_user',
+        sendAmount,
+        feeAmount: fee,
+        customerId,
+        currency: transaction.currency || 'USD',
+      });
+    } catch (ledgerErr) {
+      console.warn('[Ledger Service] Phase 3 (refund) journal creation failed:', ledgerErr.message);
+      // Don't fail the refund if ledger call fails
     }
 
     const updated = await delegate.findUnique({
