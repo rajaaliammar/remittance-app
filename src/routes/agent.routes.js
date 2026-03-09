@@ -3,6 +3,7 @@ import {
   signup, 
   login, 
   getAllAgents, 
+  getAgentsForCashPickup,
   getAgentById, 
   updateAgent,
   approveAgent, 
@@ -14,6 +15,7 @@ import {
   updateAgentDocumentStatus
 } from '../controllers/agent.controller.js';
 import { authenticateToken } from '../middleware/auth.js';
+import { authenticateCustomer } from '../middleware/customerAuth.js';
 
 const router = express.Router();
 
@@ -23,7 +25,10 @@ router.post('/login', login);
 router.get('/invite/:token', getInvitationDetails);
 router.post('/onboarding/:token', completeOnboarding);
 
-// Protected routes (require authentication)
+// Mobile app: get approved agents for cash pickup (uses customer JWT from remittance app)
+router.get('/for-cash-pickup', authenticateCustomer, getAgentsForCashPickup);
+
+// Protected routes (require backoffice authentication)
 router.get('/', authenticateToken, getAllAgents);
 router.get('/:id', authenticateToken, getAgentById);
 router.patch('/:id', authenticateToken, updateAgent);

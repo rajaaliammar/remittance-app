@@ -223,6 +223,61 @@ export const getAllAgents = async (req, res) => {
   }
 };
 
+// Get approved agents for cash pickup (mobile app) - optionally filter by country
+export const getAgentsForCashPickup = async (req, res) => {
+  try {
+    const { countryId } = req.query;
+    const where = { status: 'approved' };
+
+    if (countryId) {
+      const country = await prisma.country.findUnique({
+        where: { id: countryId },
+        select: { name: true, iso2: true }
+      });
+      if (country) {
+        // Show agents that match this country OR have no country set (so they appear for any selection)
+        where.OR = [
+          { country: { equals: country.name, mode: 'insensitive' } },
+          { country: { equals: country.iso2, mode: 'insensitive' } },
+          { country: null },
+          { country: '' }
+        ];
+      }
+    }
+
+    const agents = await prisma.agent.findMany({
+      where,
+      select: {
+        id: true,
+        businessName: true,
+        firstName: true,
+        lastName: true,
+        dollarRate: true,
+        country: true,
+        city: true,
+        phone: true,
+        address: true
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    const data = agents.map((a) => ({
+      id: a.id,
+      name: a.businessName?.trim() || [a.firstName, a.lastName].filter(Boolean).join(' ').trim() || a.email || 'Agent',
+      dollarRate: a.dollarRate != null ? Number(a.dollarRate) : null,
+      country: a.country,
+      city: a.city,
+      phone: a.phone,
+      address: a.address
+    }));
+
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error fetching agents for cash pickup:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
 // Get agent by ID
 export const getAgentById = async (req, res) => {
   try {
@@ -545,8 +600,13 @@ export const deleteAgent = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Agent not found' });
     }
 
-    await prisma.agent.delete({
-      where: { id }
+    await prisma.$transaction(async (tx) => {
+      // Null out agent references to avoid foreign key errors (AccountingEntry, WalletBalanceSnapshot)
+      await tx.accountingEntry.updateMany({ where: { agentId: id }, data: { agentId: null } });
+      await tx.walletBalanceSnapshot.updateMany({ where: { agentId: id }, data: { agentId: null } });
+      await tx.agent.delete({
+        where: { id }
+      });
     });
 
     res.json({

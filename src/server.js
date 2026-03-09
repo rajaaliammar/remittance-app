@@ -7,7 +7,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import prisma, { ensureLevelAndBalanceLimitColumns, ensureLevelsTable, ensureRegistrationSettingsTable } from './utils/prisma.js';
-import { getUploadsBase, getWritableKycUploadDir } from './utils/uploadPath.js';
+import { getUploadsBase, getWritableKycUploadDir, getWritableAgentKycUploadDir } from './utils/uploadPath.js';
 import apiRoutes from './routes/index.js';
 import { addSessionRequest } from './store/sessionRequestStore.js';
 import { releaseChat } from './store/activeChatStore.js';
@@ -66,7 +66,9 @@ app.use(morgan('dev'));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Serve static files (KYC uploads) – same base as uploadPath so /uploads/kyc/* works
+// Serve agent KYC uploads from the same dir we write to (so images load after onboarding)
+app.use('/uploads/agentKyc', express.static(getWritableAgentKycUploadDir()));
+// Serve other static files (customer KYC, notifications, etc.)
 app.use('/uploads', express.static(getUploadsBase()));
 
 // Health check route
