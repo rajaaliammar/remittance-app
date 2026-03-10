@@ -5,18 +5,60 @@
  * across three phases: initiate, complete, and refund.
  */
 
-const LEDGER_BASE_URL = process.env.LEDGER_BASE_URL || 'http://demo3.appliedline.com';
-const LEDGER_TOKEN_REMITTANCE_INITIATE = process.env.LEDGER_TOKEN_REMITTANCE_INITIATE || 'LEDGER_TOKEN_REMITTANCE';
-const LEDGER_TOKEN_REMITTANCE_COMPLETE = process.env.LEDGER_TOKEN_REMITTANCE_COMPLETE || 'LEDGER_TOKEN_REMITTANCE';
-const LEDGER_TOKEN_REMITTANCE_REFUND = process.env.LEDGER_TOKEN_REMITTANCE_REFUND || 'LEDGER_TOKEN_REMITTANCE';
+// Normalize base URL - remove trailing slashes and /v1 if present
+const getLedgerBaseUrl = () => {
+  const base = (process.env.LEDGER_BASE_URL || 'http://demo3.appliedline.com').trim();
+  // Remove trailing slash
+  let normalized = base.replace(/\/+$/, '');
+  // Remove /v1 if it's at the end (to avoid duplication with endpoint)
+  // Handle multiple /v1 patterns
+  while (normalized.endsWith('/v1')) {
+    normalized = normalized.replace(/\/v1$/, '');
+  }
+  // Also remove /v1/v1 if somehow present in the middle
+  normalized = normalized.replace(/\/v1\/v1/g, '/v1');
+  return normalized;
+};
+
+const LEDGER_BASE_URL = getLedgerBaseUrl();
+const LEDGER_TOKEN_REMITTANCE_INITIATE = process.env.LEDGER_TOKEN_REMITTANCE_INITIATE || '';
+const LEDGER_TOKEN_REMITTANCE_COMPLETE = process.env.LEDGER_TOKEN_REMITTANCE_COMPLETE || '';
+const LEDGER_TOKEN_REMITTANCE_REFUND = process.env.LEDGER_TOKEN_REMITTANCE_REFUND || '';
 
 /**
  * Make a request to the ledger API
  */
 async function callLedgerAPI(endpoint, token, payload) {
   try {
-    const url = `${LEDGER_BASE_URL}${endpoint}`;
+    // Normalize endpoint - ensure it starts with / and remove any duplicate /v1
+    let normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
     
+    // Remove any leading /v1/v1 patterns (safety check)
+    // IMPORTANT: The server at demo3.appliedline.com automatically adds /v1 prefix
+    // So we use /ledger/journals (not /v1/ledger/journals) to avoid /v1/v1 duplication
+    normalizedEndpoint = normalizedEndpoint.replace(/^\/v1\/v1/, '/v1');
+    // Also remove /v1 if it's at the start (since server adds it automatically)
+    if (normalizedEndpoint.startsWith('/v1/ledger')) {
+      normalizedEndpoint = normalizedEndpoint.replace(/^\/v1/, '');
+    }
+    
+    // Construct final URL
+    let url = `${LEDGER_BASE_URL}${normalizedEndpoint}`;
+    
+    // Final safety check - fix duplicate /v1 if detected
+    if (url.includes('/v1/v1')) {
+      console.error(`[Ledger Service] WARNING: Detected duplicate /v1 in URL: ${url}`);
+      console.error(`[Ledger Service] Base URL: ${LEDGER_BASE_URL}, Endpoint: ${normalizedEndpoint}`);
+      // Fix the duplicate by replacing /v1/v1 with /v1
+      url = url.replace(/\/v1\/v1/g, '/v1');
+      console.error(`[Ledger Service] Fixed URL: ${url}`);
+    }
+    
+    // Log URL construction details
+    console.log(`[Ledger Service] URL Construction:`);
+    console.log(`  Base URL: ${LEDGER_BASE_URL}`);
+    console.log(`  Endpoint: ${normalizedEndpoint}`);
+    console.log(`  Final URL: ${url}`);
     console.log(`[Ledger Service] Making API call to: ${url}`);
     console.log(`[Ledger Service] Using token: ${token ? `${token.substring(0, 10)}...` : 'NO TOKEN'}`);
     
@@ -116,7 +158,8 @@ export async function createRemittanceInitiateJournal(params) {
   console.log(JSON.stringify(payload, null, 2));
 
   try {
-    const result = await callLedgerAPI('/v1/ledger/journals', LEDGER_TOKEN_REMITTANCE_INITIATE, payload);
+    // Note: Server automatically adds /v1 prefix, so we use /ledger/journals (not /v1/ledger/journals)
+    const result = await callLedgerAPI('/ledger/journals', LEDGER_TOKEN_REMITTANCE_INITIATE, payload);
     
     // Console log the response received
     console.log('[Ledger Service] Phase 1 (initiate) - Response received:');
@@ -215,12 +258,23 @@ export async function createRemittanceCompleteJournal(params) {
     narration: `Remittance settled – ${sendAmount} USD converted, ${etbDisbursed} ${receiveCurrency || 'ETB'} disbursed${fxGain > 0 ? `, ${fxGain} ${receiveCurrency || 'ETB'} FX gain` : ''}`,
   };
 
+  // Console log the payload being sent
+  console.log('[Ledger Service] Phase 2 (complete) - Payload being sent:');
+  console.log(JSON.stringify(payload, null, 2));
+
   try {
-    const result = await callLedgerAPI('/v1/ledger/journals', LEDGER_TOKEN_REMITTANCE_COMPLETE, payload);
+    // Note: Server automatically adds /v1 prefix, so we use /ledger/journals (not /v1/ledger/journals)
+    const result = await callLedgerAPI('/ledger/journals', LEDGER_TOKEN_REMITTANCE_COMPLETE, payload);
+    
+    // Console log the response received
+    console.log('[Ledger Service] Phase 2 (complete) - Response received:');
+    console.log(JSON.stringify(result, null, 2));
     console.log(`[Ledger Service] Phase 2 (complete) journal created for transaction ${transactionId}`);
+    
     return result;
   } catch (error) {
     console.error(`[Ledger Service] Failed to create Phase 2 journal for ${transactionId}:`, error.message);
+    console.error('[Ledger Service] Phase 2 (complete) - Error details:', error);
     return { success: false, error: error.message };
   }
 }
@@ -286,12 +340,23 @@ export async function createRemittanceRefundJournal(params) {
     narration: `Remittance refunded – ${totalRefund} ${currency} returned to ${customerId}`,
   };
 
+  // Console log the payload being sent
+  console.log('[Ledger Service] Phase 3 (refund) - Payload being sent:');
+  console.log(JSON.stringify(payload, null, 2));
+
   try {
-    const result = await callLedgerAPI('/v1/ledger/journals', LEDGER_TOKEN_REMITTANCE_REFUND, payload);
+    // Note: Server automatically adds /v1 prefix, so we use /ledger/journals (not /v1/ledger/journals)
+    const result = await callLedgerAPI('/ledger/journals', LEDGER_TOKEN_REMITTANCE_REFUND, payload);
+    
+    // Console log the response received
+    console.log('[Ledger Service] Phase 3 (refund) - Response received:');
+    console.log(JSON.stringify(result, null, 2));
     console.log(`[Ledger Service] Phase 3 (refund) journal created for transaction ${transactionId}`);
+    
     return result;
   } catch (error) {
     console.error(`[Ledger Service] Failed to create Phase 3 journal for ${transactionId}:`, error.message);
+    console.error('[Ledger Service] Phase 3 (refund) - Error details:', error);
     return { success: false, error: error.message };
   }
 }
