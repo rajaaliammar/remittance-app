@@ -3,26 +3,44 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-// Create transporter (465 = implicit SSL; 587 = STARTTLS → secure must be false)
-const smtpPort = parseInt(process.env.SMTP_PORT || '587', 10);
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || 'smtp.gmail.com',
-  port: smtpPort,
-  secure: smtpPort === 465,
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-});
+const smtpDisabled = process.env.SMTP_DISABLED === 'true';
+const hasSmtpCreds = Boolean(
+  String(process.env.SMTP_USER || '').trim() && String(process.env.SMTP_PASS || '').trim()
+);
 
-// Verify transporter configuration
-transporter.verify((error, success) => {
-  if (error) {
-    console.error('Email transporter error:', error);
-  } else {
-    console.log('✅ Email server is ready to send messages');
-  }
-});
+// Real SMTP vs. jsonTransport (local dev when SMTP is off or unset). 465 = implicit SSL; 587 = STARTTLS.
+const smtpPort = parseInt(process.env.SMTP_PORT || '587', 10);
+const transporter =
+  smtpDisabled || !hasSmtpCreds
+    ? nodemailer.createTransport({ jsonTransport: true })
+    : nodemailer.createTransport({
+        host: process.env.SMTP_HOST || 'smtp.gmail.com',
+        port: smtpPort,
+        secure: smtpPort === 465,
+        auth: {
+          user: process.env.SMTP_USER,
+          pass: process.env.SMTP_PASS,
+        },
+      });
+
+if (smtpDisabled || !hasSmtpCreds) {
+  console.warn(
+    'Email: SMTP disabled or missing SMTP_USER/SMTP_PASS; mail is not sent (set SMTP_DISABLED=false and valid creds to use real SMTP).'
+  );
+} else {
+  transporter.verify((error) => {
+    if (error) {
+      console.error('Email transporter error:', error);
+      if (error.code === 'EAUTH') {
+        console.error(
+          'SMTP login failed. For Microsoft 365: use the mailbox sign-in password or an app password if MFA is on, ensure "Authenticated SMTP" is enabled for the user in Exchange admin, and that SMTP AUTH is allowed for the tenant/mailbox.'
+        );
+      }
+    } else {
+      console.log('✅ Email server is ready to send messages');
+    }
+  });
+}
 
 export const sendInvitationEmail = async (email, inviteToken, adminDetails = {}) => {
   const inviteUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/backoffice-user/complete-profile?token=${inviteToken}`;

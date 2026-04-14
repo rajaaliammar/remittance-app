@@ -443,19 +443,20 @@ export const login = async (req, res) => {
   try {
     const { username, password } = req.body;
 
-    if (!username || !password) {
+    const trimmedUsername = typeof username === 'string' ? username.trim() : '';
+    if (!trimmedUsername || !password) {
       return res.status(400).json({ 
         success: false, 
         message: 'Username and password are required' 
       });
     }
 
-    // Try to find user by username or email
+    // Case-insensitive match (emails like admIn@brandpay.com must still resolve)
     const user = await prisma.backofficeUser.findFirst({
       where: {
         OR: [
-          { username },
-          { email: username }
+          { username: { equals: trimmedUsername, mode: 'insensitive' } },
+          { email: { equals: trimmedUsername, mode: 'insensitive' } }
         ]
       }
     });
