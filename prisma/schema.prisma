@@ -118,6 +118,8 @@ model CountryService {
   fields                 Json?    // Store custom fields as JSON array
   remittanceBankId       String?
   remittanceBank         RemittanceBank? @relation(fields: [remittanceBankId], references: [id])
+  /// Optional image path (e.g. /uploads/country-services/...) shown in mobile app for this country service
+  displayImage           String?  @db.Text
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
 

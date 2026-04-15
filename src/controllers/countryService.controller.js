@@ -108,6 +108,7 @@ export const createService = async (req, res) => {
       serviceTypeMode,
       fields,
       remittanceBankId,
+      displayImage,
     } = req.body;
 
     if (!countryId || !name || !serviceType) {
@@ -149,6 +150,7 @@ export const createService = async (req, res) => {
         serviceTypeMode: serviceTypeMode || 'Automatic',
         fields: fields || null,
         remittanceBankId: remittanceBankId || null,
+        displayImage: displayImage && String(displayImage).trim() ? String(displayImage).trim() : null,
       },
       include: {
         country: {
@@ -194,6 +196,7 @@ export const updateService = async (req, res) => {
       serviceTypeMode,
       fields,
       remittanceBankId,
+      displayImage,
     } = req.body;
 
     const service = await prisma.countryService.findUnique({
@@ -227,6 +230,10 @@ export const updateService = async (req, res) => {
     if (serviceTypeMode !== undefined) updateData.serviceTypeMode = serviceTypeMode;
     if (fields !== undefined) updateData.fields = fields;
     if (remittanceBankId !== undefined) updateData.remittanceBankId = remittanceBankId || null;
+    if (displayImage !== undefined) {
+      updateData.displayImage =
+        displayImage && String(displayImage).trim() ? String(displayImage).trim() : null;
+    }
 
     const updatedService = await prisma.countryService.update({
       where: { id },
@@ -258,15 +265,28 @@ export const updateService = async (req, res) => {
     });
   } catch (error) {
     console.error('Error updating service:', error);
-    
+
     if (error.code === 'P2025') {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Service not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Service not found',
       });
     }
 
-    res.status(500).json({ success: false, error: error.message });
+    // Common after schema change: DB missing `displayImage` — run `npx prisma migrate deploy` or `db push`
+    const hint =
+      String(error.message || '').includes('displayImage') ||
+      String(error.message || '').includes('Unknown arg') ||
+      String(error.meta?.column_name || '') === 'displayImage'
+        ? 'Database may be missing column country_services.displayImage. Run: npx prisma migrate deploy (from Remittance_backend)'
+        : undefined;
+
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      ...(hint && { hint }),
+      ...(error.code && { code: error.code }),
+    });
   }
 };
 

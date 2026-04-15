@@ -5,7 +5,7 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
-import { getWritableKycUploadDir, getNotificationUploadDir } from '../utils/uploadPath.js';
+import { getWritableKycUploadDir, getNotificationUploadDir, getCountryServiceUploadDir } from '../utils/uploadPath.js';
 import {
   getCustomerLimits,
   getSentInPeriod,
@@ -78,6 +78,32 @@ const notificationStorage = multer.diskStorage({
 });
 export const uploadNotificationImageMulter = multer({
   storage: notificationStorage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (req, file, cb) => {
+    const allowed = /jpeg|jpg|png|gif|webp/;
+    const ext = allowed.test(path.extname(file.originalname).toLowerCase());
+    const mime = allowed.test(file.mimetype);
+    if (ext && mime) return cb(null, true);
+    cb(new Error('Only images (JPEG, PNG, GIF, WebP) are allowed'));
+  },
+});
+
+// Portal admin: country service display image (mobile app bank/service cards)
+const countryServiceImageStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    try {
+      cb(null, getCountryServiceUploadDir());
+    } catch (e) {
+      cb(e);
+    }
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+    cb(null, 'country-service-' + Date.now() + '-' + Math.round(Math.random() * 1e9) + ext);
+  },
+});
+export const uploadCountryServiceImageMulter = multer({
+  storage: countryServiceImageStorage,
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
   fileFilter: (req, file, cb) => {
     const allowed = /jpeg|jpg|png|gif|webp/;
@@ -1116,6 +1142,20 @@ export const uploadNotificationImage = async (req, res) => {
     res.json({ success: true, url });
   } catch (error) {
     console.error('Error uploading notification image:', error);
+    res.status(500).json({ success: false, message: error?.message || 'Upload failed.' });
+  }
+};
+
+// Portal admin: upload country service display image (store returned path on CountryService.displayImage)
+export const uploadCountryServiceImage = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No image file uploaded.' });
+    }
+    const url = '/uploads/country-services/' + req.file.filename;
+    res.json({ success: true, url });
+  } catch (error) {
+    console.error('Error uploading country service image:', error);
     res.status(500).json({ success: false, message: error?.message || 'Upload failed.' });
   }
 };

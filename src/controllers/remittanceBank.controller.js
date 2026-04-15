@@ -86,11 +86,33 @@ export const getBanksByCountry = async (req, res) => {
       });
     });
 
+    // Prefer portal-uploaded image from active Bank Transfer country service (per bank + country)
+    const bankIds = banksForCountry.map((b) => b.id);
+    const serviceImagesByBankId = new Map();
+    if (bankIds.length > 0) {
+      const countryServices = await prisma.countryService.findMany({
+        where: {
+          countryId,
+          status: 'Active',
+          serviceType: 'Bank Transfer',
+          remittanceBankId: { in: bankIds },
+          displayImage: { not: null },
+        },
+        select: { remittanceBankId: true, displayImage: true, updatedAt: true },
+        orderBy: { updatedAt: 'desc' },
+      });
+      for (const row of countryServices) {
+        if (row.remittanceBankId && row.displayImage && !serviceImagesByBankId.has(row.remittanceBankId)) {
+          serviceImagesByBankId.set(row.remittanceBankId, row.displayImage);
+        }
+      }
+    }
+
     // Format the response
     const formattedBanks = banksForCountry.map(bank => ({
       id: bank.id,
       name: bank.name,
-      logo: bank.logo,
+      logo: serviceImagesByBankId.get(bank.id) || bank.logo,
       website: bank.website,
       email: bank.email,
       phoneNumber: bank.phoneNumber,

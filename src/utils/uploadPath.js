@@ -147,6 +147,18 @@ export function getNotificationUploadDir() {
   return path.resolve(dir);
 }
 
+/** Country service display images (portal). Served at /uploads/country-services/ */
+export function getCountryServiceUploadDir() {
+  const base = getUploadsBase();
+  const dir = path.join(base, 'country-services');
+  if (!ensureWritableDir(dir)) {
+    try {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o755 });
+    } catch (_) {}
+  }
+  return path.resolve(dir);
+}
+
 /**
  * Returns agent KYC upload directory (absolute path).
  * Always uses project folder to ensure files are accessible via static serving.
