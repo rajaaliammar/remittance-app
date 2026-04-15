@@ -36,6 +36,9 @@ export const getCountryServices = async (req, res) => {
             id: true,
             name: true,
             dollarRate: true,
+            assignedCountries: true,
+            logo: true,
+            website: true,
           }
         },
       },
@@ -70,6 +73,9 @@ export const getServiceById = async (req, res) => {
             id: true,
             name: true,
             dollarRate: true,
+            assignedCountries: true,
+            logo: true,
+            website: true,
           }
         },
       }
@@ -158,6 +164,7 @@ export const createService = async (req, res) => {
             id: true,
             name: true,
             dollarRate: true,
+            assignedCountries: true,
           }
         },
       }
@@ -238,6 +245,7 @@ export const updateService = async (req, res) => {
             id: true,
             name: true,
             dollarRate: true,
+            assignedCountries: true,
           }
         },
       }
