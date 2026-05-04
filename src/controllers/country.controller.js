@@ -1,42 +1,58 @@
 import prisma from '../utils/prisma.js';
+import {
+  shapeCountryFromRestCountry,
+  dialCodeFromRestCountriesIdd,
+  normalizeStoredPhoneCode,
+} from '../utils/countryMeta.js';
 
-// Fetch country data from REST Countries API
+/**
+ * Country metadata: https://restcountries.com/ (free, no key).
+ * Prefer `iso2` when possible — alpha lookup avoids ambiguous names and fixes NANP dial codes.
+ */
 const fetchCountryFromAPI = async (countryName) => {
   try {
-    const response = await fetch(`https://restcountries.com/v3.1/name/${encodeURIComponent(countryName)}?fullText=true`);
+    const response = await fetch(
+      `https://restcountries.com/v3.1/name/${encodeURIComponent(countryName)}?fullText=true&fields=name,cca2,cca3,idd,currencies,flags,continents`
+    );
     const countries = await response.json();
 
-    if (countries.status === 404 || !countries || countries.length === 0) {
+    if (countries.status === 404 || !Array.isArray(countries) || countries.length === 0) {
       return null;
     }
 
-    const country = countries[0];
-    
-    // Get currency information
-    const currencies = country.currencies || {};
-    const currencyCode = Object.keys(currencies)[0] || '';
-    const currency = currencies[currencyCode] || {};
-    
-    // Get calling codes
-    const callingCodes = country.idd || {};
-    const root = callingCodes.root || '';
-    const suffixes = callingCodes.suffixes || [];
-    const phoneCode = root && suffixes.length > 0 ? `${root}${suffixes[0]}` : root || '';
+    const want = countryName.trim().toLowerCase();
+    let country = countries[0];
+    if (countries.length > 1) {
+      const exact =
+        countries.find((c) => (c.name?.common || '').toLowerCase() === want) ||
+        countries.find((c) => (c.name?.official || '').toLowerCase() === want);
+      if (exact) country = exact;
+    }
 
-    return {
-      name: country.name?.common || countryName,
-      iso2: country.cca2 || '',
-      iso3: country.cca3 || '',
-      phoneCode: phoneCode ? `+${phoneCode}` : '',
-      currencyName: currency.name || '',
-      currencyCode: currencyCode,
-      currencySymbol: currency.symbol || '',
-      currencyNativeSymbol: currency.symbol || '', // Native symbol is typically the same as symbol in REST Countries API
-      flag: country.flags?.png || country.flags?.svg || '',
-      continent: country.continents?.[0] || ''
-    };
+    return shapeCountryFromRestCountry(country, countryName);
   } catch (error) {
     console.error('Error fetching country from API:', error);
+    return null;
+  }
+};
+
+const fetchCountryByIso2 = async (iso2) => {
+  try {
+    const code = String(iso2).trim().toUpperCase();
+    if (code.length !== 2) return null;
+
+    const response = await fetch(
+      `https://restcountries.com/v3.1/alpha/${encodeURIComponent(code)}?fields=name,cca2,cca3,idd,currencies,flags,continents`
+    );
+    const data = await response.json();
+
+    if (data?.status === 404 || !data || data.cca2 == null) {
+      return null;
+    }
+
+    return shapeCountryFromRestCountry(data, code);
+  } catch (error) {
+    console.error('Error fetching country by ISO2:', error);
     return null;
   }
 };
@@ -44,7 +60,7 @@ const fetchCountryFromAPI = async (countryName) => {
 // Search countries from REST Countries API
 const searchCountriesFromAPI = async (query, continent = null) => {
   try {
-    let url = `https://restcountries.com/v3.1/name/${encodeURIComponent(query)}`;
+    const url = `https://restcountries.com/v3.1/name/${encodeURIComponent(query)}?fields=name,cca2,cca3,idd,flags,continents`;
     const response = await fetch(url);
     let countries = await response.json();
 
@@ -59,12 +75,13 @@ const searchCountriesFromAPI = async (query, continent = null) => {
       );
     }
 
-    return countries.map(country => ({
+    return countries.map((country) => ({
       name: country.name?.common || '',
       iso2: country.cca2 || '',
       iso3: country.cca3 || '',
+      phoneCode: dialCodeFromRestCountriesIdd(country.idd),
       flag: country.flags?.png || country.flags?.svg || '',
-      continent: country.continents?.[0] || ''
+      continent: country.continents?.[0] || '',
     }));
   } catch (error) {
     console.error('Error searching countries from API:', error);
@@ -178,14 +195,9 @@ export const getAllCountriesFromAPI = async (req, res) => {
         const callingCodes = country.idd || {};
         return callingCodes.root || (callingCodes.suffixes && callingCodes.suffixes.length > 0);
       })
-      .map(country => {
-        // Get calling codes
-        const callingCodes = country.idd || {};
-        const root = callingCodes.root || '';
-        const suffixes = callingCodes.suffixes || [];
-        const phoneCode = root && suffixes.length > 0 ? `${root}${suffixes[0]}` : root || '';
-        
-        // Get currency information
+      .map((country) => {
+        const phoneCode = dialCodeFromRestCountriesIdd(country.idd);
+
         const currencies = country.currencies || {};
         const currencyCode = Object.keys(currencies)[0] || '';
         const currency = currencies[currencyCode] || {};
@@ -194,7 +206,7 @@ export const getAllCountriesFromAPI = async (req, res) => {
           name: country.name?.common || '',
           iso2: country.cca2 || '',
           iso3: country.cca3 || '',
-          phoneCode: phoneCode ? `+${phoneCode}` : '',
+          phoneCode,
           flag: country.flags?.png || country.flags?.svg || '',
           currencyCode: currencyCode,
           currencyName: currency.name || '',
@@ -214,21 +226,27 @@ export const getAllCountriesFromAPI = async (req, res) => {
 // Get country details from API
 export const getCountryDetails = async (req, res) => {
   try {
-    const { countryName } = req.query;
+    const { countryName, iso2 } = req.query;
 
-    if (!countryName) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Country name is required' 
+    if (!countryName && !iso2) {
+      return res.status(400).json({
+        success: false,
+        message: 'Provide countryName and/or iso2 (ISO 3166-1 alpha-2, e.g. US). iso2 is recommended for accurate phone codes.',
       });
     }
 
-    const countryData = await fetchCountryFromAPI(countryName);
+    let countryData = null;
+    if (iso2) {
+      countryData = await fetchCountryByIso2(iso2);
+    }
+    if (!countryData && countryName) {
+      countryData = await fetchCountryFromAPI(countryName);
+    }
 
     if (!countryData) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Country not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Country not found',
       });
     }
 
@@ -303,7 +321,7 @@ export const createCountry = async (req, res) => {
       name: name.trim(),
       iso2: iso2.toUpperCase(),
       iso3: iso3.toUpperCase(),
-      phoneCode: phoneCode || '',
+      phoneCode: normalizeStoredPhoneCode(phoneCode || ''),
       currencyName: currencyName || '',
       currencyCode: currencyCode || '',
       currencyRate: currencyRate || null,
@@ -446,7 +464,7 @@ export const updateCountry = async (req, res) => {
     if (name !== undefined) updateData.name = name.trim();
     if (iso2 !== undefined) updateData.iso2 = iso2.toUpperCase();
     if (iso3 !== undefined) updateData.iso3 = iso3.toUpperCase();
-    if (phoneCode !== undefined) updateData.phoneCode = phoneCode;
+    if (phoneCode !== undefined) updateData.phoneCode = normalizeStoredPhoneCode(phoneCode);
     if (currencyName !== undefined) updateData.currencyName = currencyName;
     if (currencyCode !== undefined) updateData.currencyCode = currencyCode;
     if (currencyRate !== undefined) updateData.currencyRate = currencyRate;
