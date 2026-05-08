@@ -38,6 +38,7 @@ import orchestrationRoutes from './orchestration.routes.js';
 import accountingRoutes from './accounting.routes.js';
 import uploadRoutes from './upload.routes.js';
 import complianceRoutes from './compliance.routes.js';
+import acceptblueRoutes from './acceptblue.routes.js';
 
 const router = express.Router();
 
@@ -83,6 +84,7 @@ router.use('/orchestration', orchestrationRoutes);
 router.use('/accounting', accountingRoutes);
 router.use('/upload', uploadRoutes);
 router.use('/compliance', complianceRoutes);
+router.use('/acceptblue', acceptblueRoutes);
 
 // Default route
 router.get('/', (req, res) => {

@@ -596,6 +596,23 @@ export const verifyOTP = async (req, res) => {
       { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
     );
 
+    // Split the stored full phone (e.g. +251912345678) into country_code +
+    // phone_number so the mobile app's Redux/AsyncStorage layer (which
+    // expects snake_case + separated parts) always receives complete data.
+    let derivedCountryCode = '';
+    let derivedPhoneNumber = customer.phone || '';
+    if (customer.phone && customer.phone.startsWith('+')) {
+      const match = customer.phone.match(/^(\+\d{1,4})(.*)$/);
+      if (match) {
+        derivedCountryCode = match[1];
+        derivedPhoneNumber = match[2].replace(/\D/g, '').trim() || match[2];
+      }
+    } else {
+      // fallback: rebuild from the request inputs we already validated
+      derivedCountryCode = `+${normalizedCountryCode}`;
+      derivedPhoneNumber = normalizedPhoneNumber;
+    }
+
     return res.status(200).json({
       success: true,
       message: 'OTP verified successfully',
@@ -603,12 +620,20 @@ export const verifyOTP = async (req, res) => {
         access_token: token,
         user: {
           id: customer.id,
-          email: customer.email,
-          username: customer.username,
-          firstName: customer.firstName,
-          lastName: customer.lastName,
+          email: customer.email || null,
+          username: customer.username || null,
+          first_name: customer.firstName || null,
+          last_name: customer.lastName || null,
           phone: customer.phone,
+          phone_number: derivedPhoneNumber,
+          country_code: derivedCountryCode || null,
           status: customer.status,
+          is_verified: customer.status === 'approved',
+          has_pin: !!customer.hasPin,
+          profile_image: null,
+          registration_complete: !!(customer.firstName && customer.lastName && customer.hasPin),
+          created_at: customer.createdAt,
+          updated_at: customer.updatedAt,
           type: 'customer'
         }
       }

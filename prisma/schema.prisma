@@ -334,12 +334,33 @@ model Customer {
   lastLocation    Json?     // Last reported location: { latitude, longitude, city, country, region, address }
   lastSeenAt      DateTime? // When the app last reported device/location
   lastTransactionAt DateTime? // When the customer last completed a transaction (for inactive account detection)
+  // Accept.blue payment integration
+  acceptblueCustomerId  String?   @unique
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   remittanceTransactions RemittanceTransaction[]
   notifications   CustomerNotification[]
+  paymentMethods  PaymentMethod[]
 
   @@map("customers")
+}
+
+model PaymentMethod {
+  id                         String    @id @default(cuid())
+  customerId                 String
+  customer                   Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  acceptbluePaymentMethodId  String    @unique
+  brand                      String
+  last4                      String
+  expiryMonth                String
+  expiryYear                 String
+  holderName                 String?
+  isDefault                  Boolean   @default(false)
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
+
+  @@index([customerId])
+  @@map("payment_methods")
 }
 
 model CustomerNotification {
