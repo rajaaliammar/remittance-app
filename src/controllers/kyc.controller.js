@@ -873,6 +873,15 @@ export const getKYCRequests = async (req, res) => {
   }
 };
 
+/** Tokens that should match each other on KYC forms (portal may use USD vs US). */
+function expandKycCountryTokens(countryCode) {
+  const c = String(countryCode || '').trim().toUpperCase();
+  const set = new Set(c ? [c] : []);
+  const usFamily = ['USD', 'US', 'USA'];
+  if (usFamily.includes(c)) usFamily.forEach((x) => set.add(x));
+  return set;
+}
+
 // Get available KYC forms for a country
 export const getKYCFormsByCountry = async (req, res) => {
   try {
@@ -892,20 +901,29 @@ export const getKYCFormsByCountry = async (req, res) => {
       });
     }
 
-    // Get all active forms and filter by country
+    const requested = expandKycCountryTokens(countryCode);
+
     const allForms = await prisma.kYCForm.findMany({
       where: {
         status: 'Active'
       },
-      orderBy: {
-        createdAt: 'desc'
-      }
+      orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }]
     });
 
-    // Filter forms that include the requested country code
-    const filteredForms = allForms.filter(form => {
+    // Consumer app: skip Merchant-only forms (portal uses for = User | Merchant)
+    const userFacingForms = allForms.filter((form) => {
+      const role = String(form.for ?? 'User').trim().toLowerCase();
+      return role !== 'merchant';
+    });
+
+    // Forms with empty countries apply to all countries (common in local/dev seeds).
+    const filteredForms = userFacingForms.filter((form) => {
       const countries = Array.isArray(form.countries) ? form.countries : [];
-      return countries.includes(countryCode);
+      const normalizedList = countries
+        .map((x) => String(x).trim().toUpperCase())
+        .filter(Boolean);
+      if (normalizedList.length === 0) return true;
+      return normalizedList.some((cc) => requested.has(cc));
     });
 
     // Transform data to match frontend format

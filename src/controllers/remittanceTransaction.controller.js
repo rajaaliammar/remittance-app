@@ -21,6 +21,11 @@ import {
   createRemittanceCompleteJournal,
   createRemittanceRefundJournal,
 } from '../utils/ledgerService.js';
+import {
+  runComplianceRules,
+  createComplianceAlerts,
+  extractBeneficiaryKey,
+} from '../services/complianceRuleEngine.js';
 
 const US_STATE_NAME_TO_CODE = {
   ALABAMA: 'AL',
@@ -284,14 +289,23 @@ export const createRemittanceTransaction = async (req, res) => {
     const txType = (transferType === 'wallet' ? 'wallet' : 'bank');
 
     // Enrich recipientInfo with fee details for history/receipts
+    const ri = recipientInfo || {};
     const enrichedRecipientInfo = {
-      ...(recipientInfo || {}),
+      ...ri,
       fee: totalCharge,
       feeBreakdown: breakdown,
       baseAmount: send,
       totalAmount: totalToDeduct,
-      countryId
+      countryId,
     };
+    // Stable key for AML beneficiary aggregation when not an internal customer id
+    if (!enrichedRecipientInfo.beneficiaryId && !enrichedRecipientInfo.beneficiaryKey) {
+      const acc = String(ri.accountNumber || '').trim();
+      const name = String(ri.accountHolderName || ri.name || '').trim().toLowerCase();
+      if (acc || name) {
+        enrichedRecipientInfo.beneficiaryKey = `ext:${acc}:${name}`;
+      }
+    }
 
     // Ensure charge is stored in paymentFieldValues for easy retrieval
     const enrichedPaymentFieldValues = {
@@ -414,6 +428,83 @@ export const createRemittanceTransaction = async (req, res) => {
       }
     }
 
+    // ── Compliance Rule Engine ────────────────────────────────────────────
+    // Run AML/threshold/behavioral rules. On a match, update transaction
+    // status to "Hold" and create compliance alerts. Never block the
+    // response — if the engine fails, the transaction stays as Processing.
+    let complianceHold = false;
+    try {
+      const beneficiaryCustomerId = enrichedRecipientInfo?.beneficiaryId || null;
+      const beneficiaryKeyPlain = enrichedRecipientInfo?.beneficiaryKey || null;
+      const currentBeneficiaryKey = extractBeneficiaryKey(enrichedRecipientInfo);
+      const ipAddress =
+        req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
+        req.connection?.remoteAddress ||
+        req.socket?.remoteAddress ||
+        null;
+      const deviceId =
+        req.headers['x-device-id'] || req.headers['x-device-fingerprint'] || null;
+
+      console.log('[Compliance] Running AML rules | transactionId=', transaction.id, '| amount=', send);
+
+      const { hold, triggeredRules, riskScore } = await runComplianceRules({
+        senderId: customerId,
+        beneficiaryCustomerId,
+        beneficiaryKeyPlain,
+        currentBeneficiaryKey,
+        amount: send,
+        excludeTransactionId: transaction.id,
+        ipAddress,
+        deviceId,
+      });
+
+      // Always persist risk score, triggered rules, IP and device info
+      const complianceUpdate = {
+        riskScore,
+        triggeredRules: triggeredRules.map((r) => r.code),
+        ipAddress: ipAddress || null,
+        deviceId: deviceId || null,
+      };
+
+      if (hold) {
+        complianceHold = true;
+        complianceUpdate.status = 'Hold';
+        complianceUpdate.complianceHoldAt = new Date();
+
+        await prisma.remittanceTransaction.update({
+          where: { id: transaction.id },
+          data: complianceUpdate,
+        });
+
+        await createComplianceAlerts(transaction.id, customerId, triggeredRules);
+
+        // Notify the customer's socket room about the hold
+        const io = req.app?.get?.('io');
+        if (io) {
+          io.to(`user:${customerId}`).emit('transaction-status', {
+            transactionId: transaction.id,
+            status: 'Hold',
+            message: 'Your transaction is under compliance review. Estimated review time: 2–24 hours.',
+          });
+        }
+
+        console.log(
+          '[Compliance] Transaction placed on HOLD | transactionId=', transaction.id,
+          '| rules=', triggeredRules.map((r) => r.code).join(', '),
+          '| riskScore=', riskScore,
+        );
+      } else {
+        // No hold — still persist risk score and device info
+        await prisma.remittanceTransaction.update({
+          where: { id: transaction.id },
+          data: complianceUpdate,
+        });
+        console.log('[Compliance] No rules triggered | transactionId=', transaction.id, '| riskScore=', riskScore);
+      }
+    } catch (compErr) {
+      console.warn('[Compliance] Rule engine error (transaction unaffected):', compErr.message);
+    }
+
     // Accounting: create revenue (fee + tax) and expense entries from this transaction (so app transactions appear in portal)
     try {
       await createAccountingEntryFromTransaction(transaction, 'pending', {
@@ -465,12 +556,21 @@ export const createRemittanceTransaction = async (req, res) => {
       console.log('[Socket] Emitted accounting:updated after transaction create');
     }
 
+    // Re-read the transaction to return the latest status (may have been updated to Hold)
+    const finalTransaction = await prisma.remittanceTransaction.findUnique({
+      where: { id: transaction.id },
+    });
+
     res.status(201).json({
       success: true,
       data: {
-        ...transaction,
+        ...(finalTransaction || transaction),
         newBalance,
       },
+      ...(complianceHold && {
+        complianceHold: true,
+        holdMessage: 'Your transaction is under compliance review. Estimated review time: 2–24 hours.',
+      }),
     });
   } catch (error) {
     console.error('Error creating remittance transaction:', error);
@@ -647,8 +747,18 @@ export const updateRemittanceTransaction = async (req, res) => {
       },
     });
 
-    // If status changed to Completed, update accounting and create Phase 2 ledger entry
+    // If status changed to Completed, update accounting, ledger, and customer lastTransactionAt
     if (statusChanged && newStatus === 'completed') {
+      try {
+        // Update customer's lastTransactionAt for future inactive-account detection
+        await prisma.$executeRaw`
+          UPDATE customers SET "lastTransactionAt" = NOW(), "updatedAt" = NOW()
+          WHERE id = ${transaction.customerId}
+        `;
+      } catch (e) {
+        console.warn('lastTransactionAt update skipped:', e.message);
+      }
+
       try {
         await updateAccountingEntriesForTransactionStatus(id, 'Completed');
       } catch (accErr) {
@@ -771,10 +881,10 @@ export const rejectRemittanceTransaction = async (req, res) => {
     }
 
     const status = (transaction.status || '').toLowerCase();
-    if (status !== 'processing' && status !== 'awaiting') {
+    if (status !== 'processing' && status !== 'awaiting' && status !== 'hold' && status !== 'manual_review') {
       return res.status(400).json({
         success: false,
-        message: `Transaction cannot be rejected. Current status: ${transaction.status}. Only Processing or Awaiting transactions can be rejected.`,
+        message: `Transaction cannot be rejected. Current status: ${transaction.status}. Only Processing, Awaiting, Hold, or Manual_Review transactions can be rejected.`,
       });
     }
 

@@ -113,6 +113,95 @@ async function ensureRegistrationSettingsTable() {
   }
 }
 
+/**
+ * Ensure compliance schema is present on existing databases without requiring
+ * a manual migration. Adds:
+ *   - customers.lastTransactionAt        (used by B9/B10 inactive-account rules)
+ *   - remittance_transactions.riskScore, triggeredRules, ipAddress, deviceId,
+ *     complianceHoldAt, complianceReviewNote
+ *   - compliance_alerts table (one row per matched rule per held transaction)
+ *
+ * Safe to run on every startup — every statement uses IF NOT EXISTS / IF EXISTS.
+ */
+async function ensureComplianceColumnsAndTables() {
+  const columnStatements = [
+    'ALTER TABLE "customers" ADD COLUMN IF NOT EXISTS "lastTransactionAt" TIMESTAMP(3)',
+
+    'ALTER TABLE "remittance_transactions" ADD COLUMN IF NOT EXISTS "riskScore" INTEGER',
+    'ALTER TABLE "remittance_transactions" ADD COLUMN IF NOT EXISTS "triggeredRules" JSONB',
+    'ALTER TABLE "remittance_transactions" ADD COLUMN IF NOT EXISTS "ipAddress" TEXT',
+    'ALTER TABLE "remittance_transactions" ADD COLUMN IF NOT EXISTS "deviceId" TEXT',
+    'ALTER TABLE "remittance_transactions" ADD COLUMN IF NOT EXISTS "complianceHoldAt" TIMESTAMP(3)',
+    'ALTER TABLE "remittance_transactions" ADD COLUMN IF NOT EXISTS "complianceReviewNote" TEXT',
+  ];
+  for (const sql of columnStatements) {
+    try {
+      await prisma.$executeRawUnsafe(sql);
+    } catch (e) {
+      console.warn('ensureComplianceColumnsAndTables (column):', e.message);
+    }
+  }
+
+  try {
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "compliance_alerts" (
+        "id"            TEXT NOT NULL,
+        "transactionId" TEXT NOT NULL,
+        "customerId"    TEXT NOT NULL,
+        "ruleCode"      TEXT NOT NULL,
+        "reason"        TEXT NOT NULL,
+        "details"       JSONB,
+        "status"        TEXT NOT NULL DEFAULT 'OPEN',
+        "resolvedBy"    TEXT,
+        "resolvedAt"    TIMESTAMP(3),
+        "resolvedNote"  TEXT,
+        "createdAt"     TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt"     TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "compliance_alerts_pkey" PRIMARY KEY ("id")
+      )
+    `);
+  } catch (e) {
+    console.warn('ensureComplianceColumnsAndTables (compliance_alerts):', e.message);
+  }
+
+  const indexStatements = [
+    'CREATE INDEX IF NOT EXISTS "compliance_alerts_status_idx"        ON "compliance_alerts" ("status")',
+    'CREATE INDEX IF NOT EXISTS "compliance_alerts_customerId_idx"    ON "compliance_alerts" ("customerId")',
+    'CREATE INDEX IF NOT EXISTS "compliance_alerts_transactionId_idx" ON "compliance_alerts" ("transactionId")',
+    'CREATE INDEX IF NOT EXISTS "compliance_alerts_ruleCode_idx"      ON "compliance_alerts" ("ruleCode")',
+    'CREATE INDEX IF NOT EXISTS "remittance_transactions_status_idx"  ON "remittance_transactions" ("status")',
+    'CREATE INDEX IF NOT EXISTS "remittance_transactions_customer_created_idx" ON "remittance_transactions" ("customerId", "createdAt")',
+  ];
+  for (const sql of indexStatements) {
+    try {
+      await prisma.$executeRawUnsafe(sql);
+    } catch (e) {
+      console.warn('ensureComplianceColumnsAndTables (index):', e.message);
+    }
+  }
+
+  // Foreign key: compliance_alerts.transactionId -> remittance_transactions.id
+  try {
+    await prisma.$executeRawUnsafe(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'compliance_alerts_transactionId_fkey'
+        ) THEN
+          ALTER TABLE "compliance_alerts"
+          ADD CONSTRAINT "compliance_alerts_transactionId_fkey"
+          FOREIGN KEY ("transactionId")
+          REFERENCES "remittance_transactions"("id")
+          ON DELETE CASCADE;
+        END IF;
+      END $$;
+    `);
+  } catch (e) {
+    console.warn('ensureComplianceColumnsAndTables (fk):', e.message);
+  }
+}
+
 // Ensure customer_notifications table exists
 async function ensureCustomerNotificationsTable() {
   try {
@@ -161,10 +250,17 @@ prisma.$connect()
     return ensureLevelAndBalanceLimitColumns();
   })
   .then(() => ensureCustomerNotificationsTable())
+  .then(() => ensureComplianceColumnsAndTables())
   .catch((error) => {
     console.error('❌ Failed to connect to database:', error);
   });
 
 export default prisma;
-export { ensureLevelAndBalanceLimitColumns, ensureLevelsTable, ensureRegistrationSettingsTable, ensureCustomerNotificationsTable };
+export {
+  ensureLevelAndBalanceLimitColumns,
+  ensureLevelsTable,
+  ensureRegistrationSettingsTable,
+  ensureCustomerNotificationsTable,
+  ensureComplianceColumnsAndTables,
+};
 

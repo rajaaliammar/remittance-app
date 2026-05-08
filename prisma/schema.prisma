@@ -333,6 +333,7 @@ model Customer {
   lastDeviceInfo  Json?     // Last reported device: { deviceType, brand, model, os, osVersion, userAgent, appVersion }
   lastLocation    Json?     // Last reported location: { latitude, longitude, city, country, region, address }
   lastSeenAt      DateTime? // When the app last reported device/location
+  lastTransactionAt DateTime? // When the customer last completed a transaction (for inactive account detection)
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   remittanceTransactions RemittanceTransaction[]
@@ -367,15 +368,47 @@ model RemittanceTransaction {
   gatewayName         String?
   recipientInfo       Json?     // { accountNumber, accountHolderName, serviceProvider, sourceOfFund, sendingPurpose }
   paymentFieldValues  Json?     // Gateway custom field values
-  status              String    @default("Processing") // Processing, Completed, Failed
+  status              String    @default("Processing") // Processing, Completed, Failed, Hold, Manual_Review
+  // Compliance fields
+  riskScore           Int?      // Computed risk score (0-100+). Higher = riskier.
+  triggeredRules      Json?     // Array of rule codes that fired: ["T4", "B2"]
+  ipAddress           String?   // Sender IP address at time of transaction
+  deviceId            String?   // Sender device ID at time of transaction
+  complianceHoldAt    DateTime? // When the transaction was placed on hold
+  complianceReviewNote String?  @db.Text // Admin note when resolving
   // Accounting 2 enhancements
   exchangeRate        Decimal?  @db.Decimal(18, 6) // Rate at transaction time
   exchangeRateSource  String?   // Source of exchange rate
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
   accountingEntries   AccountingEntry[]
+  complianceAlerts    ComplianceAlert[]
 
+  @@index([status])
+  @@index([customerId, createdAt])
   @@map("remittance_transactions")
+}
+
+model ComplianceAlert {
+  id            String    @id @default(cuid())
+  transactionId String
+  transaction   RemittanceTransaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  customerId    String    // Denormalized for fast queries
+  ruleCode      String    // e.g. "T4", "B2"
+  reason        String    @db.Text
+  details       Json?     // Rule-specific match details: { uniqueSenders: 4, amount: 2100 }
+  status        String    @default("OPEN") // OPEN, CLOSED
+  resolvedBy    String?   // BackofficeUser ID
+  resolvedAt    DateTime?
+  resolvedNote  String?   @db.Text
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([status])
+  @@index([customerId])
+  @@index([transactionId])
+  @@index([ruleCode])
+  @@map("compliance_alerts")
 }
 
 model AccountingEntry {

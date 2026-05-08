@@ -110,6 +110,42 @@ async function main() {
       console.log(`ℹ️ Source of fund already exists: ${sourceData.name}`);
     }
   }
+
+  // Dev-friendly default KYC form so GET /api/kyc/forms/country/:code returns data locally.
+  // Empty `countries` means "all countries" (see getKYCFormsByCountry in kyc.controller.js).
+  const devKycName = 'Standard identity verification (dev)';
+  const existingDevKyc = await prisma.kYCForm.findFirst({
+    where: { name: devKycName },
+  });
+  if (!existingDevKyc) {
+    await prisma.kYCForm.create({
+      data: {
+        name: devKycName,
+        description: 'Required for wallet activation, deposits, and transfers',
+        for: 'User',
+        status: 'Active',
+        countries: [],
+        priority: 1,
+        fields: [
+          {
+            id: 'dev-id-front',
+            fieldName: 'Government ID (front)',
+            inputType: 'Upload',
+            validationType: 'Required',
+          },
+          {
+            id: 'dev-id-back',
+            fieldName: 'Government ID (back)',
+            inputType: 'Upload',
+            validationType: 'Required',
+          },
+        ],
+      },
+    });
+    console.log(`✅ KYC form created: ${devKycName}`);
+  } else {
+    console.log(`ℹ️ KYC form already exists: ${devKycName}`);
+  }
 }
 
 main()

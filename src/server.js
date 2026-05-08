@@ -6,7 +6,12 @@ import morgan from 'morgan';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import prisma, { ensureLevelAndBalanceLimitColumns, ensureLevelsTable, ensureRegistrationSettingsTable } from './utils/prisma.js';
+import prisma, {
+  ensureLevelAndBalanceLimitColumns,
+  ensureLevelsTable,
+  ensureRegistrationSettingsTable,
+  ensureComplianceColumnsAndTables,
+} from './utils/prisma.js';
 import { getUploadsBase, getWritableKycUploadDir, getWritableAgentKycUploadDir } from './utils/uploadPath.js';
 import apiRoutes from './routes/index.js';
 import { addSessionRequest } from './store/sessionRequestStore.js';
@@ -213,8 +218,10 @@ async function startServer() {
     await ensureLevelAndBalanceLimitColumns();
     await ensureLevelsTable();
     await ensureRegistrationSettingsTable();
+    await ensureComplianceColumnsAndTables();
     console.log('✅ Level & balance limit columns ready');
     console.log('✅ Registration settings table ready');
+    console.log('✅ Compliance columns and alerts table ready');
   } catch (err) {
     console.error('❌ Database setup failed:', err);
     process.exit(1);
