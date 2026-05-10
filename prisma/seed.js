@@ -146,6 +146,56 @@ async function main() {
   } else {
     console.log(`ℹ️ KYC form already exists: ${devKycName}`);
   }
+
+  // Demo remittance banks for India (local dev) — app lists banks where assignedCountries includes IN + Active
+  const india = await prisma.country.findFirst({
+    where: { iso2: 'IN' },
+    select: { id: true, iso2: true, name: true, currencyCode: true, currencyRate: true },
+  });
+  if (india) {
+    const rate =
+      india.currencyRate != null && String(india.currencyRate).trim() !== ''
+        ? String(india.currencyRate)
+        : '83';
+    const indiaAssignment = {
+      countryCode: india.iso2,
+      country: india.name,
+      dollarPrice: rate,
+      status: 'Active',
+    };
+    const demoNames = ['HDFC Bank (India demo)', 'State Bank of India (demo)'];
+    for (const name of demoNames) {
+      let bank = await prisma.remittanceBank.findFirst({ where: { name } });
+      if (!bank) {
+        bank = await prisma.remittanceBank.create({
+          data: {
+            name,
+            website: 'https://example.com',
+            active: true,
+            assignedCountries: [indiaAssignment],
+          },
+        });
+        console.log(`✅ Remittance bank created for India: ${bank.name}`);
+      } else {
+        let ac = Array.isArray(bank.assignedCountries) ? [...bank.assignedCountries] : [];
+        const hasIn = ac.some(
+          (x) =>
+            String(x?.countryCode || '').toUpperCase() === 'IN' &&
+            String(x?.status ?? 'Active').toLowerCase() === 'active'
+        );
+        if (!hasIn) {
+          ac.push(indiaAssignment);
+          await prisma.remittanceBank.update({
+            where: { id: bank.id },
+            data: { assignedCountries: ac },
+          });
+          console.log(`✅ Attached India to remittance bank: ${bank.name}`);
+        }
+      }
+    }
+  } else {
+    console.log('ℹ️ No country with iso2=IN in DB — skip India demo banks (add India under Manage Country first).');
+  }
 }
 
 main()

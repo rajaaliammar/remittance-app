@@ -1,9 +1,9 @@
+import './env-bootstrap.js';
 import http from 'http';
 import express from 'express';
 import { Server as SocketServer } from 'socket.io';
 import cors from 'cors';
 import morgan from 'morgan';
-import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import prisma, {
@@ -21,11 +21,11 @@ import { releaseChat } from './store/activeChatStore.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Load environment variables
-dotenv.config();
-
 // Initialize Express app
 const app = express();
+// Default Express ETag on JSON breaks mobile clients: conditional GET → 304 with no body,
+// while Axios/React Native typically do not replay the previous JSON → lists look empty.
+app.set('etag', false);
 const PORT = process.env.PORT || 3001;
 
 // CORS configuration – allow portal/dev origins so browser requests succeed

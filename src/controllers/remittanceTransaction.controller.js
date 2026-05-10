@@ -26,6 +26,7 @@ import {
   createComplianceAlerts,
   extractBeneficiaryKey,
 } from '../services/complianceRuleEngine.js';
+import acceptblueService from '../services/acceptblue.service.js';
 
 const US_STATE_NAME_TO_CODE = {
   ALABAMA: 'AL',
@@ -191,6 +192,12 @@ export const createRemittanceTransaction = async (req, res) => {
       countryId,
     } = req.body || {};
 
+    const pfIncoming =
+      paymentFieldValues && typeof paymentFieldValues === 'object' ? paymentFieldValues : {};
+    const paymentMethodLocalId = String(
+      pfIncoming.paymentMethodId || pfIncoming.savedCardId || ''
+    ).trim();
+
     const send = parseFloat(sendAmount);
     const receive = parseFloat(receiveAmount);
     if (isNaN(send) || send < 0 || isNaN(receive) || receive < 0) {
@@ -242,7 +249,8 @@ export const createRemittanceTransaction = async (req, res) => {
       ? Number(row.availableBalance)
       : 12000;
 
-    if (currentBalance < totalToDeduct) {
+    // Wallet-funded transfer only — card-funded transfers charge Accept.blue instead (see below).
+    if (!paymentMethodLocalId && currentBalance < totalToDeduct) {
       return res.status(400).json({
         success: false,
         message: `Insufficient balance. Available: ${currentBalance.toFixed(2)}, required (including fees): ${totalToDeduct.toFixed(2)}`,
@@ -284,7 +292,7 @@ export const createRemittanceTransaction = async (req, res) => {
       }
     }
 
-    const newBalance = currentBalance - totalToDeduct;
+    const newBalance = paymentMethodLocalId ? currentBalance : currentBalance - totalToDeduct;
 
     const txType = (transferType === 'wallet' ? 'wallet' : 'bank');
 
@@ -306,14 +314,6 @@ export const createRemittanceTransaction = async (req, res) => {
         enrichedRecipientInfo.beneficiaryKey = `ext:${acc}:${name}`;
       }
     }
-
-    // Ensure charge is stored in paymentFieldValues for easy retrieval
-    const enrichedPaymentFieldValues = {
-      ...(paymentFieldValues || {}),
-      charge: totalCharge,
-      fee: totalCharge,
-      feeBreakdown: breakdown,
-    };
 
     // Orchestration: run before every transaction; store job and events when tables exist
     const orchestrationContext = {
@@ -394,6 +394,63 @@ export const createRemittanceTransaction = async (req, res) => {
         console.warn('Orchestration update on allow skipped:', e.message);
       }
     }
+
+    let acceptBlueChargeMeta = null;
+    if (paymentMethodLocalId) {
+      if (!acceptblueService.isAcceptBlueConfigured()) {
+        return res.status(503).json({
+          success: false,
+          message:
+            'Card payments are not configured. Set ACCEPTBLUE_API_KEY, ACCEPTBLUE_PIN, and ACCEPTBLUE_BASE_URL on the server.',
+        });
+      }
+      const payer = await prisma.customer.findUnique({
+        where: { id: customerId },
+        select: { acceptblueCustomerId: true },
+      });
+      if (!payer?.acceptblueCustomerId) {
+        return res.status(400).json({
+          success: false,
+          message: 'No Accept.blue customer profile. Add a saved card before paying by card.',
+        });
+      }
+      const cardRow = await prisma.paymentMethod.findFirst({
+        where: { id: paymentMethodLocalId, customerId },
+      });
+      if (!cardRow) {
+        return res.status(404).json({
+          success: false,
+          message: 'Saved payment method not found.',
+        });
+      }
+      try {
+        const chargeAmount = Number(Number(totalToDeduct).toFixed(2));
+        const abResult = await acceptblueService.createCharge({
+          payment_method_id: cardRow.acceptbluePaymentMethodId,
+          amount: chargeAmount,
+          description: `Remittance ${currency || 'USD'} send ${send.toFixed(2)} + fees`,
+        });
+        acceptBlueChargeMeta = {
+          acceptblueTransactionId: abResult.id ?? abResult.transaction_id ?? null,
+          acceptblueStatus: abResult.status ?? null,
+        };
+      } catch (e) {
+        console.error('[Accept.blue] Remittance charge failed:', e?.message || e);
+        return res.status(Number(e.status) >= 400 ? e.status : 402).json({
+          success: false,
+          message: e.message || 'Card payment failed',
+          details: e.details,
+        });
+      }
+    }
+
+    const enrichedPaymentFieldValues = {
+      ...(paymentFieldValues || {}),
+      charge: totalCharge,
+      fee: totalCharge,
+      feeBreakdown: breakdown,
+      ...(acceptBlueChargeMeta || {}),
+    };
 
     const [transaction] = await prisma.$transaction([
       delegate.create({

@@ -25,8 +25,11 @@ export const createCustomer = async (req, res) => {
       });
     }
 
-    const name = [customer.firstName, customer.lastName].filter(Boolean).join(' ') || customer.email;
-    const result = await acceptblueService.createCustomer({ name, email: customer.email });
+    const result = await acceptblueService.createCustomer({
+      email: customer.email,
+      firstName: customer.firstName,
+      lastName: customer.lastName,
+    });
 
     const acceptblueCustomerId = String(result.id || result.customer_id);
 
@@ -77,8 +80,11 @@ export const addCard = async (req, res) => {
 
     // Lazily create customer in Accept.blue if not yet created
     if (!acceptblueCustomerId) {
-      const name = [customer.firstName, customer.lastName].filter(Boolean).join(' ') || customer.email;
-      const custResult = await acceptblueService.createCustomer({ name, email: customer.email });
+      const custResult = await acceptblueService.createCustomer({
+        email: customer.email,
+        firstName: customer.firstName,
+        lastName: customer.lastName,
+      });
       acceptblueCustomerId = String(custResult.id || custResult.customer_id);
       await prisma.customer.update({
         where: { id: req.user.id },
@@ -157,6 +163,7 @@ export const addCard = async (req, res) => {
  */
 export const listCards = async (req, res) => {
   try {
+    res.set('Cache-Control', 'no-store, private, must-revalidate');
     const cards = await prisma.paymentMethod.findMany({
       where: { customerId: req.user.id },
       select: {
@@ -265,7 +272,6 @@ export const chargeCard = async (req, res) => {
     }
 
     const result = await acceptblueService.createCharge({
-      customer_id: customer.acceptblueCustomerId,
       payment_method_id: card.acceptbluePaymentMethodId,
       amount: parseFloat(amount),
       description: description || `Remittance payment`,

@@ -48,7 +48,7 @@ export const getBanksByCountry = async (req, res) => {
     // Get the country to find its ISO2 code
     const country = await prisma.country.findUnique({
       where: { id: countryId },
-      select: { id: true, iso2: true, iso3: true, name: true }
+      select: { id: true, iso2: true, iso3: true, name: true, currencyCode: true },
     });
 
     if (!country) {
@@ -64,25 +64,40 @@ export const getBanksByCountry = async (req, res) => {
       orderBy: { createdAt: 'desc' }
     });
 
+    const iso2 = String(country.iso2 || '').toUpperCase();
+    const iso3 = String(country.iso3 || '').toUpperCase();
+    const cur = country.currencyCode != null ? String(country.currencyCode).trim().toUpperCase() : '';
+
     // Filter banks that have this country in their assignedCountries
-    const banksForCountry = allBanks.filter(bank => {
+    const banksForCountry = allBanks.filter((bank) => {
       if (!bank.assignedCountries) return false;
-      
-      const assignedCountries = Array.isArray(bank.assignedCountries) 
-        ? bank.assignedCountries 
+
+      let assignedCountries = Array.isArray(bank.assignedCountries)
+        ? bank.assignedCountries
         : [];
-      
-      // Check if country is assigned and status is Active
-      // Match by countryCode (ISO2), countryId, or country name
-      return assignedCountries.some(ac => {
-        const matchesCountry = 
-          ac.countryCode === country.iso2 || 
-          ac.countryCode === country.iso3 ||
+      // Legacy: stored as JSON string
+      if (!assignedCountries.length && typeof bank.assignedCountries === 'string') {
+        try {
+          const p = JSON.parse(bank.assignedCountries);
+          assignedCountries = Array.isArray(p) ? p : [];
+        } catch {
+          assignedCountries = [];
+        }
+      }
+
+      return assignedCountries.some((ac) => {
+        const code = ac?.countryCode != null ? String(ac.countryCode).trim().toUpperCase() : '';
+        const name = ac?.country != null ? String(ac.country).trim() : '';
+        const matchesCountry =
+          code === iso2 ||
+          code === iso3 ||
+          (cur && code === cur) ||
           ac.countryCode === country.id ||
-          ac.country === country.name ||
-          ac.country === country.iso2;
-        
-        return matchesCountry && ac.status === 'Active';
+          name.toLowerCase() === String(country.name || '').trim().toLowerCase() ||
+          name.toUpperCase() === iso2;
+
+        const statusOk = String(ac?.status ?? 'Active').toLowerCase() === 'active';
+        return matchesCountry && statusOk;
       });
     });
 
