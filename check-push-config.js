@@ -20,23 +20,43 @@ console.log('🔍 Checking Push Notification Configuration...\n');
 
 // Check 1: Environment variables
 console.log('1️⃣ Checking environment variables...');
-const firebasePath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH || 
+const inlineJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+const firebasePath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH ||
                      process.env.GOOGLE_APPLICATION_CREDENTIALS;
 
-if (!firebasePath) {
-  console.log('   ❌ FIREBASE_SERVICE_ACCOUNT_PATH or GOOGLE_APPLICATION_CREDENTIALS not set');
-  console.log('   💡 Set one of these environment variables to the path of your Firebase service account JSON file');
+let resolved = null;
+let keyFromEnv = null;
+
+if (inlineJson && String(inlineJson).trim()) {
+  console.log('   ✅ FIREBASE_SERVICE_ACCOUNT_JSON is set');
+  try {
+    keyFromEnv = JSON.parse(inlineJson);
+    console.log('   ✅ Inline JSON is valid, project:', keyFromEnv.project_id || '(unknown)');
+  } catch (e) {
+    console.log('   ❌ FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON:', e.message);
+  }
+} else if (!firebasePath) {
+  const autoFiles = fs.readdirSync(process.cwd()).filter(
+    (f) => f.endsWith('.json') && (f.includes('firebase-adminsdk') || f === 'firebase-service-account.json')
+  );
+  if (autoFiles.length > 0) {
+    console.log('   ⚠️  Env path not set, but found:', autoFiles.join(', '));
+    console.log('   💡 Run: ./setup-firebase.sh  or set FIREBASE_SERVICE_ACCOUNT_PATH=./' + autoFiles[0]);
+    resolved = path.resolve(process.cwd(), autoFiles[0]);
+  } else {
+    console.log('   ❌ No Firebase credentials configured');
+    console.log('   💡 Download from Firebase Console → project super-app-71711 → Service Accounts → Generate new private key');
+    console.log('   💡 Save as Remittance_backend/firebase-service-account.json and restart the server');
+  }
 } else {
-  console.log('   ✅ Found:', firebasePath);
-  
-  // Check 2: File exists
-  const resolved = path.isAbsolute(firebasePath)
+  console.log('   ✅ Found path:', firebasePath);
+  resolved = path.isAbsolute(firebasePath)
     ? firebasePath
     : path.resolve(process.cwd(), firebasePath);
-  
+
   if (!fs.existsSync(resolved)) {
     console.log('   ❌ File does not exist:', resolved);
-    console.log('   💡 Make sure the path is correct');
+    console.log('   💡 Download the service account JSON from Firebase Console (see FIREBASE_SETUP.md)');
   } else {
     console.log('   ✅ File exists:', resolved);
     

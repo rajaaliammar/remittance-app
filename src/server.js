@@ -16,6 +16,7 @@ import { getUploadsBase, getWritableKycUploadDir, getWritableAgentKycUploadDir }
 import apiRoutes from './routes/index.js';
 import { addSessionRequest } from './store/sessionRequestStore.js';
 import { releaseChat } from './store/activeChatStore.js';
+import { ensureDefaultFaqs } from './utils/ensureDefaultFaqs.js';
 
 // Get __dirname equivalent for ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -77,11 +78,19 @@ app.use('/uploads/agentKyc', express.static(getWritableAgentKycUploadDir()));
 app.use('/uploads', express.static(getUploadsBase()));
 
 // Health check route
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
+app.get('/health', async (req, res) => {
+  let push = { configured: false };
+  try {
+    const { getPushConfigStatus } = await import('./utils/push.js');
+    push = getPushConfigStatus();
+  } catch {
+    /* ignore */
+  }
+  res.json({
+    status: 'OK',
     message: 'Server is running',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    push,
   });
 });
 
@@ -219,6 +228,7 @@ async function startServer() {
     await ensureLevelsTable();
     await ensureRegistrationSettingsTable();
     await ensureComplianceColumnsAndTables();
+    await ensureDefaultFaqs();
     console.log('✅ Level & balance limit columns ready');
     console.log('✅ Registration settings table ready');
     console.log('✅ Compliance columns and alerts table ready');

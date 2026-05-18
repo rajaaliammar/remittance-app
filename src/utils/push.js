@@ -11,33 +11,100 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 let messaging = null;
 
+/** Whether Firebase credentials are present (does not initialize Admin SDK). */
+export function getPushConfigStatus() {
+  const jsonInline = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  if (jsonInline && String(jsonInline).trim()) {
+    try {
+      const key = JSON.parse(jsonInline);
+      return {
+        configured: !!(key?.project_id && key?.private_key && key?.client_email),
+        projectId: key?.project_id || null,
+        source: 'FIREBASE_SERVICE_ACCOUNT_JSON',
+      };
+    } catch {
+      return { configured: false, projectId: null, source: 'FIREBASE_SERVICE_ACCOUNT_JSON', error: 'invalid_json' };
+    }
+  }
+
+  const credPath =
+    process.env.FIREBASE_SERVICE_ACCOUNT_PATH ||
+    process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  if (!credPath) {
+    return { configured: false, projectId: null, source: null };
+  }
+
+  const resolved = path.isAbsolute(credPath)
+    ? credPath
+    : path.resolve(process.cwd(), credPath);
+  if (!fs.existsSync(resolved)) {
+    return {
+      configured: false,
+      projectId: null,
+      source: credPath,
+      error: 'file_not_found',
+      expectedPath: resolved,
+    };
+  }
+  try {
+    const key = JSON.parse(fs.readFileSync(resolved, 'utf8'));
+    return {
+      configured: !!(key?.project_id && key?.private_key && key?.client_email),
+      projectId: key?.project_id || null,
+      source: resolved,
+    };
+  } catch {
+    return { configured: false, projectId: null, source: resolved, error: 'invalid_json' };
+  }
+}
+
+function loadServiceAccountKey() {
+  const jsonInline = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  if (jsonInline && String(jsonInline).trim()) {
+    try {
+      return JSON.parse(jsonInline);
+    } catch (e) {
+      console.error('[PUSH] ❌ FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON:', e?.message || e);
+      return null;
+    }
+  }
+
+  const credPath =
+    process.env.FIREBASE_SERVICE_ACCOUNT_PATH ||
+    process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  if (!credPath) return null;
+
+  const resolved = path.isAbsolute(credPath)
+    ? credPath
+    : path.resolve(process.cwd(), credPath);
+  if (!fs.existsSync(resolved)) {
+    console.error('[PUSH] ❌ Firebase service account file not found:', resolved);
+    console.error('[PUSH] Download from Firebase Console (project super-app-71711) and save as firebase-service-account.json');
+    console.error('[PUSH] Or set FIREBASE_SERVICE_ACCOUNT_JSON with the full JSON contents');
+    return null;
+  }
+  try {
+    return JSON.parse(fs.readFileSync(resolved, 'utf8'));
+  } catch (e) {
+    console.error('[PUSH] ❌ Failed to read service account file:', e?.message || e);
+    return null;
+  }
+}
+
 function getMessaging() {
   if (messaging !== null) return messaging;
   try {
     const admin = require('firebase-admin');
     if (admin.apps.length === 0) {
-      const credPath =
-        process.env.FIREBASE_SERVICE_ACCOUNT_PATH ||
-        process.env.GOOGLE_APPLICATION_CREDENTIALS;
-      if (credPath) {
-        const resolved = path.isAbsolute(credPath)
-          ? credPath
-          : path.resolve(process.cwd(), credPath);
-        if (!fs.existsSync(resolved)) {
-          console.error('[PUSH] ❌ Firebase service account file not found:', resolved);
-          console.error('[PUSH] Set FIREBASE_SERVICE_ACCOUNT_PATH or GOOGLE_APPLICATION_CREDENTIALS environment variable');
-          messaging = false;
-          return false;
-        }
-        const key = JSON.parse(fs.readFileSync(resolved, 'utf8'));
-        admin.initializeApp({ credential: admin.credential.cert(key) });
-        console.log('[PUSH] ✅ Firebase Admin initialized successfully');
-      } else {
-        console.warn('[PUSH] ⚠️ Firebase Admin not configured. Set FIREBASE_SERVICE_ACCOUNT_PATH or GOOGLE_APPLICATION_CREDENTIALS');
+      const key = loadServiceAccountKey();
+      if (!key) {
+        console.warn('[PUSH] ⚠️ Firebase Admin not configured. Set FIREBASE_SERVICE_ACCOUNT_PATH, GOOGLE_APPLICATION_CREDENTIALS, or FIREBASE_SERVICE_ACCOUNT_JSON');
         console.warn('[PUSH] Push notifications will not be sent until Firebase Admin is configured');
         messaging = false;
         return false;
       }
+      admin.initializeApp({ credential: admin.credential.cert(key) });
+      console.log('[PUSH] ✅ Firebase Admin initialized successfully', key.project_id ? `(project: ${key.project_id})` : '');
     }
     messaging = admin.messaging();
     return messaging;

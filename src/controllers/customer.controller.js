@@ -2374,6 +2374,19 @@ export const sendNotificationToCustomer = async (req, res) => {
         console.warn('[Notification] 💡 Consider clearing the invalid FCM token from customer record');
       }
       
+      // Missing Firebase credentials: still success for inbox; don't use 502 (portal treats as hard error)
+      if (errorCode === 'FIREBASE_NOT_CONFIGURED') {
+        return res.json({
+          success: true,
+          message:
+            'Notification saved in the app inbox. Device push is unavailable until Firebase is configured on the backend.',
+          saved: true,
+          pushed: false,
+          reason: errorMessage,
+          errorCode: errorCode,
+        });
+      }
+
       return res.status(502).json({
         success: false,
         message: errorMessage + ' Notification is saved and will show in the app.',
