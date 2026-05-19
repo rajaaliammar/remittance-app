@@ -314,6 +314,161 @@ export const deleteRemittanceBank = async (req, res) => {
   }
 };
 
+function normalizeAccountNumber(value) {
+  return String(value || '').trim().replace(/\s+/g, '');
+}
 
+async function lookupAccountHolderFromHistory({ bankId, accountNumber }) {
+  const normalized = normalizeAccountNumber(accountNumber);
+  if (!normalized) return null;
 
+  const recent = await prisma.remittanceTransaction.findMany({
+    where: {
+      transferType: 'bank',
+      status: { in: ['Completed', 'Processing', 'Hold', 'Manual_Review'] },
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 200,
+    select: { recipientInfo: true },
+  });
+
+  for (const tx of recent) {
+    const ri = tx.recipientInfo;
+    if (!ri || typeof ri !== 'object') continue;
+    const acc = normalizeAccountNumber(ri.accountNumber);
+    if (acc !== normalized) continue;
+    if (bankId && ri.bankId && ri.bankId !== bankId) continue;
+    const name = String(ri.accountHolderName || ri.name || '').trim();
+    if (name && name.toLowerCase() !== 'recipient') return name;
+  }
+  return null;
+}
+
+async function fetchExternalAccountVerification({ bank, accountNumber, countryId }) {
+  const url = process.env.BANK_ACCOUNT_VERIFY_URL;
+  if (!url) return null;
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (process.env.BANK_ACCOUNT_VERIFY_API_KEY) {
+    headers.Authorization = `Bearer ${process.env.BANK_ACCOUNT_VERIFY_API_KEY}`;
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      bankId: bank.id,
+      bankName: bank.name,
+      accountNumber: normalizeAccountNumber(accountNumber),
+      countryId: countryId || null,
+    }),
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const err = new Error(data.message || 'Account verification failed');
+    err.status = response.status;
+    throw err;
+  }
+
+  const name = String(
+    data.accountHolderName || data.account_holder_name || data.name || ''
+  ).trim();
+  if (!name) return null;
+  return name;
+}
+
+/** POST /api/remittance-banks/verify-account — resolve account holder name */
+export const verifyBankAccount = async (req, res) => {
+  try {
+    const { bankId, accountNumber, countryId } = req.body || {};
+    const normalized = normalizeAccountNumber(accountNumber);
+
+    if (!bankId) {
+      return res.status(400).json({ success: false, message: 'Bank is required' });
+    }
+    if (!normalized || normalized.length < 5) {
+      return res.status(400).json({
+        success: false,
+        message: 'Enter a valid account number (at least 5 digits)',
+      });
+    }
+
+    const bank = await prisma.remittanceBank.findUnique({ where: { id: bankId } });
+    if (!bank) {
+      return res.status(404).json({ success: false, message: 'Bank not found' });
+    }
+
+    const fromHistory = await lookupAccountHolderFromHistory({ bankId, accountNumber: normalized });
+    if (fromHistory) {
+      return res.json({
+        success: true,
+        verified: true,
+        source: 'history',
+        accountHolderName: fromHistory,
+        accountNumber: normalized,
+        bankId: bank.id,
+        bankName: bank.name,
+      });
+    }
+
+    try {
+      const externalName = await fetchExternalAccountVerification({
+        bank,
+        accountNumber: normalized,
+        countryId,
+      });
+      if (externalName) {
+        return res.json({
+          success: true,
+          verified: true,
+          source: 'provider',
+          accountHolderName: externalName,
+          accountNumber: normalized,
+          bankId: bank.id,
+          bankName: bank.name,
+        });
+      }
+    } catch (extErr) {
+      console.error('[verifyBankAccount] external provider error:', extErr.message);
+      return res.status(extErr.status || 502).json({
+        success: false,
+        message: extErr.message || 'Unable to verify account with bank',
+      });
+    }
+
+    const allowMock =
+      process.env.BANK_ACCOUNT_VERIFY_MOCK === 'true' ||
+      process.env.NODE_ENV !== 'production';
+
+    if (allowMock) {
+      const demoNames = [
+        'Ahmed Khan',
+        'Fatima Ali',
+        'Hassan Raza',
+        'Ayesha Malik',
+        'Usman Sheikh',
+      ];
+      const idx = parseInt(normalized.replace(/\D/g, '').slice(-4) || '0', 10) % demoNames.length;
+      return res.json({
+        success: true,
+        verified: true,
+        source: 'mock',
+        accountHolderName: demoNames[idx],
+        accountNumber: normalized,
+        bankId: bank.id,
+        bankName: bank.name,
+      });
+    }
+
+    return res.status(404).json({
+      success: false,
+      verified: false,
+      message: 'Account could not be verified. Check the number or enter the recipient name manually.',
+    });
+  } catch (error) {
+    console.error('Error verifying bank account:', error);
+    res.status(500).json({ success: false, message: error.message || 'Verification failed' });
+  }
+};
 
