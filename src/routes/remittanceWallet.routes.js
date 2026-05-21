@@ -5,7 +5,9 @@ import {
   createRemittanceWallet,
   updateRemittanceWallet,
   deleteRemittanceWallet,
-  getWalletsByCountry
+  getWalletsByCountry,
+  verifyWalletAccount,
+  getWalletGiftRules,
 } from '../controllers/remittanceWallet.controller.js';
 import { authenticateToken } from '../middleware/auth.js';
 
@@ -16,6 +18,12 @@ router.get('/', getAllRemittanceWallets);
 
 // Get remittance wallets by country (public endpoint for frontend forms)
 router.get('/country/:countryId', getWalletsByCountry);
+
+// Verify wallet number and return holder name (public for send-money flow)
+router.post('/verify-account', verifyWalletAccount);
+router.post('/verify-account/', verifyWalletAccount);
+
+router.get('/:walletId/gifts', getWalletGiftRules);
 
 // Get remittance wallet by ID
 router.get('/:id', authenticateToken, getRemittanceWalletById);

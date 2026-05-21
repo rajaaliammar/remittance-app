@@ -37,6 +37,7 @@ export const getAllRemittanceBanks = async (req, res) => {
 export const getBanksByCountry = async (req, res) => {
   try {
     const { countryId } = req.params;
+    const { serviceId } = req.query;
 
     if (!countryId) {
       return res.status(400).json({ 
@@ -48,7 +49,14 @@ export const getBanksByCountry = async (req, res) => {
     // Get the country to find its ISO2 code
     const country = await prisma.country.findUnique({
       where: { id: countryId },
-      select: { id: true, iso2: true, iso3: true, name: true, currencyCode: true },
+      select: {
+        id: true,
+        iso2: true,
+        iso3: true,
+        name: true,
+        currencyCode: true,
+        currencyRate: true,
+      },
     });
 
     if (!country) {
@@ -123,8 +131,30 @@ export const getBanksByCountry = async (req, res) => {
       }
     }
 
+    let resultBanks = banksForCountry;
+
+    if (serviceId) {
+      const svc = await prisma.countryService.findFirst({
+        where: { id: String(serviceId), countryId, status: 'Active' },
+        select: { remittanceBankId: true },
+      });
+      if (svc?.remittanceBankId) {
+        const linked = banksForCountry.filter((b) => b.id === svc.remittanceBankId);
+        if (linked.length > 0) {
+          resultBanks = linked;
+        } else {
+          const single = await prisma.remittanceBank.findUnique({
+            where: { id: svc.remittanceBankId },
+          });
+          if (single?.active) {
+            resultBanks = [single];
+          }
+        }
+      }
+    }
+
     // Format the response
-    const formattedBanks = banksForCountry.map(bank => ({
+    const formattedBanks = resultBanks.map((bank) => ({
       id: bank.id,
       name: bank.name,
       logo: serviceImagesByBankId.get(bank.id) || bank.logo,
@@ -134,10 +164,22 @@ export const getBanksByCountry = async (req, res) => {
       address: bank.address,
       active: bank.active,
       dollarRate: bank.dollarRate,
-      assignedCountries: bank.assignedCountries ? (Array.isArray(bank.assignedCountries) ? bank.assignedCountries : []) : []
+      assignedCountries: bank.assignedCountries
+        ? Array.isArray(bank.assignedCountries)
+          ? bank.assignedCountries
+          : []
+        : [],
     }));
 
-    res.json({ success: true, data: formattedBanks });
+    res.json({
+      success: true,
+      data: formattedBanks,
+      country: {
+        id: country.id,
+        currencyCode: country.currencyCode || null,
+        currencyRate: country.currencyRate || null,
+      },
+    });
   } catch (error) {
     console.error('Error fetching banks by country:', error);
     res.status(500).json({ success: false, error: error.message });

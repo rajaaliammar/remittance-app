@@ -38,8 +38,9 @@ export const getManageContentByType = async (req, res) => {
     
     const { sectionType } = req.params;
 
-    const content = await prisma.manageContent.findUnique({
-      where: { sectionType }
+    const content = await prisma.manageContent.findFirst({
+      where: { sectionType },
+      orderBy: { updatedAt: 'desc' },
     });
 
     if (!content) {
@@ -82,22 +83,32 @@ export const upsertManageContent = async (req, res) => {
       });
     }
 
-    // Upsert: update if exists, create if not
-    const content = await prisma.manageContent.upsert({
+    const payload = {
+      englishData: englishData || {},
+      spanishData: spanishData ?? null,
+      images: images ?? null,
+      updatedAt: new Date(),
+    };
+
+    // findFirst + update/create — DB may lack unique index on sectionType (upsert would fail)
+    const existing = await prisma.manageContent.findFirst({
       where: { sectionType },
-      update: {
-        englishData: englishData || {},
-        spanishData: spanishData || null,
-        images: images || null,
-        updatedAt: new Date()
-      },
-      create: {
-        sectionType,
-        englishData: englishData || {},
-        spanishData: spanishData || null,
-        images: images || null
-      }
+      orderBy: { updatedAt: 'desc' },
     });
+
+    const content = existing
+      ? await prisma.manageContent.update({
+          where: { id: existing.id },
+          data: payload,
+        })
+      : await prisma.manageContent.create({
+          data: {
+            sectionType,
+            englishData: payload.englishData,
+            spanishData: payload.spanishData,
+            images: payload.images,
+          },
+        });
 
     res.json({
       success: true,
@@ -106,7 +117,7 @@ export const upsertManageContent = async (req, res) => {
     });
   } catch (error) {
     console.error('Error saving manage content:', error);
-    res.status(500).json({ success: false, error: error.message });
+    res.status(500).json({ success: false, message: error.message, error: error.message });
   }
 };
 

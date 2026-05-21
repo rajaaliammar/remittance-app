@@ -243,6 +243,27 @@ async function ensureCustomerNotificationsTable() {
   }
 }
 
+/** Prisma upsert on sectionType needs a unique DB constraint; add it if missing. */
+async function ensureManageContentSectionTypeUnique() {
+  try {
+    await prisma.$executeRawUnsafe(`
+      DELETE FROM "manage_content" mc
+      WHERE mc.id NOT IN (
+        SELECT DISTINCT ON ("sectionType") id
+        FROM "manage_content"
+        ORDER BY "sectionType", "updatedAt" DESC
+      )
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE UNIQUE INDEX IF NOT EXISTS "manage_content_sectionType_key"
+      ON "manage_content" ("sectionType")
+    `);
+    console.log('✅ manage_content.sectionType unique index ready');
+  } catch (e) {
+    console.warn('ensureManageContentSectionTypeUnique:', e.message);
+  }
+}
+
 // Handle Prisma Client connection (columns are ensured on first connect)
 prisma.$connect()
   .then(() => {
@@ -251,6 +272,7 @@ prisma.$connect()
   })
   .then(() => ensureCustomerNotificationsTable())
   .then(() => ensureComplianceColumnsAndTables())
+  .then(() => ensureManageContentSectionTypeUnique())
   .catch((error) => {
     console.error('❌ Failed to connect to database:', error);
   });
@@ -262,5 +284,6 @@ export {
   ensureRegistrationSettingsTable,
   ensureCustomerNotificationsTable,
   ensureComplianceColumnsAndTables,
+  ensureManageContentSectionTypeUnique,
 };
 

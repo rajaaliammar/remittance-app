@@ -140,10 +140,10 @@ export const autocomplete = async (req, res) => {
     });
 
     if (!selected && search.length < MIN_SEARCH_LENGTH) {
-      console.log('[AddressController] Search too short:', search.length);
-      return res.status(400).json({
-        success: false,
-        message: `Search must be at least ${MIN_SEARCH_LENGTH} characters`,
+      return res.json({
+        success: true,
+        suggestions: [],
+        message: `Type at least ${MIN_SEARCH_LENGTH} characters`,
       });
     }
     const params = new URLSearchParams();

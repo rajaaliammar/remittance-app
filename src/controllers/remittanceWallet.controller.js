@@ -1,5 +1,51 @@
 import prisma from '../utils/prisma.js';
 
+function parseAssignedCountries(raw) {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function countryMatchesAssignment(ac, country) {
+  const iso2 = String(country.iso2 || '').toUpperCase();
+  const iso3 = String(country.iso3 || '').toUpperCase();
+  const cur =
+    country.currencyCode != null
+      ? String(country.currencyCode).trim().toUpperCase()
+      : '';
+  const code = ac?.countryCode != null ? String(ac.countryCode).trim().toUpperCase() : '';
+  const name = ac?.country != null ? String(ac.country).trim() : '';
+  return (
+    code === iso2 ||
+    code === iso3 ||
+    (cur && code === cur) ||
+    ac.countryCode === country.id ||
+    name.toLowerCase() === String(country.name || '').trim().toLowerCase() ||
+    name.toUpperCase() === iso2
+  );
+}
+
+function resolveWalletDollarRate(wallet, country) {
+  const assigned = parseAssignedCountries(wallet.assignedCountries);
+  const row = assigned.find(
+    (ac) =>
+      countryMatchesAssignment(ac, country) &&
+      String(ac?.status ?? 'Active').toLowerCase() === 'active'
+  );
+  if (row?.dollarPrice != null && String(row.dollarPrice).trim() !== '') {
+    return String(row.dollarPrice);
+  }
+  return country.currencyRate != null ? String(country.currencyRate) : null;
+}
+
 // Get all remittance wallets
 export const getAllRemittanceWallets = async (req, res) => {
   try {
@@ -48,7 +94,14 @@ export const getWalletsByCountry = async (req, res) => {
     // Get the country to find its ISO2 code
     const country = await prisma.country.findUnique({
       where: { id: countryId },
-      select: { id: true, iso2: true, iso3: true, name: true }
+      select: {
+        id: true,
+        iso2: true,
+        iso3: true,
+        name: true,
+        currencyCode: true,
+        currencyRate: true,
+      },
     });
 
     if (!country) {
@@ -58,36 +111,22 @@ export const getWalletsByCountry = async (req, res) => {
       });
     }
 
-    // Get all active wallets
     const allWallets = await prisma.remittanceWallet.findMany({
       where: { active: true },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
     });
 
-    // Filter wallets that have this country in their assignedCountries
-    const walletsForCountry = allWallets.filter(wallet => {
-      if (!wallet.assignedCountries) return false;
-      
-      const assignedCountries = Array.isArray(wallet.assignedCountries) 
-        ? wallet.assignedCountries 
-        : [];
-      
-      // Check if country is assigned and status is Active
-      // Match by countryCode (ISO2), countryId, or country name
-      return assignedCountries.some(ac => {
-        const matchesCountry = 
-          ac.countryCode === country.iso2 || 
-          ac.countryCode === country.iso3 ||
-          ac.countryCode === country.id ||
-          ac.country === country.name ||
-          ac.country === country.iso2;
-        
-        return matchesCountry && ac.status === 'Active';
-      });
+    const walletsForCountry = allWallets.filter((wallet) => {
+      const assigned = parseAssignedCountries(wallet.assignedCountries);
+      if (!assigned.length) return true;
+      return assigned.some(
+        (ac) =>
+          countryMatchesAssignment(ac, country) &&
+          String(ac?.status ?? 'Active').toLowerCase() === 'active'
+      );
     });
 
-    // Format the response
-    const formattedWallets = walletsForCountry.map(wallet => ({
+    const formattedWallets = walletsForCountry.map((wallet) => ({
       id: wallet.id,
       name: wallet.name,
       logo: wallet.logo,
@@ -96,13 +135,45 @@ export const getWalletsByCountry = async (req, res) => {
       phoneNumber: wallet.phoneNumber,
       address: wallet.address,
       active: wallet.active,
-      assignedCountries: wallet.assignedCountries ? (Array.isArray(wallet.assignedCountries) ? wallet.assignedCountries : []) : []
+      dollarRate: resolveWalletDollarRate(wallet, country),
+      currencyCode: country.currencyCode || null,
+      assignedCountries: parseAssignedCountries(wallet.assignedCountries),
     }));
 
-    res.json({ success: true, data: formattedWallets });
+    res.json({
+      success: true,
+      data: formattedWallets,
+      country: {
+        id: country.id,
+        currencyCode: country.currencyCode || null,
+        currencyRate: country.currencyRate || null,
+      },
+    });
   } catch (error) {
     console.error('Error fetching wallets by country:', error);
     res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/** GET /api/remittance-wallets/:walletId/gifts — gift rules for wallet sends (portal-driven). */
+export const getWalletGiftRules = async (req, res) => {
+  try {
+    const { walletId } = req.params;
+    if (!walletId) {
+      return res.status(400).json({ success: false, message: 'Wallet ID is required' });
+    }
+    const wallet = await prisma.remittanceWallet.findUnique({
+      where: { id: walletId },
+      select: { id: true, active: true },
+    });
+    if (!wallet) {
+      return res.status(404).json({ success: false, message: 'Wallet not found' });
+    }
+    // Gift rules are stored per remittance bank in portal; wallet channel has no separate table yet.
+    return res.json({ success: true, data: [] });
+  } catch (error) {
+    console.error('Error fetching wallet gift rules:', error);
+    res.status(500).json({ success: false, message: error.message || 'Failed to fetch gift rules' });
   }
 };
 
@@ -274,6 +345,153 @@ export const deleteRemittanceWallet = async (req, res) => {
   }
 };
 
+function normalizeWalletNumber(value) {
+  return String(value || '').trim().replace(/\D/g, '');
+}
 
+async function lookupWalletHolderFromHistory({ walletId, accountNumber }) {
+  const normalized = normalizeWalletNumber(accountNumber);
+  if (!normalized) return null;
 
+  const recent = await prisma.remittanceTransaction.findMany({
+    where: {
+      transferType: 'wallet',
+      status: { in: ['Completed', 'Processing', 'Hold', 'Manual_Review'] },
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 200,
+    select: { recipientInfo: true },
+  });
+
+  for (const tx of recent) {
+    const ri = tx.recipientInfo;
+    if (!ri || typeof ri !== 'object') continue;
+    const acc = normalizeWalletNumber(ri.accountNumber || ri.phone);
+    if (acc !== normalized) continue;
+    const providerId = ri.walletId || ri.bankId;
+    if (walletId && providerId && providerId !== walletId) continue;
+    const name = String(ri.accountHolderName || ri.name || '').trim();
+    if (name && !/^recipient$/i.test(name) && !/^wallet recipient$/i.test(name)) {
+      return name;
+    }
+  }
+  return null;
+}
+
+/** POST /api/remittance-wallets/verify-account — resolve wallet holder name (same flow as bank verify). */
+export const verifyWalletAccount = async (req, res) => {
+  try {
+    const { walletId, accountNumber } = req.body || {};
+    const normalized = normalizeWalletNumber(accountNumber);
+
+    if (!walletId) {
+      return res.status(400).json({ success: false, message: 'Wallet is required' });
+    }
+    if (!normalized || normalized.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'Enter a valid wallet number (at least 6 digits)',
+      });
+    }
+
+    const wallet = await prisma.remittanceWallet.findUnique({ where: { id: walletId } });
+    if (!wallet) {
+      return res.status(404).json({ success: false, message: 'Wallet not found' });
+    }
+
+    const fromHistory = await lookupWalletHolderFromHistory({
+      walletId,
+      accountNumber: normalized,
+    });
+    if (fromHistory) {
+      return res.json({
+        success: true,
+        verified: true,
+        source: 'history',
+        accountHolderName: fromHistory,
+        accountNumber: normalized,
+        walletId: wallet.id,
+        walletName: wallet.name,
+        phone: normalized,
+      });
+    }
+
+    const verifyUrl = process.env.WALLET_ACCOUNT_VERIFY_URL || process.env.BANK_ACCOUNT_VERIFY_URL;
+    if (verifyUrl) {
+      try {
+        const headers = { 'Content-Type': 'application/json' };
+        if (process.env.WALLET_ACCOUNT_VERIFY_API_KEY || process.env.BANK_ACCOUNT_VERIFY_API_KEY) {
+          headers.Authorization = `Bearer ${process.env.WALLET_ACCOUNT_VERIFY_API_KEY || process.env.BANK_ACCOUNT_VERIFY_API_KEY}`;
+        }
+        const response = await fetch(verifyUrl, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            walletId: wallet.id,
+            walletName: wallet.name,
+            accountNumber: normalized,
+            countryId: req.body?.countryId || null,
+          }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (response.ok) {
+          const externalName = String(
+            data.accountHolderName || data.account_holder_name || data.name || ''
+          ).trim();
+          if (externalName) {
+            return res.json({
+              success: true,
+              verified: true,
+              source: 'provider',
+              accountHolderName: externalName,
+              accountNumber: normalized,
+              walletId: wallet.id,
+              walletName: wallet.name,
+              phone: String(data.phone || normalized),
+            });
+          }
+        }
+      } catch (extErr) {
+        console.error('[verifyWalletAccount] external provider error:', extErr.message);
+      }
+    }
+
+    const allowMock =
+      process.env.WALLET_ACCOUNT_VERIFY_MOCK === 'true' ||
+      process.env.BANK_ACCOUNT_VERIFY_MOCK === 'true' ||
+      process.env.NODE_ENV !== 'production';
+
+    if (allowMock) {
+      const demoNames = [
+        'Ahmed Khan',
+        'Fatima Ali',
+        'Hassan Raza',
+        'Ayesha Malik',
+        'Usman Sheikh',
+      ];
+      const idx =
+        parseInt(normalized.slice(-4) || '0', 10) % demoNames.length;
+      return res.json({
+        success: true,
+        verified: true,
+        source: 'mock',
+        accountHolderName: demoNames[idx],
+        accountNumber: normalized,
+        walletId: wallet.id,
+        walletName: wallet.name,
+        phone: normalized,
+      });
+    }
+
+    return res.status(404).json({
+      success: false,
+      verified: false,
+      message:
+        'Wallet number could not be verified. Check the number or try again.',
+    });
+  } catch (error) {
+    console.error('Error verifying wallet account:', error);
+    res.status(500).json({ success: false, message: error.message || 'Verification failed' });
+  }
+};
 

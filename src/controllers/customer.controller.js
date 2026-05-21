@@ -1890,6 +1890,113 @@ export const getTierAndLimits = async (req, res) => {
   }
 };
 
+/** Parse recipientInfo JSON from a remittance transaction row. */
+function parseRecipientInfoJson(raw) {
+  if (!raw) return {};
+  if (typeof raw === 'object') return raw;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Recent unique recipients from the customer's sent transfers (Send Again / Quick Transfer).
+ * GET /api/accounts/frequently-paid
+ */
+export const getFrequentlyPaid = async (req, res) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required',
+      });
+    }
+
+    const delegate = prisma.remittanceTransaction;
+    if (!delegate || typeof delegate.findMany !== 'function') {
+      return res.json({ success: true, data: [] });
+    }
+
+    const rows = await delegate.findMany({
+      where: {
+        customerId,
+        type: 'Sent',
+        status: {
+          notIn: ['Failed', 'Cancelled', 'Canceled', 'Refunded', 'Rejected'],
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 80,
+    });
+
+    const seen = new Map();
+    const contacts = [];
+
+    for (const row of rows) {
+      const ri = parseRecipientInfoJson(row.recipientInfo);
+      const accountNumber = String(ri.accountNumber || ri.phone || '').replace(/\D/g, '');
+      const name = String(
+        ri.accountHolderName ||
+          ri.recipientName ||
+          ri.name ||
+          ri.receiverName ||
+          ri.beneficiaryName ||
+          [ri.firstName, ri.lastName].filter(Boolean).join(' ') ||
+          ''
+      ).trim();
+      const beneficiaryKey = String(ri.beneficiaryKey || ri.beneficiaryId || '').trim();
+      const dedupeKey =
+        beneficiaryKey ||
+        (accountNumber || name ? `${accountNumber}|${name.toLowerCase()}` : '');
+      if (!dedupeKey || seen.has(dedupeKey)) continue;
+
+      const transferType =
+        String(row.transferType || ri.transferType || 'bank').toLowerCase() === 'wallet'
+          ? 'wallet'
+          : 'bank';
+
+      const contact = {
+        id: String(row.id),
+        name: name || 'Recipient',
+        accountHolderName: name || 'Recipient',
+        accountNumber: accountNumber || String(ri.accountNumber || ''),
+        phone: String(ri.phone || ri.accountNumber || ''),
+        countryCode: String(ri.countryCode || '').trim().toUpperCase() || undefined,
+        countryId: ri.countryId ? String(ri.countryId) : undefined,
+        bankId:
+          transferType === 'bank' && ri.bankId
+            ? String(ri.bankId)
+            : transferType === 'wallet' && (ri.walletId || ri.bankId)
+              ? String(ri.walletId || ri.bankId)
+              : undefined,
+        serviceProvider: String(ri.serviceProvider || ri.bankName || '').trim() || undefined,
+        transferType,
+        lastSentAt: row.createdAt,
+        lastAmount: Number(row.sendAmount) || 0,
+        currency: String(row.currency || 'USD'),
+      };
+
+      seen.set(dedupeKey, true);
+      contacts.push(contact);
+      if (contacts.length >= 12) break;
+    }
+
+    return res.json({
+      success: true,
+      data: contacts,
+    });
+  } catch (error) {
+    console.error('Error getting frequently paid contacts:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to get frequently paid contacts',
+    });
+  }
+};
+
 // Get consumed (used) limits for current period (daily, weekly, monthly) so app can show remaining
 export const getConsumedLimits = async (req, res) => {
   try {

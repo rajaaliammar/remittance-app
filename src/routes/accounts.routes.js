@@ -16,6 +16,7 @@ import {
   getVerifications,
   getTierAndLimits,
   getConsumedLimits,
+  getFrequentlyPaid,
   updatePushToken,
   reportDeviceInfo,
   getCustomerNotifications,
@@ -96,6 +97,10 @@ router.get('/tier-limits/', authenticateCustomer, getTierAndLimits);
 
 // Get consumed (used) limits for current period - app can show remaining
 router.get('/limits/consumed', authenticateCustomer, getConsumedLimits);
+
+// Recent recipients from completed sends (Send Again on home)
+router.get('/frequently-paid', authenticateCustomer, getFrequentlyPaid);
+router.get('/frequently-paid/', authenticateCustomer, getFrequentlyPaid);
 
 // Push notification token (requires authentication) - mobile app
 router.put('/push-token', authenticateCustomer, updatePushToken);
