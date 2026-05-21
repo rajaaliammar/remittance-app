@@ -1,4 +1,8 @@
 import https from 'https';
+import {
+  nominatimAutocomplete,
+  validatedFromSuggestion,
+} from '../services/addressFallback.js';
 
 const SMARTY_AUTOCOMPLETE_HOST = 'us-autocomplete-pro.api.smarty.com';
 const SMARTY_STREET_HOST = 'us-street.api.smarty.com';
@@ -7,9 +11,51 @@ const AUTOCOMPLETE_TIMEOUT_MS = 8000;
 const MIN_SEARCH_LENGTH = 3;
 const MAX_SEARCH_LENGTH = 200;
 
+function fallbackEnabled() {
+  const flag = (process.env.ADDRESS_FALLBACK_ENABLED ?? 'true').trim().toLowerCase();
+  return flag !== 'false' && flag !== '0';
+}
+
+async function autocompleteViaFallback(search) {
+  const suggestions = await nominatimAutocomplete(search);
+  console.log('[AddressController] Nominatim fallback suggestions:', suggestions.length);
+  return suggestions;
+}
+
 function sanitizeSearch(value) {
   if (typeof value !== 'string') return '';
   return value.trim().replace(/\s+/g, ' ').slice(0, MAX_SEARCH_LENGTH);
+}
+
+/** Human-readable line for mobile dropdowns. */
+function formatSuggestionLabel(item) {
+  if (!item || typeof item !== 'object') return '';
+  const street = [item.street_line, item.secondary].filter(Boolean).join(' ').trim();
+  const locality = [item.city, item.state, item.zipcode].filter(Boolean).join(', ');
+  return [street, locality].filter(Boolean).join(', ');
+}
+
+/** Smarty `selected` token when a suggestion has multiple units (entries > 1). */
+function buildSelectedToken(item) {
+  if (!item) return '';
+  const street = String(item.street_line || '').trim();
+  const secondary = String(item.secondary || '').trim();
+  const city = String(item.city || '').trim();
+  const state = String(item.state || '').trim();
+  const zip = String(item.zipcode || '').trim();
+  const entries = item.entries != null ? Number(item.entries) : 0;
+  if (!street || !city || !state) return '';
+  const entriesPart = entries > 1 ? ` (${entries})` : '';
+  return `${street}${secondary ? ` ${secondary}` : ''}${entriesPart} ${city} ${state} ${zip}`.trim();
+}
+
+function enrichSuggestions(list) {
+  return (Array.isArray(list) ? list : []).map((item) => ({
+    ...item,
+    formatted: formatSuggestionLabel(item),
+    selected: buildSelectedToken(item),
+    hasMultipleUnits: Number(item?.entries) > 1,
+  }));
 }
 
 function addSmartyAuth(params) {
@@ -84,10 +130,16 @@ function httpsGet(urlString, timeoutMs) {
 export const autocomplete = async (req, res) => {
   try {
     const raw = req.query?.search;
+    const rawSelected = req.query?.selected;
     const search = sanitizeSearch(raw ?? '');
-    console.log('[AddressController] Autocomplete request:', { search, length: search.length });
-    
-    if (search.length < MIN_SEARCH_LENGTH) {
+    const selected = sanitizeSearch(rawSelected ?? '');
+    console.log('[AddressController] Autocomplete request:', {
+      search,
+      selected: selected ? '(set)' : '',
+      length: search.length,
+    });
+
+    if (!selected && search.length < MIN_SEARCH_LENGTH) {
       console.log('[AddressController] Search too short:', search.length);
       return res.status(400).json({
         success: false,
@@ -95,15 +147,28 @@ export const autocomplete = async (req, res) => {
       });
     }
     const params = new URLSearchParams();
-    if (!addSmartyAuth(params)) {
-      console.error('[AddressController] ❌ SMARTY credentials not configured! Set SMARTY_AUTH_ID and SMARTY_AUTH_TOKEN in .env');
+    const hasSmartyAuth = addSmartyAuth(params);
+    if (!hasSmartyAuth) {
+      if (fallbackEnabled() && search.length >= MIN_SEARCH_LENGTH) {
+        const suggestions = await autocompleteViaFallback(search);
+        return res.json({
+          success: true,
+          suggestions,
+          provider: 'nominatim',
+        });
+      }
       return res.status(503).json({
         success: false,
-        message: 'Address service unavailable. SMARTY API credentials not configured.',
+        message: 'Address service unavailable. Configure SMARTY credentials or enable ADDRESS_FALLBACK_ENABLED.',
         suggestions: [],
       });
     }
-    params.set('search', search);
+    if (selected) {
+      params.set('selected', selected);
+      if (search) params.set('search', search);
+    } else {
+      params.set('search', search);
+    }
     const urlString = `https://${SMARTY_AUTOCOMPLETE_HOST}/lookup?${params.toString()}`;
     console.log('[AddressController] Calling Smarty API:', urlString.replace(/auth-id=[^&]+/g, 'auth-id=***').replace(/auth-token=[^&]+/g, 'auth-token=***'));
     
@@ -116,6 +181,16 @@ export const autocomplete = async (req, res) => {
       console.log('[AddressController] Smarty API response:', { statusCode, hasData: !!data, suggestionsCount: Array.isArray(data?.suggestions) ? data.suggestions.length : (Array.isArray(data) ? data.length : 0) });
     } catch (err) {
       console.error('[AddressController] ❌ Smarty API request failed:', err.message);
+      if (fallbackEnabled() && search.length >= MIN_SEARCH_LENGTH) {
+        try {
+          const suggestions = await autocompleteViaFallback(search);
+          if (suggestions.length > 0) {
+            return res.json({ success: true, suggestions, provider: 'nominatim' });
+          }
+        } catch (fbErr) {
+          console.error('[AddressController] Fallback failed:', fbErr.message);
+        }
+      }
       return res.status(502).json({
         success: false,
         message: 'Failed to connect to address service',
@@ -127,23 +202,30 @@ export const autocomplete = async (req, res) => {
       console.error('[AddressController] Response data:', JSON.stringify(data, null, 2));
       
       if (statusCode === 401 || statusCode === 402) {
-        const errorMsg = data?.message || data?.error || 'Authentication failed';
-        console.error('[AddressController] ❌ Authentication failed!');
-        console.error('[AddressController] This usually means:');
-        console.error('[AddressController]   1. SMARTY_AUTH_ID or SMARTY_AUTH_TOKEN is incorrect');
-        console.error('[AddressController]   2. Credentials are for wrong environment (test vs production)');
-        console.error('[AddressController]   3. Account is suspended or has no credits');
-        console.error('[AddressController] Check your credentials at: https://smarty.com/account/keys');
-        
+        const smartyMsg =
+          data?.errors?.[0]?.message || data?.message || 'Smarty subscription inactive';
+        console.warn('[AddressController] Smarty unavailable:', statusCode, smartyMsg);
+        if (fallbackEnabled() && search.length >= MIN_SEARCH_LENGTH) {
+          try {
+            const suggestions = await autocompleteViaFallback(search);
+            if (suggestions.length > 0) {
+              return res.json({
+                success: true,
+                suggestions,
+                provider: 'nominatim',
+                smartyStatus: statusCode,
+              });
+            }
+          } catch (fbErr) {
+            console.error('[AddressController] Fallback failed:', fbErr.message);
+          }
+        }
         return res.status(503).json({
           success: false,
-          message: `Address service authentication failed: ${errorMsg}. Please verify your SMARTY credentials in .env file.`,
+          message:
+            'US address lookup is temporarily unavailable. Enable US Autocomplete on your Smarty account, or try a more specific U.S. street search.',
           suggestions: [],
-          details: {
-            statusCode,
-            error: errorMsg,
-            hint: 'Check SMARTY_AUTH_ID and SMARTY_AUTH_TOKEN in your .env file, or get new credentials from https://smarty.com/account/keys',
-          },
+          details: { statusCode, smarty: smartyMsg },
         });
       }
       if (statusCode === 429) {
@@ -166,7 +248,12 @@ export const autocomplete = async (req, res) => {
         suggestions: [],
       });
     }
-    const suggestions = Array.isArray(data?.suggestions) ? data.suggestions : (Array.isArray(data) ? data : []);
+    const rawSuggestions = Array.isArray(data?.suggestions)
+      ? data.suggestions
+      : Array.isArray(data)
+        ? data
+        : [];
+    const suggestions = enrichSuggestions(rawSuggestions);
     const preview = suggestions.slice(0, 5).map((item, index) => ({
       index,
       street_line: item?.street_line || '',
@@ -197,10 +284,17 @@ export const autocomplete = async (req, res) => {
  */
 export const validate = async (req, res) => {
   try {
-    const { street, city, state } = req.body || {};
+    const { street, city, state, secondary, zipcode, zip } = req.body || {};
     const streetStr = typeof street === 'string' ? street.trim() : '';
     const cityStr = typeof city === 'string' ? city.trim() : '';
     const stateStr = typeof state === 'string' ? state.trim() : '';
+    const secondaryStr = typeof secondary === 'string' ? secondary.trim() : '';
+    const zipStr =
+      typeof zipcode === 'string'
+        ? zipcode.trim()
+        : typeof zip === 'string'
+          ? zip.trim()
+          : '';
     if (!streetStr || !cityStr || !stateStr) {
       return res.status(400).json({
         success: false,
@@ -215,16 +309,29 @@ export const validate = async (req, res) => {
       });
     }
     params.set('street', streetStr);
+    if (secondaryStr) params.set('secondary', secondaryStr);
     params.set('city', cityStr);
     params.set('state', stateStr);
+    if (zipStr) params.set('zipcode', zipStr);
     params.set('candidates', '1');
     const urlString = `https://${SMARTY_STREET_HOST}/street-address?${params.toString()}`;
     const { statusCode, data } = await httpsGet(urlString, VALIDATE_TIMEOUT_MS);
     if (statusCode !== 200) {
       if (statusCode === 401 || statusCode === 402) {
+        if (fallbackEnabled()) {
+          const validated = validatedFromSuggestion({
+            street_line: streetStr,
+            secondary: secondaryStr,
+            city: cityStr,
+            state: stateStr,
+            zipcode: zipStr,
+            source: 'nominatim',
+          });
+          return res.json({ success: true, data: validated, provider: 'nominatim' });
+        }
         return res.status(503).json({
           success: false,
-          message: 'Address service unavailable. Use Secret Key (SMARTY_AUTH_ID and SMARTY_AUTH_TOKEN) from smarty.com/account/keys for server-side.',
+          message: 'Address validation unavailable. Activate Smarty US Street API on your account.',
         });
       }
       if (statusCode === 429) {
@@ -251,11 +358,19 @@ export const validate = async (req, res) => {
       delivery_line_1: first.delivery_line_1 || '',
       delivery_line_2: first.delivery_line_2 || '',
       last_line: first.last_line || '',
-      street: first.delivery_line_1 || '',
-      city: components.city_name || '',
-      state: components.state_abbreviation || '',
-      zipcode: components.zipcode || '',
+      street: first.delivery_line_1 || streetStr,
+      secondary: first.delivery_line_2 || secondaryStr || '',
+      city: components.city_name || cityStr,
+      state: components.state_abbreviation || stateStr,
+      zipcode: components.zipcode || zipStr,
       plus4_code: components.plus4_code || '',
+      formatted: [
+        first.delivery_line_1,
+        first.delivery_line_2,
+        first.last_line,
+      ]
+        .filter(Boolean)
+        .join(', '),
     };
     return res.json({ success: true, data: validated });
   } catch (err) {

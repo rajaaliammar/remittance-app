@@ -180,6 +180,16 @@ model SourceOfFund {
   @@map("source_of_funds")
 }
 
+model EmploymentStatus {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  status    String   @default("Active")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("employment_statuses")
+}
+
 model RemittanceBank {
   id                    String   @id @default(cuid())
   name                  String

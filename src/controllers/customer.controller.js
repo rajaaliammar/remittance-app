@@ -2210,7 +2210,34 @@ export const getCustomerDeviceInfoByEmail = async (req, res) => {
     }
     const customer = await prisma.customer.findFirst({
       where: { email: email.trim() },
-      select: { lastDeviceInfo: true, lastLocation: true, lastSeenAt: true },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        middleName: true,
+        email: true,
+        phone: true,
+        telephone: true,
+        address: true,
+        unitApt: true,
+        city: true,
+        region: true,
+        zipCode: true,
+        country: true,
+        residentCountry: true,
+        nationality: true,
+        dateOfBirth: true,
+        gender: true,
+        placeOfBirth: true,
+        occupation: true,
+        sourceOfFund: true,
+        kycData: true,
+        availableBalance: true,
+        status: true,
+        lastDeviceInfo: true,
+        lastLocation: true,
+        lastSeenAt: true,
+      },
     });
     if (!customer) {
       return res.json({ success: true, data: {} });

@@ -91,10 +91,36 @@ async function main() {
 
   // Create default source of funds
   const defaultSourceOfFunds = [
-    { name: 'Pension/Retirement', status: 'Active' },
-    { name: 'Government Assistance', status: 'Active' },
-    { name: 'Freelance/Contractual Income', status: 'Active' },
+    { name: 'Salary or wages', status: 'Active' },
+    { name: 'Business income', status: 'Active' },
+    { name: 'Investments', status: 'Active' },
+    { name: 'Gift or inheritance', status: 'Active' },
+    { name: 'Savings', status: 'Active' },
+    { name: 'Other', status: 'Active' },
   ];
+
+  const defaultEmploymentStatuses = [
+    { name: 'Employed full-time', status: 'Active' },
+    { name: 'Self-employed', status: 'Active' },
+    { name: 'Student', status: 'Active' },
+    { name: 'Retired', status: 'Active' },
+    { name: 'Unemployed', status: 'Active' },
+    { name: 'Other', status: 'Active' },
+  ];
+
+  try {
+    for (const row of defaultEmploymentStatuses) {
+      const existing = await prisma.employmentStatus.findUnique({
+        where: { name: row.name },
+      });
+      if (!existing) {
+        await prisma.employmentStatus.create({ data: row });
+        console.log(`✅ Employment status created: ${row.name}`);
+      }
+    }
+  } catch (e) {
+    console.warn('ℹ️ Employment statuses seed skipped (run API or migrate first):', e.message);
+  }
 
   for (const sourceData of defaultSourceOfFunds) {
     const existingSource = await prisma.sourceOfFund.findUnique({

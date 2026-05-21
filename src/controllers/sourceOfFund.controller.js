@@ -1,8 +1,27 @@
 import prisma from '../utils/prisma.js';
 
+const DEFAULT_SOURCE_OF_FUNDS = [
+  'Salary or wages',
+  'Business income',
+  'Investments',
+  'Gift or inheritance',
+  'Savings',
+  'Other',
+];
+
+async function seedDefaultSourceOfFunds() {
+  const count = await prisma.sourceOfFund.count();
+  if (count > 0) return;
+  for (const name of DEFAULT_SOURCE_OF_FUNDS) {
+    await prisma.sourceOfFund.create({ data: { name, status: 'Active' } });
+  }
+}
+
 // Get all source of funds
 export const getAllSourceOfFunds = async (req, res) => {
   try {
+    await seedDefaultSourceOfFunds();
+
     const { search, status } = req.query;
 
     const where = {};

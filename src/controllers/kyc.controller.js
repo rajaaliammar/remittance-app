@@ -888,6 +888,9 @@ async function expandKycCountryTokens(countryCode) {
 
   mergeFamily(['USD', 'US', 'USA']);
   mergeFamily(['CAD', 'CA', 'CAN']);
+  mergeFamily(['INR', 'IN', 'IND']);
+  mergeFamily(['ETB', 'ET', 'ETH']);
+  mergeFamily(['GBP', 'GB', 'GBR']);
 
   if (c.length === 2 && /^[A-Z]{2}$/.test(c)) {
     try {
