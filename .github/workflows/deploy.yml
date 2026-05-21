@@ -1,0 +1,56 @@
+name: Backend Deploy via VPN
+
+on:
+  # workflow_run:
+    # workflows:
+    #   - Backend Test Build
+    # types:
+    #   - completed
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    # if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Connect runner to VPN
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openfortivpn
+
+          cat > vpn.conf << EOF
+          host = ${{ secrets.VPN_HOST }}
+          port = ${{ secrets.VPN_PORT }}
+          username = ${{ secrets.VPN_USERNAME }}
+          password = ${{ secrets.VPN_PASSWORD }}
+          trusted-cert = ${{ secrets.VPN_TRUSTED_CERT }}
+          EOF
+
+          sudo openfortivpn --config vpn.conf > vpn.log 2>&1 &
+          sleep 20
+          cat vpn.log
+
+      - name: Deploy backend on server over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.PORT }}
+          script: |
+            cd /var/www/html/Remittance_backend
+            git restore package-lock.json
+            git pull origin main
+
+            npm install
+
+            npx prisma generate
+            npx prisma migrate deploy
+            echo "y" | npx prisma db push
+
+            
+
+            pm2 restart api.remit
+
+            pm2 save
