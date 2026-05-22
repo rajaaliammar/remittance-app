@@ -3,6 +3,7 @@ import {
   listSessionRequests,
   getSessionRequest,
   removeSessionRequest,
+  findPendingSessionRequest,
 } from '../store/sessionRequestStore.js';
 import {
   claimChat,
@@ -128,6 +129,181 @@ export const sendMessage = async (req, res) => {
   }
 };
 
+/** Transactions where payment was sent (processing) or transfer is on compliance hold. */
+const CHAT_ELIGIBLE_TX_WHERE = {
+  OR: [
+    { status: { equals: 'Processing', mode: 'insensitive' } },
+    { status: { equals: 'Hold', mode: 'insensitive' } },
+    { status: { equals: 'Manual_Review', mode: 'insensitive' } },
+  ],
+};
+
+async function getChatEligibleCustomerIdSet() {
+  const transactions = await prisma.remittanceTransaction.findMany({
+    where: CHAT_ELIGIBLE_TX_WHERE,
+    orderBy: { createdAt: 'desc' },
+    select: { customerId: true },
+  });
+  const ids = new Set();
+  for (const t of transactions) {
+    if (t.customerId) ids.add(String(t.customerId));
+  }
+  return ids;
+}
+
+/**
+ * Customers who sent payment from the app and are processing or on hold (admin chat list).
+ */
+export const getChatEligibleCustomers = async (req, res) => {
+  try {
+    const backoffice = await prisma.backofficeUser.findUnique({
+      where: { id: req.userId },
+      select: { id: true, status: true },
+    });
+    if (!backoffice || backoffice.status !== 'approved') {
+      return res.status(403).json({ success: false, message: 'Admin access required' });
+    }
+
+    const search = String(req.query.search || '').trim();
+    const includeUserId = String(req.query.userId || '').trim();
+
+    const transactions = await prisma.remittanceTransaction.findMany({
+      where: CHAT_ELIGIBLE_TX_WHERE,
+      orderBy: { createdAt: 'desc' },
+      select: { customerId: true, status: true, id: true, createdAt: true },
+    });
+
+    const latestByCustomer = new Map();
+    for (const t of transactions) {
+      if (!t.customerId || latestByCustomer.has(t.customerId)) continue;
+      latestByCustomer.set(t.customerId, {
+        transactionId: t.id,
+        status: t.status,
+        createdAt: t.createdAt,
+      });
+    }
+
+    let ids = Array.from(latestByCustomer.keys());
+    if (ids.length === 0) {
+      return res.json({ success: true, data: [] });
+    }
+
+    const customerWhere = {
+      id: { in: ids },
+      ...(search
+        ? {
+            OR: [
+              { email: { contains: search, mode: 'insensitive' } },
+              { username: { contains: search, mode: 'insensitive' } },
+              { firstName: { contains: search, mode: 'insensitive' } },
+              { lastName: { contains: search, mode: 'insensitive' } },
+              { phone: { contains: search, mode: 'insensitive' } },
+            ],
+          }
+        : {}),
+    };
+
+    let customers = await prisma.customer.findMany({
+      where: customerWhere,
+      select: {
+        id: true,
+        email: true,
+        username: true,
+        firstName: true,
+        lastName: true,
+        phone: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (includeUserId && !customers.some((c) => c.id === includeUserId) && ids.includes(includeUserId)) {
+      const extra = await prisma.customer.findUnique({
+        where: { id: includeUserId },
+        select: {
+          id: true,
+          email: true,
+          username: true,
+          firstName: true,
+          lastName: true,
+          phone: true,
+        },
+      });
+      if (extra) customers = [extra, ...customers];
+    }
+
+    const data = customers.map((c) => {
+      const meta = latestByCustomer.get(c.id);
+      return {
+        ...c,
+        chatTransactionId: meta?.transactionId ?? null,
+        chatTransactionStatus: meta?.status ?? null,
+      };
+    });
+
+    return res.json({ success: true, data });
+  } catch (error) {
+    console.error('getChatEligibleCustomers error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+const CHAT_ENDED_CONTENT = '__CHAT_ENDED__';
+
+/**
+ * Customer: whether a new-session request is already pending for this support user.
+ */
+export const getMySessionRequestStatus = async (req, res) => {
+  try {
+    const userId = req.userId;
+    const supportUserId = req.query.supportUserId;
+    if (!supportUserId) {
+      return res.status(400).json({ success: false, message: 'supportUserId is required' });
+    }
+    const pending = findPendingSessionRequest(userId, supportUserId);
+    return res.json({
+      pending: !!pending,
+      requestId: pending?.requestId ?? null,
+    });
+  } catch (error) {
+    console.error('getMySessionRequestStatus error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/**
+ * Customer: whether the chat session with support is still open (not ended by admin).
+ */
+export const getMyChatSessionStatus = async (req, res) => {
+  try {
+    const userId = req.userId;
+    const supportUserId = req.query.supportUserId;
+    if (!supportUserId) {
+      return res.status(400).json({ success: false, message: 'supportUserId is required' });
+    }
+    const lastMessage = await prisma.message.findFirst({
+      where: {
+        OR: [
+          { senderId: userId, recipientId: String(supportUserId) },
+          { senderId: String(supportUserId), recipientId: userId },
+        ],
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { content: true, senderId: true },
+    });
+    const sessionEnded =
+      !!lastMessage &&
+      lastMessage.content === CHAT_ENDED_CONTENT &&
+      String(lastMessage.senderId) === String(supportUserId);
+    return res.json({
+      sessionEnded,
+      canChat: !sessionEnded,
+    });
+  } catch (error) {
+    console.error('getMyChatSessionStatus error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
 /**
  * List pending new-session requests (admin only). Used by portal to show approve/reject UI.
  */
@@ -140,7 +316,8 @@ export const getSessionRequests = async (req, res) => {
     if (!backoffice || backoffice.status !== 'approved') {
       return res.status(403).json({ success: false, message: 'Admin access required' });
     }
-    const list = listSessionRequests();
+    const eligibleIds = await getChatEligibleCustomerIdSet();
+    const list = listSessionRequests().filter((r) => eligibleIds.has(String(r.userId)));
     return res.json(list);
   } catch (error) {
     console.error('getSessionRequests error:', error);
@@ -179,8 +356,6 @@ export const approveSessionRequest = async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 };
-
-const CHAT_ENDED_CONTENT = '__CHAT_ENDED__';
 
 /**
  * Submit a rating for the most recently ended chat session (app user = recipient of support).
@@ -346,7 +521,8 @@ export const getMyConversations = async (req, res) => {
       const other = m.senderId === myId ? m.recipientId : m.senderId;
       customerIds.add(other);
     }
-    const ids = Array.from(customerIds);
+    const eligibleIds = await getChatEligibleCustomerIdSet();
+    const ids = Array.from(customerIds).filter((id) => eligibleIds.has(String(id)));
     if (ids.length === 0) {
       return res.json([]);
     }

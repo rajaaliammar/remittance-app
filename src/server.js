@@ -154,13 +154,17 @@ io.on('connection', (socket) => {
         return;
       }
       const entry = addSessionRequest({ userId, supportUserId });
-      io.emit('sessionRequestReceived', {
-        requestId: entry.requestId,
-        userId: entry.userId,
-        supportUserId: entry.supportUserId,
-        createdAt: entry.createdAt,
-      });
-      if (typeof callback === 'function') callback(null, { requestId: entry.requestId });
+      if (!entry.alreadyPending) {
+        io.emit('sessionRequestReceived', {
+          requestId: entry.requestId,
+          userId: entry.userId,
+          supportUserId: entry.supportUserId,
+          createdAt: entry.createdAt,
+        });
+      }
+      if (typeof callback === 'function') {
+        callback(null, { requestId: entry.requestId, alreadyPending: !!entry.alreadyPending });
+      }
       console.log('[Socket] New session request from user:', userId, 'requestId:', entry.requestId);
     } catch (err) {
       console.error('[Socket] requestNewSession error:', err);

@@ -5,7 +5,19 @@
 
 const sessionRequests = new Map();
 
+export function findPendingSessionRequest(userId, supportUserId) {
+  const uid = String(userId);
+  const sid = String(supportUserId);
+  for (const entry of sessionRequests.values()) {
+    if (entry.userId === uid && entry.supportUserId === sid) return entry;
+  }
+  return null;
+}
+
 export function addSessionRequest({ userId, supportUserId }) {
+  const existing = findPendingSessionRequest(userId, supportUserId);
+  if (existing) return { ...existing, alreadyPending: true };
+
   const requestId = `sreq_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
   const createdAt = new Date().toISOString();
   const entry = { requestId, userId: String(userId), supportUserId: String(supportUserId), createdAt };
