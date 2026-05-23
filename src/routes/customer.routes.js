@@ -14,6 +14,16 @@ import {
   deleteCustomer 
 } from '../controllers/customer.controller.js';
 import { authenticateToken } from '../middleware/auth.js';
+import {
+  getCustomerAmlStatus,
+  runCustomerAmlValidation,
+  getCustomerAmlCached,
+  onboardCustomerToAml,
+  clearCustomerAmlCase,
+  getCustomerAmlDocuments,
+  uploadCustomerAmlDocuments,
+  previewCustomerAmlDocuments,
+} from '../controllers/aml.controller.js';
 
 const router = express.Router();
 
@@ -26,6 +36,14 @@ router.post('/verify-otp', verifyOTP);
 // Protected routes (require authentication)
 router.get('/', authenticateToken, getAllCustomers);
 router.get('/device-info-by-email', authenticateToken, getCustomerDeviceInfoByEmail);
+router.get('/:id/aml/cached', authenticateToken, getCustomerAmlCached);
+router.get('/:id/aml/status', authenticateToken, getCustomerAmlStatus);
+router.get('/:id/aml/documents', authenticateToken, getCustomerAmlDocuments);
+router.get('/:id/aml/documents/preview', authenticateToken, previewCustomerAmlDocuments);
+router.post('/:id/aml/documents/upload', authenticateToken, uploadCustomerAmlDocuments);
+router.post('/:id/aml/validate', authenticateToken, runCustomerAmlValidation);
+router.post('/:id/aml/onboard', authenticateToken, onboardCustomerToAml);
+router.post('/:id/aml/case-clear', authenticateToken, clearCustomerAmlCase);
 router.get('/:id', authenticateToken, getCustomerById);
 router.post('/:id/send-notification', authenticateToken, sendNotificationToCustomer);
 router.patch('/:id', authenticateToken, updateCustomer);

@@ -26,6 +26,8 @@ curl -sS -X POST "$AML_BASE_URL/api/Auth/login" \
 Expected: JSON with `"token":"eyJ..."`.  
 If you see `"Invalid Credentials"` and HTTP 401, fix `.env` before using the portal AML buttons.
 
+**Important:** If your password contains `#`, wrap it in double quotes in `.env`, e.g. `AML_PASSWORD="123@45678#"`. Without quotes, everything after `#` is treated as a comment and the password is truncated.
+
 ## Console output
 
 On server start you will see:
@@ -52,8 +54,20 @@ Each API call logs e.g.:
 | GET | `/api/customers/:id/aml/status` | Live status from provider |
 | POST | `/api/customers/:id/aml/validate` | Run validation + sanctions/RBA |
 | POST | `/api/customers/:id/aml/onboard` | `POST /api/Customers/save` |
-| POST | `/api/customers/:id/aml/case-clear` | Clear compliance case |
-| GET | `/api/customers/:id/aml/documents` | List AML documents |
+| POST | `/api/customers/:id/aml/case-clear` | Clear compliance case (body: `{ "remarks": "..." }`) |
+| GET | `/api/customers/:id/aml/documents` | List AML documents (proxies `GET /api/Customers/documents?ClientNumber=…`) |
+| GET | `/api/customers/:id/aml/documents/preview` | Count KYC files available to upload |
+| POST | `/api/customers/:id/aml/documents/upload` | Upload KYC files from `/uploads/kyc` to AML (`POST /api/Customers/documents`) |
+
+Portal (`AmlComplianceCard`): **Submit to AML** → **Submit docs to AML** → **View AML documents**; **Clear AML case** when needed.
+
+### Why AML documents list is empty
+
+AML TMS does not receive app uploads automatically. After the customer completes KYC in the mobile app, an admin must:
+
+1. **Submit to AML** (creates the AML customer record)
+2. **Submit docs to AML** (reads ID/selfie/POA from `Customer.kycData` + files on disk, base64 upload to LiveEx)
+3. **View AML documents** to confirm
 
 AML client number defaults to `CS_{customerId}` (stored in `kycData.amlClientNumber` after first sync).
 

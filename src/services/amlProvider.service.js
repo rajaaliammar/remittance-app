@@ -236,7 +236,8 @@ async function amlRequest(method, path, body, retried = false) {
   if (!res.ok) {
     logError(`${label} — HTTP ${res.status}`, data);
     const err = new Error(
-      data?.message ||
+      data?.title ||
+        data?.message ||
         data?.messageDetails ||
         `AML API error (${res.status})`,
     );
@@ -273,6 +274,7 @@ export function logAmlStartupConfig() {
   console.log('[AML]   POST /api/customers/:id/aml/validate');
   console.log('[AML]   POST /api/customers/:id/aml/onboard');
   console.log('[AML]   POST /api/customers/:id/aml/case-clear');
+  console.log('[AML]   POST /api/customers/:id/aml/documents/upload');
   console.log('────────────────────────────────────────');
 }
 
@@ -306,11 +308,13 @@ export async function amlUploadDocuments(payload) {
   return amlRequest('POST', '/api/Customers/documents', payload);
 }
 
-export async function amlGetDocuments(clientNumber) {
-  return amlRequest(
-    'GET',
-    `/api/Customers/documents/${encodeURIComponent(clientNumber)}`,
-  );
+export async function amlGetDocuments(clientNumber, searchValue = '') {
+  const qs = new URLSearchParams();
+  qs.set('ClientNumber', clientNumber);
+  if (searchValue?.trim()) {
+    qs.set('SearchValue', searchValue.trim());
+  }
+  return amlRequest('GET', `/api/Customers/documents?${qs.toString()}`);
 }
 
 export async function amlClearCustomerCase(clientNumber, remarks) {

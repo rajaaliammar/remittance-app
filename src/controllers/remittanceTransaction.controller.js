@@ -21,6 +21,7 @@ import {
   createRemittanceCompleteJournal,
   createRemittanceRefundJournal,
 } from '../utils/ledgerService.js';
+import { notifyCustomerAsync } from '../utils/customerNotify.js';
 import {
   runComplianceRules,
   createComplianceAlerts,
@@ -618,6 +619,25 @@ export const createRemittanceTransaction = async (req, res) => {
       where: { id: transaction.id },
     });
 
+    const finalStatus = String((finalTransaction || transaction).status || 'Processing');
+    const holdActive = complianceHold || finalStatus.toLowerCase() === 'hold';
+    notifyCustomerAsync(
+      customerId,
+      {
+        title: holdActive ? 'Transfer under review' : 'Transfer submitted',
+        body: holdActive
+          ? 'Your transfer is being reviewed. We will notify you when it is updated.'
+          : `Your transfer of $${send.toFixed(2)} USD has been submitted and is being processed.`,
+        data: {
+          type: 'transaction',
+          screen: 'history',
+          transactionId: transaction.id,
+          status: finalStatus,
+        },
+      },
+      io
+    );
+
     res.status(201).json({
       success: true,
       data: {
@@ -883,6 +903,36 @@ export const updateRemittanceTransaction = async (req, res) => {
     if (io) {
       io.emit('accounting:updated');
       console.log('[Socket] Emitted accounting:updated after transaction update');
+    }
+
+    if (statusChanged && transaction.customerId) {
+      const statusLabel = String(status || updated.status || '');
+      let title = 'Transfer updated';
+      let body = `Your transfer status is now ${statusLabel}.`;
+      if (newStatus === 'completed') {
+        title = 'Transfer completed';
+        body = 'Your money transfer has been completed successfully.';
+      } else if (newStatus === 'hold' || newStatus === 'manual_review') {
+        title = 'Transfer under review';
+        body = 'Your transfer is under compliance review. We will notify you when it is updated.';
+      } else if (['failed', 'refunded', 'canceled', 'rejected'].includes(newStatus)) {
+        title = 'Transfer not completed';
+        body = `Your transfer could not be completed (status: ${statusLabel}).`;
+      }
+      notifyCustomerAsync(
+        transaction.customerId,
+        {
+          title,
+          body,
+          data: {
+            type: 'transaction',
+            screen: 'history',
+            transactionId: id,
+            status: statusLabel,
+          },
+        },
+        io
+      );
     }
 
     res.json({

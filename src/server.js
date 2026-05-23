@@ -17,6 +17,7 @@ import apiRoutes from './routes/index.js';
 import { addSessionRequest } from './store/sessionRequestStore.js';
 import { releaseChat } from './store/activeChatStore.js';
 import { ensureDefaultFaqs } from './utils/ensureDefaultFaqs.js';
+import { logAmlStartupConfig } from './services/amlProvider.service.js';
 
 // Get __dirname equivalent for ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -256,6 +257,7 @@ async function startServer() {
     console.log(`📊 Health check: http://localhost:${PORT}/health`);
     console.log(`🔗 API base: http://localhost:${PORT}/api`);
     console.log(`🔌 Socket.io: http://localhost:${PORT}`);
+    logAmlStartupConfig();
   });
 }
 startServer();

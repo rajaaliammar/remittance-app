@@ -15,6 +15,7 @@ import {
   startOfMonthUTC,
 } from '../utils/limitsHelper.js';
 import { sendPushToCustomer } from '../utils/push.js';
+import { notifyCustomerAsync } from '../utils/customerNotify.js';
 
 // Fallback dir that is always available (tmpdir) so uploads never fail with EACCES
 const TMPDIR_KYC = path.join(os.tmpdir(), 'remittance-kyc-uploads', 'kyc');
@@ -613,6 +614,19 @@ export const verifyOTP = async (req, res) => {
       derivedPhoneNumber = normalizedPhoneNumber;
     }
 
+    const io = req.app?.get?.('io');
+    notifyCustomerAsync(
+      customer.id,
+      {
+        title: customer.hasPin ? 'Signed in' : 'Phone verified',
+        body: customer.hasPin
+          ? 'You are signed in to OneZaPay.'
+          : 'Continue registration to finish setting up your account.',
+        data: { type: 'security', screen: customer.hasPin ? 'home' : 'register' },
+      },
+      io
+    );
+
     return res.status(200).json({
       success: true,
       message: 'OTP verified successfully',
@@ -701,6 +715,16 @@ export const loginWithPin = async (req, res) => {
         process.env.JWT_SECRET || 'your-secret-key-change-in-production',
         { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
       );
+      const io = req.app?.get?.('io');
+      notifyCustomerAsync(
+        customer.id,
+        {
+          title: 'Signed in',
+          body: 'Welcome back to OneZaPay.',
+          data: { type: 'security', screen: 'home' },
+        },
+        io
+      );
       return res.status(200).json({
         success: true,
         message: 'Login successful',
@@ -779,6 +803,17 @@ export const loginWithPin = async (req, res) => {
       },
       process.env.JWT_SECRET || 'your-secret-key-change-in-production',
       { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+    );
+
+    const io = req.app?.get?.('io');
+    notifyCustomerAsync(
+      customer.id,
+      {
+        title: 'Signed in',
+        body: 'Welcome back to OneZaPay.',
+        data: { type: 'security', screen: 'home' },
+      },
+      io
     );
 
     return res.status(200).json({
