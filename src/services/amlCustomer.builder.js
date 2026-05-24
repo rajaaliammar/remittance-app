@@ -1,4 +1,5 @@
 import { toAmlDate, resolveAmlClientNumber } from './amlProvider.service.js';
+import { pickKycFieldFromCustomer } from '../utils/amlKycData.js';
 import {
   AML_DEFAULTS,
   normalizeCountryCode,
@@ -9,14 +10,6 @@ import {
   resolveSourceOfFund,
   formatAmlPhone,
 } from './amlFieldCodes.js';
-
-function pickKycField(kyc, ...keys) {
-  for (const key of keys) {
-    const val = kyc?.[key];
-    if (val != null && String(val).trim()) return String(val).trim();
-  }
-  return null;
-}
 
 /**
  * Build AML Natural Person save payload from Remittance Customer record.
@@ -36,34 +29,48 @@ export function buildNaturalCustomerSavePayload(customer) {
     new Date(todayDate.getFullYear() + 10, todayDate.getMonth(), todayDate.getDate()),
   );
 
-  const kyc =
-    customer.kycData && typeof customer.kycData === 'object'
-      ? customer.kycData
-      : {};
-
   const countryCode = normalizeCountryCode(
     customer.country || customer.nationality || customer.residentCountry || 'US',
   );
   const citizenship = normalizeCountryCode(
-    customer.nationality || kyc.citizenship || countryCode,
+    customer.nationality ||
+      pickKycFieldFromCustomer(customer, 'citizenship', 'nationality') ||
+      countryCode,
   );
 
   const identifier =
-    pickKycField(kyc, 'ssn', 'government_id', 'cnic', 'passportNumber', 'passport', 'documentNumber') ||
-    clientNumber;
+    pickKycFieldFromCustomer(
+      customer,
+      'ssn',
+      'government_id',
+      'cnic',
+      'passportNumber',
+      'passport',
+      'documentNumber',
+    ) || clientNumber;
 
   const streetAddress =
     customer.address ||
-    pickKycField(kyc, 'address', 'street_address') ||
+    pickKycFieldFromCustomer(customer, 'address', 'street_address') ||
     'Not Provided';
-  const postalCode = customer.zipCode || pickKycField(kyc, 'zipCode', 'zip_code') || '00000';
-  const city = customer.city || pickKycField(kyc, 'city') || 'Unknown';
-  const region = customer.region || pickKycField(kyc, 'region', 'state') || 'NA';
-  const profession = customer.occupation || pickKycField(kyc, 'occupation', 'profession') || 'Other';
+  const postalCode =
+    customer.zipCode ||
+    pickKycFieldFromCustomer(customer, 'zipCode', 'zip_code') ||
+    '00000';
+  const city = customer.city || pickKycFieldFromCustomer(customer, 'city') || 'Unknown';
+  const region =
+    customer.region || pickKycFieldFromCustomer(customer, 'region', 'state') || 'NA';
+  const profession =
+    customer.occupation ||
+    pickKycFieldFromCustomer(customer, 'occupation', 'profession') ||
+    'Other';
   const phoneRaw = customer.phone || customer.telephone || '0000000000';
   const phone = formatAmlPhone(phoneRaw, countryCode);
-  const ssn = pickKycField(kyc, 'ssn') || (countryCode === 'US' ? String(identifier).replace(/-/g, '') : 'N/A');
-  const employerName = pickKycField(kyc, 'employer') || profession || 'Self Employed';
+  const ssn =
+    pickKycFieldFromCustomer(customer, 'ssn') ||
+    (countryCode === 'US' ? String(identifier).replace(/-/g, '') : 'N/A');
+  const employerName =
+    pickKycFieldFromCustomer(customer, 'employer') || profession || 'Self Employed';
 
   const obj_CS_N = {
     csClientNumber: clientNumber,
@@ -75,7 +82,10 @@ export function buildNaturalCustomerSavePayload(customer) {
     csCountryOfBirth: citizenship,
     csCountryOfDualNationality: citizenship,
     csCountry: countryCode,
-    csNIdentifier: resolveIdentifierType(kyc, countryCode),
+    csNIdentifier: resolveIdentifierType(
+      { id_type: pickKycFieldFromCustomer(customer, 'id_type') },
+      countryCode,
+    ),
     csIdentifierNumber: String(identifier).replace(/-/g, ''),
     csIdentifierOtherDescription: 'N/A',
     csSinNumber: ssn,
@@ -103,7 +113,10 @@ export function buildNaturalCustomerSavePayload(customer) {
     csIndustryType: AML_DEFAULTS.industryType,
     csBusinessPurpose: AML_DEFAULTS.businessPurpose,
     csBusinessPurposeOther: 'International remittance',
-    csSourceOfFund: resolveSourceOfFund(customer.sourceOfFund || kyc.source_of_fund),
+    csSourceOfFund: resolveSourceOfFund(
+      customer.sourceOfFund ||
+        pickKycFieldFromCustomer(customer, 'source_of_fund', 'sourceOfFund'),
+    ),
     csTypesOfServices: AML_DEFAULTS.typesOfServices,
     csDeliveryChannel: AML_DEFAULTS.deliveryChannel,
     csNClientStatus: AML_DEFAULTS.clientStatus,

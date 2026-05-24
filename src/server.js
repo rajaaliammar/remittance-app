@@ -17,7 +17,10 @@ import apiRoutes from './routes/index.js';
 import { addSessionRequest } from './store/sessionRequestStore.js';
 import { releaseChat } from './store/activeChatStore.js';
 import { ensureDefaultFaqs } from './utils/ensureDefaultFaqs.js';
-import { logAmlStartupConfig } from './services/amlProvider.service.js';
+import {
+  logAmlStartupConfig,
+  verifyAmlConnectionAtStartup,
+} from './services/amlProvider.service.js';
 
 // Get __dirname equivalent for ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -258,6 +261,16 @@ async function startServer() {
     console.log(`🔗 API base: http://localhost:${PORT}/api`);
     console.log(`🔌 Socket.io: http://localhost:${PORT}`);
     logAmlStartupConfig();
+    void verifyAmlConnectionAtStartup().then((result) => {
+      if (result.ok) {
+        console.log('[AML] Startup login OK — token ready for onboard/save');
+      } else {
+        console.error(
+          `[AML] Startup login FAILED: ${result.reason}\n` +
+            '       Fix AML_CODE, AML_USERNAME, AML_PASSWORD in .env (quote passwords with #), then restart.',
+        );
+      }
+    });
   });
 }
 startServer();

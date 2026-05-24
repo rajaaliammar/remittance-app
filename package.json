@@ -13,7 +13,8 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "prisma:seed": "node prisma/seed.js",
-    "firebase:setup": "bash ./install-firebase-key.sh"
+    "firebase:setup": "bash ./install-firebase-key.sh",
+    "aml:verify": "node scripts/verify-aml.js"
   },
   "keywords": [
     "express",

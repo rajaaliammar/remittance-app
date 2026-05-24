@@ -1,10 +1,12 @@
 import fs from 'fs';
 import path from 'path';
 import { getUploadsBase, getKycUploadDir } from '../utils/uploadPath.js';
-import { toAmlDate, resolveAmlClientNumber } from './amlProvider.service.js';
+import { resolveAmlClientNumber } from './amlProvider.service.js';
+import { pickKycFieldFromCustomer } from '../utils/amlKycData.js';
 
 const URL_FIELD_HINTS = [
   'id_document_url',
+  'id_document_back_url',
   'selfie_url',
   'proof_of_address_url',
   'fileUrl',
@@ -13,31 +15,54 @@ const URL_FIELD_HINTS = [
   'documentUrl',
 ];
 
-function pickKycField(kyc, ...keys) {
-  for (const key of keys) {
-    const val = kyc?.[key];
-    if (val != null && String(val).trim()) return String(val).trim();
-  }
-  return null;
-}
+/**
+ * POST /api/Customers/documents expects string labels (see AML API docs), e.g. "Passport".
+ * Dates must be yyyy-MM-dd (e.g. "2024-01-15"), not dd/MM/yyyy.
+ */
+const AML_DOC_TYPE_LABEL = {
+  id_front: 'Passport',
+  id_back: 'Government ID',
+  selfie: 'Other',
+  poa: 'Proof of Address',
+  default: 'Government ID',
+};
 
-function mapAmlDocumentType(fieldName) {
+const CANONICAL_UPLOAD_ORDER = [
+  'id_document_url',
+  'id_document_back_url',
+  'selfie_url',
+  'proof_of_address_url',
+];
+
+function categorizeField(fieldName) {
   const n = String(fieldName || '').toLowerCase();
-  if (n.includes('passport')) return 'Passport';
-  if (n.includes('selfie')) return 'Selfie';
-  if (n.includes('proof') || n.includes('address') || n.includes('poa')) {
-    return 'Proof of Address';
-  }
-  if (n.includes('back')) return 'ID Card Back';
+  if (n.includes('selfie')) return 'selfie';
+  if (n.includes('proof') || n.includes('address') || n.includes('poa')) return 'poa';
+  if (n.includes('back')) return 'id_back';
   if (
     n.includes('front') ||
     n.includes('id_document') ||
-    n.includes('license') ||
-    n.includes('government')
+    n.includes('passport') ||
+    n.includes('license')
   ) {
-    return 'Passport';
+    return 'id_front';
   }
-  return 'Government ID';
+  return 'default';
+}
+
+function mapAmlDocumentTypeLabel(fieldName) {
+  const cat = categorizeField(fieldName);
+  return AML_DOC_TYPE_LABEL[cat] || AML_DOC_TYPE_LABEL.default;
+}
+
+/** ISO date yyyy-MM-dd for Customer Doc Upload API */
+export function toAmlDocumentDateIso(input) {
+  const d = input instanceof Date ? input : new Date(input);
+  if (Number.isNaN(d.getTime())) return '2020-01-01';
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 function resolveLocalFilePath(fileUrl) {
@@ -88,22 +113,52 @@ async function readUrlAsBase64(fileUrl) {
   return null;
 }
 
+/** @deprecated Customer save uses dd/MM/yyyy; document upload uses ISO — see toAmlDocumentDateIso */
+export function toAmlDocumentDate(input) {
+  return toAmlDocumentDateIso(input);
+}
+
+/** Document number must be numeric-friendly for AML (avoid CS_ client ids). */
+export function resolveAmlDocumentNumber(customer, clientNumber) {
+  const fromKyc = pickKycFieldFromCustomer(
+    customer,
+    'passportNumber',
+    'documentNumber',
+    'government_id',
+    'ssn',
+    'cnic',
+  );
+  if (fromKyc) {
+    const alnum = fromKyc.replace(/[^a-zA-Z0-9]/g, '').slice(0, 25);
+    if (alnum.length >= 4) return alnum;
+  }
+
+  const idSuffix = String(customer?.id || '')
+    .replace(/[^a-zA-Z0-9]/g, '')
+    .slice(-9);
+  if (idSuffix.length >= 6) return `P${idSuffix}`;
+
+  return 'P100000001';
+}
+
 /**
  * Collect KYC file references from Customer.kycData (array or object shapes).
+ * Dedupes URLs and prefers canonical registration fields (max 4 docs).
  */
 export function collectKycFilesForAml(customer) {
   const items = [];
   const seen = new Set();
 
-  const add = (fieldName, fileUrl, meta = {}) => {
+  const add = (fieldName, fileUrl) => {
     const url = String(fileUrl || '').trim();
     if (!url || seen.has(url)) return;
+    if (!url.includes('/')) return;
     seen.add(url);
     items.push({
       fieldName,
       fileUrl: url,
-      documentType: mapAmlDocumentType(fieldName),
-      ...meta,
+      documentType: mapAmlDocumentTypeLabel(fieldName),
+      category: categorizeField(fieldName),
     });
   };
 
@@ -140,7 +195,40 @@ export function collectKycFilesForAml(customer) {
     }
   }
 
-  return items;
+  const byField = new Map(items.map((i) => [i.fieldName, i]));
+  const prioritized = [];
+
+  for (const fieldName of CANONICAL_UPLOAD_ORDER) {
+    const hit = byField.get(fieldName);
+    if (hit) prioritized.push(hit);
+  }
+
+  const used = new Set(prioritized.map((p) => p.fileUrl));
+  for (const item of items) {
+    if (!used.has(item.fileUrl)) {
+      prioritized.push(item);
+      used.add(item.fileUrl);
+    }
+  }
+
+  const byCategory = new Map();
+  const canonical = [];
+  for (const item of prioritized) {
+    const cat = item.category || 'default';
+    if (!byCategory.has(cat)) {
+      byCategory.set(cat, item);
+      canonical.push(item);
+    }
+  }
+
+  return canonical;
+}
+
+export function isAmlProviderErrorResponse(raw) {
+  if (!raw || typeof raw !== 'object') return false;
+  if (raw.isError) return true;
+  const msg = String(raw.message || raw.messageDetails || raw.title || '');
+  return /error|failed|invalid|exception/i.test(msg);
 }
 
 /**
@@ -148,14 +236,7 @@ export function collectKycFilesForAml(customer) {
  */
 export async function buildAmlDocumentsUploadPayload(customer) {
   const clientNumber = resolveAmlClientNumber(customer);
-  const kyc =
-    customer.kycData && typeof customer.kycData === 'object' && !Array.isArray(customer.kycData)
-      ? customer.kycData
-      : {};
-
-  const documentNo =
-    pickKycField(kyc, 'passportNumber', 'documentNumber', 'ssn', 'government_id') ||
-    clientNumber;
+  const documentNo = resolveAmlDocumentNumber(customer, clientNumber);
 
   const today = new Date();
   const issue = new Date(today);
@@ -163,8 +244,8 @@ export async function buildAmlDocumentsUploadPayload(customer) {
   const expiry = new Date(today);
   expiry.setFullYear(expiry.getFullYear() + 5);
 
-  const issueStr = toAmlDate(issue);
-  const expiryStr = toAmlDate(expiry);
+  const issueStr = toAmlDocumentDateIso(issue);
+  const expiryStr = toAmlDocumentDateIso(expiry);
 
   const sources = collectKycFilesForAml(customer);
   const obj_Docs = [];
@@ -185,8 +266,8 @@ export async function buildAmlDocumentsUploadPayload(customer) {
         docs_DocumentNo: documentNo,
         docs_DocumentIssueDate: issueStr,
         docs_DocumentExpiryDate: expiryStr,
-        docs_MasterDetails: `Uploaded from Remittance KYC (${src.fieldName})`,
-        docs_Remarks: 'Submitted via Remittance portal',
+        docs_MasterDetails: `Passport copy uploaded for verification (${src.fieldName})`,
+        docs_Remarks: 'Submitted via OneZaPay registration',
         docs_Name: fileName || 'document.jpg',
         docs_Base64: base64,
         docs_Filepath: `Uploads/${fileName || 'document.jpg'}`,
@@ -208,6 +289,9 @@ export async function buildAmlDocumentsUploadPayload(customer) {
     obj_Docs,
     skipped,
     sources,
+    documentNo,
+    issueStr,
+    expiryStr,
   };
 }
 

@@ -126,3 +126,19 @@ export async function getApprovedKYCMaxAmount(customerId) {
   }
   return maxAllowed;
 }
+
+/**
+ * Lowest per-transaction cap among active user-facing KYC forms (entry-level limit).
+ */
+export async function getMinimumActiveKycMaxAmount() {
+  if (!prisma.kYCForm) return null;
+  const forms = await prisma.kYCForm.findMany({
+    where: { status: { in: ['Active', 'active'] } },
+    select: { maxAmount: true, for: true },
+  });
+  const amounts = forms
+    .filter((f) => String(f.for ?? 'User').trim().toLowerCase() !== 'merchant')
+    .map((f) => (f.maxAmount != null ? Number(f.maxAmount) : null))
+    .filter((n) => n != null && Number.isFinite(n) && n > 0);
+  return amounts.length ? Math.min(...amounts) : null;
+}

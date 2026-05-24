@@ -24,6 +24,11 @@ import {
   uploadKYC
 } from '../controllers/customer.controller.js';
 import { calculateCharge } from '../controllers/charge.controller.js';
+import {
+  customerAmlOnboard,
+  customerAmlUploadDocuments,
+  customerAmlSync,
+} from '../controllers/aml.controller.js';
 import { authenticateCustomer } from '../middleware/customerAuth.js';
 
 const router = express.Router();
@@ -70,6 +75,14 @@ router.post('/upload-kyc/', authenticateCustomer, upload.fields([
 // Save KYC details from app (writes to Customer.kycData for Verifications screen)
 router.post('/kyc-details', authenticateCustomer, saveKycDetails);
 router.post('/kyc-details/', authenticateCustomer, saveKycDetails);
+
+// AML — mobile app compliance screen (uses KYC docs from registration)
+router.post('/aml/onboard', authenticateCustomer, customerAmlOnboard);
+router.post('/aml/onboard/', authenticateCustomer, customerAmlOnboard);
+router.post('/aml/documents/upload', authenticateCustomer, customerAmlUploadDocuments);
+router.post('/aml/documents/upload/', authenticateCustomer, customerAmlUploadDocuments);
+router.post('/aml-sync', authenticateCustomer, customerAmlSync);
+router.post('/aml-sync/', authenticateCustomer, customerAmlSync);
 
 // Set PIN (requires authentication)
 router.post('/set-pin', authenticateCustomer, setPin);

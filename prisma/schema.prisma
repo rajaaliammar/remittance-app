@@ -786,6 +786,21 @@ model FAQ {
   @@map("faqs")
 }
 
+/// In-app legal tabs: privacy, terms, compliance (managed from portal)
+model LegalDocument {
+  id            String    @id @default(cuid())
+  docType       String    @unique // privacy | terms | compliance
+  title         String
+  sections      Json      // [{ h: string, p: string }]
+  effectiveDate DateTime?
+  contactEmail  String    @default("legal@onezapay.com")
+  status        String    @default("published") // published | draft
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@map("legal_documents")
+}
+
 model TaxFee {
   id          String   @id @default(cuid())
   name        String

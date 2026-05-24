@@ -10,6 +10,7 @@ import {
   getCustomerLimits,
   getSentInPeriod,
   getApprovedKYCMaxAmount,
+  getMinimumActiveKycMaxAmount,
   startOfDayUTC,
   startOfWeekUTC,
   startOfMonthUTC,
@@ -1899,9 +1900,10 @@ export const getTierAndLimits = async (req, res) => {
         message: 'Authentication required',
       });
     }
-    const [limits, kycMaxTransactionAmount] = await Promise.all([
+    const [limits, kycMaxTransactionAmount, minimumKycMaxAmount] = await Promise.all([
       getCustomerLimits(customerId),
       getApprovedKYCMaxAmount(customerId),
+      getMinimumActiveKycMaxAmount(),
     ]);
     const baseData = {
       levelId: limits?.levelId ?? null,
@@ -1911,6 +1913,8 @@ export const getTierAndLimits = async (req, res) => {
       monthly: limits?.monthly ?? null,
       currency: limits?.currency ?? 'USD',
       kycMaxTransactionAmount: kycMaxTransactionAmount != null ? Number(kycMaxTransactionAmount) : null,
+      minimumKycMaxAmount:
+        minimumKycMaxAmount != null ? Number(minimumKycMaxAmount) : null,
     };
     return res.json({
       success: true,

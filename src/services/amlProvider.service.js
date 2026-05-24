@@ -3,13 +3,23 @@
  * Docs: https://amlhlep.com/UET_TMSSwaggerAPI
  */
 
-const AML_BASE_URL =
-  process.env.AML_BASE_URL || 'https://amlhlep.com/UET_TMSSwaggerAPI';
-const AML_CODE = parseInt(process.env.AML_CODE || '9001', 10);
-const AML_USERNAME = process.env.AML_USERNAME || '';
-const AML_PASSWORD = process.env.AML_PASSWORD || '';
 const AML_TIMEOUT_MS = parseInt(process.env.AML_REQUEST_TIMEOUT_MS || '30000', 10);
 const AML_LOG = process.env.AML_LOG !== 'false';
+
+/** Read from process.env when used (not at import) so .env changes apply after restart. */
+function amlConfig() {
+  return {
+    baseUrl: process.env.AML_BASE_URL || 'https://amlhlep.com/UET_TMSSwaggerAPI',
+    code: parseInt(process.env.AML_CODE || '9001', 10),
+    username: process.env.AML_USERNAME || '',
+    password: process.env.AML_PASSWORD || '',
+  };
+}
+
+function clearAmlTokenCache() {
+  cachedToken = null;
+  tokenExpiresAt = 0;
+}
 
 let cachedToken = null;
 let tokenExpiresAt = 0;
@@ -45,9 +55,17 @@ export function toAmlDate(input) {
 }
 
 export function resolveAmlClientNumber(customer) {
-  const kyc = customer?.kycData && typeof customer.kycData === 'object' ? customer.kycData : {};
-  if (kyc.amlClientNumber) return String(kyc.amlClientNumber);
-  if (kyc.aml?.clientNumber) return String(kyc.aml.clientNumber);
+  const raw = customer?.kycData;
+  if (Array.isArray(raw)) {
+    for (let i = raw.length - 1; i >= 0; i -= 1) {
+      const entry = raw[i];
+      if (entry?.amlClientNumber) return String(entry.amlClientNumber);
+      if (entry?.aml?.clientNumber) return String(entry.aml.clientNumber);
+    }
+  } else if (raw && typeof raw === 'object') {
+    if (raw.amlClientNumber) return String(raw.amlClientNumber);
+    if (raw.aml?.clientNumber) return String(raw.aml.clientNumber);
+  }
   return `CS_${String(customer.id).replace(/[^a-zA-Z0-9]/g, '').slice(0, 12)}`;
 }
 
@@ -141,17 +159,23 @@ function extractTokenFromLoginBody(data, rawText) {
 }
 
 async function loginAml() {
+  const { baseUrl, code, username, password } = amlConfig();
+  if (!username?.trim() || !password) {
+    throw new Error(
+      'AML credentials missing. Set AML_USERNAME and AML_PASSWORD in Remittance_backend/.env (quote passwords containing #).',
+    );
+  }
   log('POST /api/Auth/login — authenticating…');
-  const res = await fetchWithTimeout(`${AML_BASE_URL}/api/Auth/login`, {
+  const res = await fetchWithTimeout(`${baseUrl}/api/Auth/login`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       accept: 'application/json',
     },
     body: JSON.stringify({
-      Code: AML_CODE,
-      User_Name: AML_USERNAME,
-      Password: AML_PASSWORD,
+      Code: code,
+      User_Name: username,
+      Password: password,
     }),
   });
 
@@ -198,9 +222,15 @@ async function getAmlToken() {
   return loginAml();
 }
 
+function isAmlAuthorizationFailed(data) {
+  const msg = String(data?.message || '').toLowerCase();
+  return Boolean(data?.isError) && msg.includes('authorization failed');
+}
+
 async function amlRequest(method, path, body, retried = false) {
+  const { baseUrl } = amlConfig();
   const token = await getAmlToken();
-  const url = `${AML_BASE_URL}${path.startsWith('/') ? path : `/${path}`}`;
+  const url = `${baseUrl}${path.startsWith('/') ? path : `/${path}`}`;
   const label = `${method} ${path}`;
 
   log(`${label} — request`);
@@ -220,8 +250,7 @@ async function amlRequest(method, path, body, retried = false) {
 
   if (res.status === 401 && !retried) {
     log(`${label} — 401, refreshing token…`);
-    cachedToken = null;
-    tokenExpiresAt = 0;
+    clearAmlTokenCache();
     return amlRequest(method, path, body, true);
   }
 
@@ -231,6 +260,12 @@ async function amlRequest(method, path, body, retried = false) {
     data = text ? JSON.parse(text) : {};
   } catch {
     data = text === 'true' || text === 'false' ? text === 'true' : { raw: text };
+  }
+
+  if (isAmlAuthorizationFailed(data) && !retried) {
+    log(`${label} — provider Authorization Failed, refreshing token and retrying…`);
+    clearAmlTokenCache();
+    return amlRequest(method, path, body, true);
   }
 
   if (!res.ok) {
@@ -261,13 +296,19 @@ async function amlRequest(method, path, body, retried = false) {
 }
 
 export function logAmlStartupConfig() {
-  const configured = Boolean(AML_USERNAME && AML_PASSWORD);
+  const { baseUrl, code, username, password } = amlConfig();
+  const configured = Boolean(username && password);
   console.log('────────────────────────────────────────');
   console.log('[AML] LiveEx TMS integration (Remittance_backend)');
-  console.log(`[AML] Base URL: ${AML_BASE_URL}`);
-  console.log(`[AML] Code: ${AML_CODE} | User: ${AML_USERNAME || '(not set)'}`);
+  console.log(`[AML] Base URL: ${baseUrl}`);
+  console.log(`[AML] Code: ${code} | User: ${username || '(not set)'}`);
+  if (password && !password.includes('#') && password.length < 12) {
+    console.warn(
+      '[AML] Tip: if your password contains #, use AML_PASSWORD="your#password" in .env',
+    );
+  }
   console.log(
-    `[AML] Status: ${configured ? 'CONFIGURED — ready' : 'MISSING CREDENTIALS — set AML_USERNAME/AML_PASSWORD in .env'}`,
+    `[AML] Status: ${configured ? 'CONFIGURED — verifying login…' : 'MISSING CREDENTIALS — set AML_USERNAME/AML_PASSWORD in .env'}`,
   );
   console.log('[AML] Portal routes:');
   console.log('[AML]   GET  /api/customers/:id/aml/status');
@@ -276,6 +317,21 @@ export function logAmlStartupConfig() {
   console.log('[AML]   POST /api/customers/:id/aml/case-clear');
   console.log('[AML]   POST /api/customers/:id/aml/documents/upload');
   console.log('────────────────────────────────────────');
+}
+
+/** Login once at startup so bad .env or stale tokens fail early, not on first signup. */
+export async function verifyAmlConnectionAtStartup() {
+  const { username, password } = amlConfig();
+  if (!username?.trim() || !password) {
+    return { ok: false, reason: 'AML_USERNAME or AML_PASSWORD not set in .env' };
+  }
+  try {
+    clearAmlTokenCache();
+    await loginAml();
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, reason: error.message || 'AML login failed' };
+  }
 }
 
 export async function amlCheckCustomerExists(clientNumber) {

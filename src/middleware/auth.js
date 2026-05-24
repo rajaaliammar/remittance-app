@@ -74,3 +74,38 @@ export const authenticateToken = async (req, res, next) => {
   }
 };
 
+/** Sets req.user when a valid backoffice token is present; continues without user otherwise. */
+export const optionalAuthenticateToken = async (req, res, next) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+    if (!token) return next();
+
+    const decoded = jwt.verify(
+      token,
+      process.env.JWT_SECRET || 'your-secret-key-change-in-production'
+    );
+    const user = await prisma.backofficeUser.findUnique({
+      where: { id: decoded.id },
+      select: {
+        id: true,
+        email: true,
+        username: true,
+        status: true,
+        isSuperAdmin: true,
+      },
+    });
+    if (user && user.status === 'approved') {
+      req.user = {
+        id: user.id,
+        email: user.email,
+        username: user.username,
+        isSuperAdmin: user.isSuperAdmin,
+      };
+    }
+    next();
+  } catch {
+    next();
+  }
+};
+

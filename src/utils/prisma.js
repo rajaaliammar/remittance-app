@@ -264,6 +264,31 @@ async function ensureManageContentSectionTypeUnique() {
   }
 }
 
+async function ensureLegalDocumentsTable() {
+  try {
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "legal_documents" (
+        "id" TEXT NOT NULL,
+        "docType" TEXT NOT NULL,
+        "title" TEXT NOT NULL,
+        "sections" JSONB NOT NULL,
+        "effectiveDate" TIMESTAMP(3),
+        "contactEmail" TEXT NOT NULL DEFAULT 'legal@onezapay.com',
+        "status" TEXT NOT NULL DEFAULT 'published',
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "legal_documents_pkey" PRIMARY KEY ("id")
+      )
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE UNIQUE INDEX IF NOT EXISTS "legal_documents_docType_key"
+      ON "legal_documents" ("docType")
+    `);
+  } catch (e) {
+    console.warn('ensureLegalDocumentsTable:', e.message);
+  }
+}
+
 // Handle Prisma Client connection (columns are ensured on first connect)
 prisma.$connect()
   .then(() => {
@@ -273,6 +298,7 @@ prisma.$connect()
   .then(() => ensureCustomerNotificationsTable())
   .then(() => ensureComplianceColumnsAndTables())
   .then(() => ensureManageContentSectionTypeUnique())
+  .then(() => ensureLegalDocumentsTable())
   .catch((error) => {
     console.error('❌ Failed to connect to database:', error);
   });
@@ -285,5 +311,6 @@ export {
   ensureCustomerNotificationsTable,
   ensureComplianceColumnsAndTables,
   ensureManageContentSectionTypeUnique,
+  ensureLegalDocumentsTable,
 };
 

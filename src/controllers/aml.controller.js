@@ -14,21 +14,137 @@ import { buildNaturalCustomerSavePayload } from '../services/amlCustomer.builder
 import {
   buildAmlDocumentsUploadPayload,
   collectKycFilesForAml,
+  isAmlProviderErrorResponse,
   unwrapAmlDocumentsList,
 } from '../services/amlDocument.service.js';
+import { extractAmlCacheFromKycData } from '../utils/amlKycData.js';
 
 function mergeKycAml(customer, amlPayload) {
-  const kyc =
-    customer.kycData && typeof customer.kycData === 'object'
-      ? { ...customer.kycData }
-      : {};
-  kyc.amlClientNumber = amlPayload.clientNumber || kyc.amlClientNumber;
-  kyc.aml = {
-    ...(kyc.aml || {}),
-    ...amlPayload,
-    syncedAt: new Date().toISOString(),
+  const syncedAt = new Date().toISOString();
+  const amlBlock = {
+    mapped: amlPayload.mapped || null,
+    ...(amlPayload.mapped || {}),
+    clientNumber: amlPayload.clientNumber,
+    lastSaveResponse: amlPayload.lastSaveResponse,
+    lastStatusResponse: amlPayload.lastStatusResponse,
+    lastDocumentsUploadResponse: amlPayload.lastDocumentsUploadResponse,
+    lastDocumentsUploadAt: amlPayload.lastDocumentsUploadAt,
+    lastCaseClearResponse: amlPayload.lastCaseClearResponse,
+    syncedAt,
   };
+
+  const raw = customer.kycData;
+  if (Array.isArray(raw)) {
+    const next = raw.map((entry) => ({ ...entry }));
+    const idx = next.length > 0 ? next.length - 1 : -1;
+    const base = idx >= 0 ? next[idx] : {};
+    const updated = {
+      ...base,
+      amlClientNumber: amlPayload.clientNumber || base.amlClientNumber,
+      aml: { ...(base.aml || {}), ...amlBlock },
+    };
+    if (idx >= 0) next[idx] = updated;
+    else {
+      next.push({
+        id: `aml_${Date.now()}`,
+        verificationType: 'AML',
+        ...updated,
+      });
+    }
+    return next;
+  }
+
+  const kyc =
+    raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...raw } : {};
+  kyc.amlClientNumber = amlPayload.clientNumber || kyc.amlClientNumber;
+  kyc.aml = { ...(kyc.aml || {}), ...amlBlock };
   return kyc;
+}
+
+async function executeAmlOnboard(customer) {
+  const payload = buildNaturalCustomerSavePayload(customer);
+  const clientNumber = payload.obj_CS_N.csClientNumber;
+
+  console.log(`[AML] Onboarding customer ${customer.id} as ${clientNumber}…`);
+  const saveRaw = await amlSaveCustomer(payload);
+  if (saveRaw?.isError) {
+    const err = new Error(saveRaw.message || 'AML save validation failed');
+    err.status = 400;
+    err.data = saveRaw;
+    throw err;
+  }
+  const mapped = mapAmlCustomerStatus(saveRaw);
+  const kycData = mergeKycAml(customer, {
+    clientNumber,
+    mapped,
+    lastSaveResponse: saveRaw,
+  });
+
+  await prisma.customer.update({
+    where: { id: customer.id },
+    data: { kycData },
+  });
+
+  return { clientNumber, saveRaw, mapped, payload };
+}
+
+async function executeAmlDocumentUpload(customer) {
+  const clientNumber = resolveAmlClientNumber(customer);
+  const sources = collectKycFilesForAml(customer);
+  if (sources.length === 0) {
+    const err = new Error(
+      'No KYC files found. Complete registration with ID, selfie, and proof of address first.',
+    );
+    err.status = 400;
+    throw err;
+  }
+
+  const built = await buildAmlDocumentsUploadPayload(customer);
+  if (built.obj_Docs.length === 0) {
+    const err = new Error(
+      'KYC files were found but could not be read from disk on the server.',
+    );
+    err.status = 400;
+    err.data = { clientNumber, sources: built.sources, skipped: built.skipped };
+    throw err;
+  }
+
+  console.log(
+    `[AML] Uploading ${built.obj_Docs.length} document(s) for ${clientNumber}…`,
+  );
+  const uploadRaw = await amlUploadDocuments(built.payload);
+  if (isAmlProviderErrorResponse(uploadRaw)) {
+    const err = new Error(uploadRaw.message || 'AML document upload failed');
+    err.status = 400;
+    err.data = uploadRaw;
+    throw err;
+  }
+
+  let documents = [];
+  try {
+    const listRaw = await amlGetDocuments(clientNumber);
+    documents = unwrapAmlDocumentsList(listRaw);
+  } catch (listErr) {
+    console.warn('[AML] upload ok but list failed:', listErr.message);
+  }
+
+  const kycData = mergeKycAml(customer, {
+    clientNumber,
+    lastDocumentsUploadResponse: uploadRaw,
+    lastDocumentsUploadAt: new Date().toISOString(),
+  });
+  await prisma.customer.update({
+    where: { id: customer.id },
+    data: { kycData },
+  });
+
+  return {
+    clientNumber,
+    uploadedCount: built.obj_Docs.length,
+    skipped: built.skipped,
+    upload: uploadRaw,
+    documents,
+  };
 }
 
 async function loadCustomer(id) {
@@ -158,39 +274,17 @@ export const onboardCustomerToAml = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
 
-    const payload = buildNaturalCustomerSavePayload(customer);
-    const clientNumber = payload.obj_CS_N.csClientNumber;
-
-    console.log(`[AML] Onboarding customer ${customer.id} as ${clientNumber}…`);
-    const saveRaw = await amlSaveCustomer(payload);
-    if (saveRaw?.isError) {
-      const err = new Error(saveRaw.message || 'AML save validation failed');
-      err.status = 400;
-      err.data = saveRaw;
-      throw err;
-    }
-    const mapped = mapAmlCustomerStatus(saveRaw);
-
-    const kycData = mergeKycAml(customer, {
-      clientNumber,
-      mapped,
-      lastSaveResponse: saveRaw,
-    });
-
-    await prisma.customer.update({
-      where: { id: customer.id },
-      data: { kycData },
-    });
+    const result = await executeAmlOnboard(customer);
 
     return res.json({
       success: true,
       message: 'Customer submitted to AML provider',
       data: {
         customerId: customer.id,
-        clientNumber,
-        save: saveRaw,
-        mapped,
-        payload,
+        clientNumber: result.clientNumber,
+        save: result.saveRaw,
+        mapped: result.mapped,
+        payload: result.payload,
       },
     });
   } catch (error) {
@@ -296,71 +390,12 @@ export const uploadCustomerAmlDocuments = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
 
-    const clientNumber = resolveAmlClientNumber(customer);
-    const sources = collectKycFilesForAml(customer);
-    if (sources.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message:
-          'No KYC files found for this customer. Complete registration/KYC in the app first (ID, selfie, proof of address).',
-        data: { clientNumber, sources: [] },
-      });
-    }
-
-    const built = await buildAmlDocumentsUploadPayload(customer);
-    if (built.obj_Docs.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message:
-          'KYC files were found but could not be read from disk. Ensure files exist under /uploads/kyc on the backend server.',
-        data: {
-          clientNumber,
-          sources: built.sources,
-          skipped: built.skipped,
-        },
-      });
-    }
-
-    console.log(
-      `[AML] Uploading ${built.obj_Docs.length} document(s) for ${clientNumber}…`,
-    );
-    const uploadRaw = await amlUploadDocuments(built.payload);
-    if (uploadRaw?.isError) {
-      const err = new Error(uploadRaw.message || 'AML document upload failed');
-      err.status = 400;
-      err.data = uploadRaw;
-      throw err;
-    }
-
-    let listRaw = null;
-    let documents = [];
-    try {
-      listRaw = await amlGetDocuments(clientNumber);
-      documents = unwrapAmlDocumentsList(listRaw);
-    } catch (listErr) {
-      console.warn('[AML] upload ok but list failed:', listErr.message);
-    }
-
-    const kycData = mergeKycAml(customer, {
-      clientNumber,
-      lastDocumentsUploadResponse: uploadRaw,
-      lastDocumentsUploadAt: new Date().toISOString(),
-    });
-    await prisma.customer.update({
-      where: { id: customer.id },
-      data: { kycData },
-    });
+    const result = await executeAmlDocumentUpload(customer);
 
     return res.json({
       success: true,
-      message: uploadRaw?.message || 'AML documents uploaded',
-      data: {
-        clientNumber,
-        uploadedCount: built.obj_Docs.length,
-        skipped: built.skipped,
-        upload: uploadRaw,
-        documents,
-      },
+      message: result.upload?.message || 'AML documents uploaded',
+      data: result,
     });
   } catch (error) {
     console.error('[AML] uploadCustomerAmlDocuments:', error.message);
@@ -395,6 +430,96 @@ export const previewCustomerAmlDocuments = async (req, res) => {
   }
 };
 
+/** Mobile app: POST /api/accounts/aml/onboard — submit authenticated customer to AML */
+export const customerAmlOnboard = async (req, res) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+    const customer = await loadCustomer(customerId);
+    if (!customer) {
+      return res.status(404).json({ success: false, message: 'Customer not found' });
+    }
+    const result = await executeAmlOnboard(customer);
+    return res.json({
+      success: true,
+      message: 'Customer submitted to AML provider',
+      data: {
+        clientNumber: result.clientNumber,
+        save: result.saveRaw,
+        mapped: result.mapped,
+      },
+    });
+  } catch (error) {
+    console.error('[AML] customerAmlOnboard:', error.message);
+    return res.status(error.status === 400 ? 400 : 502).json({
+      success: false,
+      message: error.message || 'AML onboarding failed',
+      error: error.data || undefined,
+    });
+  }
+};
+
+/** Mobile app: POST /api/accounts/aml/documents/upload — upload registration KYC docs to AML */
+export const customerAmlUploadDocuments = async (req, res) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+    const customer = await loadCustomer(customerId);
+    if (!customer) {
+      return res.status(404).json({ success: false, message: 'Customer not found' });
+    }
+    const result = await executeAmlDocumentUpload(customer);
+    return res.json({
+      success: true,
+      message: result.upload?.message || 'AML documents uploaded',
+      data: result,
+    });
+  } catch (error) {
+    console.error('[AML] customerAmlUploadDocuments:', error.message);
+    return res.status(error.status === 400 ? 400 : 502).json({
+      success: false,
+      message: error.message || 'Failed to upload AML documents',
+      error: error.data || undefined,
+    });
+  }
+};
+
+/** Mobile app: POST /api/accounts/aml-sync — onboard + upload documents in one call */
+export const customerAmlSync = async (req, res) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+    let customer = await loadCustomer(customerId);
+    if (!customer) {
+      return res.status(404).json({ success: false, message: 'Customer not found' });
+    }
+
+    const onboard = await executeAmlOnboard(customer);
+    customer = await loadCustomer(customerId);
+    const documents = await executeAmlDocumentUpload(customer);
+
+    return res.json({
+      success: true,
+      message: 'AML sync completed',
+      amlSync: { onboard, documents },
+    });
+  } catch (error) {
+    console.error('[AML] customerAmlSync:', error.message);
+    return res.status(error.status === 400 ? 400 : 502).json({
+      success: false,
+      message: error.message || 'AML sync failed',
+      amlSyncError: error.message,
+      error: error.data || undefined,
+    });
+  }
+};
+
 export const getCustomerAmlCached = async (req, res) => {
   try {
     const customer = await loadCustomer(req.params.id);
@@ -402,19 +527,16 @@ export const getCustomerAmlCached = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
 
-    const kyc =
-      customer.kycData && typeof customer.kycData === 'object'
-        ? customer.kycData
-        : {};
-    const aml = kyc.aml || null;
+    const aml = extractAmlCacheFromKycData(customer.kycData);
 
     return res.json({
       success: true,
       message: aml ? 'Cached AML data' : 'No AML data cached yet',
       data: {
         customerId: customer.id,
-        clientNumber: resolveAmlClientNumber(customer),
+        clientNumber: aml?.clientNumber || resolveAmlClientNumber(customer),
         aml,
+        cachedAt: aml?.syncedAt ?? null,
       },
     });
   } catch (error) {
