@@ -1,5 +1,6 @@
 import prisma from '../utils/prisma.js';
 import { sendPushToCustomer } from '../utils/push.js';
+import { expandKycCountryTokens } from '../utils/kycCountryTokens.js';
 
 // Emit real-time KYC status update to the customer's socket room (for app Verifications screen)
 function emitKYCUpdateToCustomer(req, customerId, payload) {
@@ -872,41 +873,6 @@ export const getKYCRequests = async (req, res) => {
     });
   }
 };
-
-/**
- * Tokens that match KYC form `countries` (dashboard stores currency codes like USD/CAD
- * from Manage Country — see remittence_dashboard AddKYCFormModal `currencyCode || iso2`).
- * The app sends ISO2 from remittance destination / profile; map ISO2 ↔ currency so both match.
- */
-async function expandKycCountryTokens(countryCode) {
-  const c = String(countryCode || '').trim().toUpperCase();
-  const set = new Set(c ? [c] : []);
-
-  const mergeFamily = (family) => {
-    if (family.some((x) => set.has(x))) family.forEach((x) => set.add(x));
-  };
-
-  mergeFamily(['USD', 'US', 'USA']);
-  mergeFamily(['CAD', 'CA', 'CAN']);
-  mergeFamily(['INR', 'IN', 'IND']);
-  mergeFamily(['ETB', 'ET', 'ETH']);
-  mergeFamily(['GBP', 'GB', 'GBR']);
-
-  if (c.length === 2 && /^[A-Z]{2}$/.test(c)) {
-    try {
-      const row = await prisma.country.findUnique({
-        where: { iso2: c },
-        select: { currencyCode: true },
-      });
-      const cur = row?.currencyCode && String(row.currencyCode).trim().toUpperCase();
-      if (cur) set.add(cur);
-    } catch (e) {
-      console.warn('[KYC] expandKycCountryTokens country lookup failed:', e?.message);
-    }
-  }
-
-  return set;
-}
 
 // Get available KYC forms for a country
 export const getKYCFormsByCountry = async (req, res) => {

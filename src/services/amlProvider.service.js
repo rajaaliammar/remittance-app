@@ -54,6 +54,16 @@ export function toAmlDate(input) {
   return `${day}/${month}/${d.getFullYear()}`;
 }
 
+/** Customer listing query dates must be dd/MM/yyyy (not ISO). */
+export function toAmlListingQueryDate(input) {
+  const raw = String(input ?? '').trim();
+  if (!raw) return '';
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(raw)) return raw;
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`;
+  return toAmlDate(input);
+}
+
 export function resolveAmlClientNumber(customer) {
   const raw = customer?.kycData;
   if (Array.isArray(raw)) {
@@ -393,10 +403,70 @@ export async function amlUpdateCustomerName(clientNumber, names) {
   );
 }
 
+function guessMimeType(fileName) {
+  const ext = String(fileName || '')
+    .split('.')
+    .pop()
+    ?.toLowerCase();
+  const map = {
+    pdf: 'application/pdf',
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    txt: 'text/plain',
+  };
+  return map[ext] || 'application/octet-stream';
+}
+
+/** Try to download a document binary from the AML host using provider filepath + token. */
+export async function amlFetchDocumentBinary(filepath, fileName = '') {
+  const normalized = String(filepath || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\//, '');
+  if (!normalized) return null;
+
+  const { baseUrl } = amlConfig();
+  const token = await getAmlToken();
+  const hostRoot = baseUrl.replace(/\/UET_TMSSwaggerAPI\/?$/i, '');
+  const candidates = [
+    `${baseUrl}/${normalized}`,
+    `${hostRoot}/${normalized}`,
+    `${hostRoot}/UET_TMSSwaggerAPI/${normalized}`,
+  ];
+
+  for (const url of [...new Set(candidates)]) {
+    try {
+      const res = await fetchWithTimeout(url, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          accept: '*/*',
+        },
+      });
+      if (!res.ok) continue;
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) continue;
+      const buffer = Buffer.from(await res.arrayBuffer());
+      if (!buffer.length) continue;
+      return {
+        buffer,
+        contentType: contentType.split(';')[0] || guessMimeType(fileName),
+      };
+    } catch (err) {
+      log(`Document fetch failed (${url}):`, err.message);
+    }
+  }
+  return null;
+}
+
 export async function amlListCustomers(startDate, endDate) {
   const qs = new URLSearchParams();
-  if (startDate) qs.set('startDate', startDate);
-  if (endDate) qs.set('endDate', endDate);
+  const amlStart = toAmlListingQueryDate(startDate);
+  const amlEnd = toAmlListingQueryDate(endDate);
+  if (amlStart) qs.set('startDate', amlStart);
+  if (amlEnd) qs.set('endDate', amlEnd);
   const q = qs.toString();
   return amlRequest(
     'GET',

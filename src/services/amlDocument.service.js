@@ -1,8 +1,12 @@
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { getUploadsBase, getKycUploadDir } from '../utils/uploadPath.js';
 import { resolveAmlClientNumber } from './amlProvider.service.js';
-import { pickKycFieldFromCustomer } from '../utils/amlKycData.js';
+import {
+  extractAmlCacheFromKycData,
+  pickKycFieldFromCustomer,
+} from '../utils/amlKycData.js';
 
 const URL_FIELD_HINTS = [
   'id_document_url',
@@ -89,12 +93,185 @@ function resolveLocalFilePath(fileUrl) {
   for (const full of candidates) {
     if (full && fs.existsSync(full)) return full;
   }
+
+  const projectRoot = path.resolve(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..'));
+  const projectKyc = path.join(projectRoot, 'uploads', 'kyc');
+  const base = path.basename(pathname);
+  for (const dir of [projectKyc, getKycUploadDir()]) {
+    const alt = path.join(dir, base);
+    if (fs.existsSync(alt)) return alt;
+  }
+
+  return null;
+}
+
+/** Find file on disk when KYC URL metadata is stale but upload timestamp matches AML doc_name. */
+function findKycFileByMatchToken(matchToken) {
+  if (!matchToken || matchToken.length < 10) return null;
+  const dirs = new Set([getKycUploadDir(), path.join(getUploadsBase(), 'kyc')]);
+  const projectRoot = path.resolve(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..'),
+  );
+  dirs.add(path.join(projectRoot, 'uploads', 'kyc'));
+
+  for (const dir of dirs) {
+    if (!dir || !fs.existsSync(dir)) continue;
+    let names;
+    try {
+      names = fs.readdirSync(dir);
+    } catch {
+      continue;
+    }
+    const prefix = matchToken.slice(0, 10);
+    const hit = names.find(
+      (name) =>
+        name.includes(matchToken) ||
+        (prefix.length >= 10 && name.includes(`document-${prefix}`)),
+    );
+    if (hit) {
+      const full = path.join(dir, hit);
+      if (fs.existsSync(full)) return full;
+    }
+  }
   return null;
 }
 
 async function readFileAsBase64(filePath) {
   const buf = await fs.promises.readFile(filePath);
   return buf.toString('base64');
+}
+
+/** AML stores Windows paths; local portal saves under /uploads/kyc/document-{ts}-…. */
+function basenameFromAnyPath(value) {
+  return path
+    .basename(String(value || '').split('?')[0].replace(/\\/g, '/'))
+    .trim();
+}
+
+/** Shared upload timestamp between AML doc_name and local KYC filename. */
+export function extractAmlDocumentMatchToken(docName, filepath) {
+  const combined = `${docName || ''} ${filepath || ''}`;
+  const docMatch = combined.match(/document(\d{10,})/i);
+  if (docMatch?.[1]) return docMatch[1].slice(0, 13);
+
+  const runs = combined.match(/\d{10,}/g) || [];
+  for (const run of runs) {
+    if (run.length >= 10) return run.slice(0, 13);
+  }
+  return '';
+}
+
+/** e.g. "Passport copy … (Government ID (front))" → Government ID (front) */
+export function inferKycFieldFromAmlDoc(doc) {
+  if (!doc || typeof doc !== 'object') return '';
+  const details = String(
+    doc.doc_MASTER_DETAILS ??
+      doc.docs_Remarks ??
+      doc.remarks ??
+      '',
+  );
+  const openIdx = details.lastIndexOf('(');
+  const closeIdx = details.lastIndexOf(')');
+  if (openIdx >= 0 && closeIdx > openIdx) {
+    const inner = details.slice(openIdx + 1, closeIdx).trim();
+    if (inner) return inner;
+  }
+
+  const type = String(doc.doccument_type ?? doc.docs_DocumentType ?? '').toLowerCase();
+  if (type.includes('passport')) return 'Government ID (front)';
+  if (type.includes('government')) return 'Government ID (back)';
+  return '';
+}
+
+function localUrlMatchesAmlDocument(src, docName, filepath, matchToken) {
+  const base = basenameFromAnyPath(src.fileUrl);
+  if (!base) return false;
+
+  const target = basenameFromAnyPath(filepath || docName);
+  if (target && (base === target || base.toLowerCase() === target.toLowerCase())) {
+    return true;
+  }
+
+  if (matchToken && matchToken.length >= 10 && base.includes(matchToken)) {
+    return true;
+  }
+
+  const localRun = base.match(/document-?(\d{10,})/i)?.[1];
+  if (matchToken && localRun && localRun.startsWith(matchToken.slice(0, 10))) {
+    return true;
+  }
+
+  return false;
+}
+
+/** Resolve on-disk KYC file for an AML document row (by filename / filepath / upload token). */
+export function findLocalFileForAmlDocument(customer, docName, filepath, amlDocRecord = null) {
+  const target = basenameFromAnyPath(filepath || docName);
+  const matchToken = extractAmlDocumentMatchToken(docName, filepath);
+  const sources = collectKycFilesForAml(customer);
+
+  const kycFieldHint = inferKycFieldFromAmlDoc(amlDocRecord);
+  if (kycFieldHint) {
+    const byField = sources.find(
+      (src) =>
+        String(src.fieldName || '').toLowerCase() === kycFieldHint.toLowerCase(),
+    );
+    if (byField) {
+      const local = resolveLocalFilePath(byField.fileUrl);
+      if (local) return local;
+    }
+  }
+
+  for (const src of sources) {
+    if (localUrlMatchesAmlDocument(src, docName, filepath, matchToken)) {
+      const local = resolveLocalFilePath(src.fileUrl);
+      if (local) return local;
+    }
+  }
+
+  if (target) {
+    const direct =
+      resolveLocalFilePath(`/uploads/kyc/${target}`) ||
+      resolveLocalFilePath(`/uploads/${target}`);
+    if (direct) return direct;
+  }
+
+  if (matchToken) {
+    return findKycFileByMatchToken(matchToken);
+  }
+
+  return null;
+}
+
+/** Find portal customer linked to an AML client number (CS_…). */
+export async function findCustomerByAmlClientNumber(clientNumber, prisma) {
+  const cn = String(clientNumber || '').trim();
+  if (!cn) return null;
+
+  const pattern = `%${cn}%`;
+  const rows = await prisma.$queryRaw`
+    SELECT id, email, "firstName", "lastName", "kycData"
+    FROM customers
+    WHERE "kycData"::text LIKE ${pattern}
+    ORDER BY "updatedAt" DESC NULLS LAST
+    LIMIT 15
+  `;
+
+  for (const row of rows) {
+    const customer = {
+      id: row.id,
+      kycData: row.kycData,
+      email: row.email,
+      firstName: row.firstName,
+      lastName: row.lastName,
+    };
+    const cache = extractAmlCacheFromKycData(customer.kycData);
+    const linked =
+      cache?.clientNumber ||
+      resolveAmlClientNumber(customer);
+    if (String(linked).trim() === cn) return customer;
+  }
+  return null;
 }
 
 async function readUrlAsBase64(fileUrl) {

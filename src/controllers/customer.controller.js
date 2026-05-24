@@ -8,9 +8,14 @@ import os from 'os';
 import { getWritableKycUploadDir, getNotificationUploadDir, getCountryServiceUploadDir } from '../utils/uploadPath.js';
 import {
   getCustomerLimits,
+  getNextLevelForCustomer,
+  ensureCustomerLevelAssigned,
+  buildTierLimitsForApp,
   getSentInPeriod,
   getApprovedKYCMaxAmount,
   getMinimumActiveKycMaxAmount,
+  getActiveKycMaxAmountForCustomer,
+  getSubmittedKycMaxAmount,
   startOfDayUTC,
   startOfWeekUTC,
   startOfMonthUTC,
@@ -1900,22 +1905,48 @@ export const getTierAndLimits = async (req, res) => {
         message: 'Authentication required',
       });
     }
-    const [limits, kycMaxTransactionAmount, minimumKycMaxAmount] = await Promise.all([
+    const [
+      limits,
+      nextLevel,
+      kycApprovedMax,
+      kycSubmittedMax,
+      kycCountryMax,
+      kycGlobalMin,
+    ] = await Promise.all([
       getCustomerLimits(customerId),
+      getNextLevelForCustomer(customerId),
       getApprovedKYCMaxAmount(customerId),
+      getSubmittedKycMaxAmount(customerId),
+      getActiveKycMaxAmountForCustomer(customerId),
       getMinimumActiveKycMaxAmount(),
     ]);
-    const baseData = {
-      levelId: limits?.levelId ?? null,
-      levelName: limits?.levelName ?? null,
-      daily: limits?.daily ?? null,
-      weekly: limits?.weekly ?? null,
-      monthly: limits?.monthly ?? null,
-      currency: limits?.currency ?? 'USD',
-      kycMaxTransactionAmount: kycMaxTransactionAmount != null ? Number(kycMaxTransactionAmount) : null,
-      minimumKycMaxAmount:
-        minimumKycMaxAmount != null ? Number(minimumKycMaxAmount) : null,
-    };
+
+    // Portal "Max Transaction Amount" on the customer's primary KYC step (by country + priority).
+    const kycMaxTransactionAmount =
+      kycCountryMax ??
+      kycSubmittedMax ??
+      kycApprovedMax ??
+      kycGlobalMin ??
+      null;
+    const minimumKycMaxAmount = kycGlobalMin ?? kycCountryMax ?? null;
+
+    const baseData = buildTierLimitsForApp({
+      limits,
+      nextLevel: nextLevel
+        ? {
+            levelId: nextLevel.levelId,
+            levelName: nextLevel.levelName,
+            levelPriority: nextLevel.levelPriority,
+            description: nextLevel.description ?? null,
+            daily: nextLevel.daily,
+            weekly: nextLevel.weekly,
+            monthly: nextLevel.monthly,
+            currency: nextLevel.currency,
+          }
+        : null,
+      kycMaxTransactionAmount,
+      minimumKycMaxAmount,
+    });
     return res.json({
       success: true,
       data: baseData,
@@ -2150,6 +2181,11 @@ export const saveKycDetails = async (req, res) => {
       where: { id: customerId },
       data: { kycData },
     });
+    try {
+      await ensureCustomerLevelAssigned(customerId);
+    } catch (levelErr) {
+      console.warn('[saveKycDetails] Could not assign default level:', levelErr?.message);
+    }
     return res.json({
       success: true,
       message: 'KYC details saved successfully',
