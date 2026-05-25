@@ -47,7 +47,7 @@ jobs:
           script: |
             cd /var/www/html/Remittance_backend
 
-            if [ -f package-lock.json ]; then
+            if git ls-files --error-unmatch package-lock.json >/dev/null 2>&1; then
               git restore package-lock.json || true
             fi
             
