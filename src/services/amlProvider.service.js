@@ -24,6 +24,15 @@ function clearAmlTokenCache() {
 let cachedToken = null;
 let tokenExpiresAt = 0;
 
+export const TRANSACTION_STATUS_LABELS = {
+  1: 'Transaction Pending Validate',
+  2: 'Transaction Pending Approval',
+  3: 'Transaction Cleared',
+  4: 'Transaction Rejected',
+  5: 'Transaction Hold',
+  11: 'Case INITIATE',
+};
+
 export const CUSTOMER_STATUS_LABELS = {
   1: 'Validate Pending',
   2: 'Mobile Verification Requested',
@@ -52,6 +61,18 @@ export function toAmlDate(input) {
   const day = String(d.getDate()).padStart(2, '0');
   const month = String(d.getMonth() + 1).padStart(2, '0');
   return `${day}/${month}/${d.getFullYear()}`;
+}
+
+/** Transaction save expects dd/MM/yyyy HH:mm:ss */
+export function toAmlDateTime(input) {
+  const d = input instanceof Date ? input : new Date(input);
+  if (Number.isNaN(d.getTime())) return '';
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const h = String(d.getHours()).padStart(2, '0');
+  const m = String(d.getMinutes()).padStart(2, '0');
+  const s = String(d.getSeconds()).padStart(2, '0');
+  return `${day}/${month}/${d.getFullYear()} ${h}:${m}:${s}`;
 }
 
 /** Customer listing query dates must be dd/MM/yyyy (not ISO). */
@@ -280,9 +301,17 @@ async function amlRequest(method, path, body, retried = false) {
 
   if (!res.ok) {
     logError(`${label} — HTTP ${res.status}`, data);
+    const validation =
+      data?.errors && typeof data.errors === 'object'
+        ? Object.entries(data.errors)
+            .slice(0, 5)
+            .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`)
+            .join('; ')
+        : '';
     const err = new Error(
       data?.title ||
         data?.message ||
+        validation ||
         data?.messageDetails ||
         `AML API error (${res.status})`,
     );
@@ -326,6 +355,9 @@ export function logAmlStartupConfig() {
   console.log('[AML]   POST /api/customers/:id/aml/onboard');
   console.log('[AML]   POST /api/customers/:id/aml/case-clear');
   console.log('[AML]   POST /api/customers/:id/aml/documents/upload');
+  console.log('[AML]   POST /api/Transactions/save (on remittance create)');
+  console.log('[AML]   POST /api/aml/transactions/listing');
+  console.log('[AML]   POST /api/aml/transactions/update-status');
   console.log('────────────────────────────────────────');
 }
 
@@ -472,4 +504,96 @@ export async function amlListCustomers(startDate, endDate) {
     'GET',
     `/api/Customers/listing${q ? `?${q}` : ''}`,
   );
+}
+
+export function mapAmlTransactionStatus(amlResponse) {
+  if (!amlResponse || typeof amlResponse !== 'object') {
+    return { statusId: null, statusLabel: 'Unknown', trIdDisplay: null };
+  }
+
+  const rawId =
+    amlResponse.tR_StatusID ??
+    amlResponse.trStatusId ??
+    amlResponse.status_ID ??
+    amlResponse.statusId ??
+    null;
+  const statusId =
+    rawId === null || rawId === undefined || rawId === ''
+      ? null
+      : parseInt(String(rawId), 10);
+
+  const label =
+    amlResponse.tR_Status ??
+    amlResponse.trStatus ??
+    amlResponse.status ??
+    (TRANSACTION_STATUS_LABELS[statusId] ?? 'Unknown');
+
+  return {
+    statusId: Number.isNaN(statusId) ? null : statusId,
+    statusLabel: String(label || 'Unknown'),
+    trIdDisplay:
+      amlResponse.tR_ID_DISPLAY ??
+      amlResponse.trDisplayId ??
+      amlResponse.id ??
+      null,
+    internalRef:
+      amlResponse.tR_INTERNAL_REFERENCE_NO ??
+      amlResponse.trRefId ??
+      null,
+    clientNumber:
+      amlResponse.cS_CLIENT_NUMBER ??
+      amlResponse.csClientNumber ??
+      null,
+    message: amlResponse.message ?? null,
+    isError: Boolean(amlResponse.isError),
+    messageCode: amlResponse.messageCode ?? null,
+    messageDetails: amlResponse.messageDetails ?? null,
+  };
+}
+
+export async function amlListTransactions(filter = {}) {
+  // Swagger: TransactionStatusListing_Request — dd/MM/yyyy dates, no statusIds/nBranchId.
+  const body = {
+    startDate: toAmlListingQueryDate(filter.startDate) || '',
+    endDate: toAmlListingQueryDate(filter.endDate) || '',
+    clientId: String(filter.clientId || '').trim(),
+    transaction_Number: String(
+      filter.transaction_Number ?? filter.trDisplayId ?? filter.transactionNumber ?? '',
+    ).trim(),
+    transactionType:
+      filter.transactionType === undefined || filter.transactionType === null
+        ? 0
+        : parseInt(String(filter.transactionType), 10) || 0,
+    searchBy: String(filter.searchBy ?? filter.strSearchBy ?? '').trim(),
+  };
+  return amlRequest('POST', '/api/Transactions/listing', body);
+}
+
+export async function amlGetTransactionStatus(trIdDisplay) {
+  return amlRequest(
+    'GET',
+    `/api/Transactions/status/${encodeURIComponent(trIdDisplay)}`,
+  );
+}
+
+export async function amlGetTransactionCaseStatus(trIdDisplay) {
+  return amlRequest(
+    'GET',
+    `/api/Transactions/case-status/${encodeURIComponent(trIdDisplay)}`,
+  );
+}
+
+export async function amlGetTransactionTmsDetails(trIdDisplay) {
+  return amlRequest(
+    'GET',
+    `/api/Transactions/tms-details/${encodeURIComponent(trIdDisplay)}`,
+  );
+}
+
+export async function amlUpdateTransactionStatus(payload) {
+  return amlRequest('POST', '/api/Transactions/update-status', payload);
+}
+
+export async function amlSaveTransaction(fullTransactionDto) {
+  return amlRequest('POST', '/api/Transactions/save', fullTransactionDto);
 }

@@ -28,6 +28,7 @@ import {
   extractBeneficiaryKey,
 } from '../services/complianceRuleEngine.js';
 import acceptblueService from '../services/acceptblue.service.js';
+import { syncRemittanceTransactionToAml } from '../services/amlTransaction.service.js';
 
 const US_STATE_NAME_TO_CODE = {
   ALABAMA: 'AL',
@@ -563,6 +564,45 @@ export const createRemittanceTransaction = async (req, res) => {
       console.warn('[Compliance] Rule engine error (transaction unaffected):', compErr.message);
     }
 
+    // LiveEx TMS: POST /api/Transactions/save (non-blocking — local remittance still succeeds)
+    let amlSync = null;
+    try {
+      const customerForAml = await prisma.customer.findUnique({
+        where: { id: customerId },
+      });
+      if (customerForAml) {
+        const txForAml = await prisma.remittanceTransaction.findUnique({
+          where: { id: transaction.id },
+        });
+        amlSync = await syncRemittanceTransactionToAml({
+          customer: customerForAml,
+          transaction: txForAml || transaction,
+          recipientInfo: enrichedRecipientInfo,
+          reqMeta: {
+            ipAddress:
+              req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
+              req.connection?.remoteAddress ||
+              null,
+            deviceId:
+              req.headers['x-device-id'] ||
+              req.headers['x-device-fingerprint'] ||
+              null,
+          },
+        });
+        if (!amlSync?.success && !amlSync?.skipped) {
+          console.warn(
+            '[AML] Transaction save to TMS failed | transactionId=',
+            transaction.id,
+            '|',
+            amlSync?.message,
+          );
+        }
+      }
+    } catch (amlErr) {
+      console.warn('[AML] Transaction sync error (transaction unaffected):', amlErr.message);
+      amlSync = { success: false, message: amlErr.message };
+    }
+
     // Accounting: create revenue (fee + tax) and expense entries from this transaction (so app transactions appear in portal)
     try {
       await createAccountingEntryFromTransaction(transaction, 'pending', {
@@ -644,6 +684,17 @@ export const createRemittanceTransaction = async (req, res) => {
         ...(finalTransaction || transaction),
         newBalance,
       },
+      ...(amlSync?.success && {
+        aml: {
+          trIdDisplay: amlSync.trIdDisplay,
+          internalRef: amlSync.internalRef,
+          status: amlSync.status,
+          statusId: amlSync.statusId,
+        },
+      }),
+      ...(amlSync && !amlSync.success && !amlSync.skipped && {
+        amlSyncWarning: amlSync.message || 'Transaction saved locally but AML TMS sync failed',
+      }),
       ...(complianceHold && {
         complianceHold: true,
         holdMessage: 'Your transaction is under compliance review. Estimated review time: 2–24 hours.',

@@ -5,9 +5,16 @@ import {
   amlGetCustomerStatus,
   amlGetDocuments,
   amlUpdateCustomerName,
+  amlListTransactions,
+  amlGetTransactionStatus,
+  amlGetTransactionCaseStatus,
+  amlGetTransactionTmsDetails,
+  amlUpdateTransactionStatus,
   mapAmlCustomerStatus,
+  mapAmlTransactionStatus,
   resolveAmlClientNumber,
   CUSTOMER_STATUS_LABELS,
+  TRANSACTION_STATUS_LABELS,
 } from '../services/amlProvider.service.js';
 import {
   unwrapAmlDocumentsList,
@@ -18,6 +25,10 @@ import { amlFetchDocumentBinary } from '../services/amlProvider.service.js';
 import fs from 'fs';
 import path from 'path';
 import { extractAmlCacheFromKycData } from '../utils/amlKycData.js';
+import {
+  syncRemittanceById,
+  submitAmlTransactionStatusUpdate,
+} from '../services/amlTransaction.service.js';
 
 function isAmlProviderNotFound(raw) {
   const msg = String(raw?.message || '').toLowerCase();
@@ -459,6 +470,385 @@ export const updateAmlCustomerName = async (req, res) => {
       success: false,
       message: error.message || 'Failed to update AML customer name',
       error: error.data || undefined,
+    });
+  }
+};
+
+function normalizeTransactionListingRow(row, index) {
+  if (!row || typeof row !== 'object') {
+    return {
+      key: `row-${index}`,
+      trIdDisplay: '',
+      status: '',
+      statusId: null,
+    };
+  }
+  const trIdDisplay = String(
+    row.transaction_Number ??
+      row.transactionNumber ??
+      row.id ??
+      row.trDisplayId ??
+      row.tR_ID_DISPLAY ??
+      '',
+  ).trim();
+  const internalRef = String(
+    row.tR_Internal_Referance_Number ??
+      row.tR_INTERNAL_REFERENCE_NO ??
+      row.trInternalReference ??
+      '',
+  ).trim();
+  const statusIdRaw = row.status_ID ?? row.statusId ?? row.tR_StatusID ?? null;
+  const statusId =
+    statusIdRaw === null || statusIdRaw === undefined || statusIdRaw === ''
+      ? null
+      : parseInt(String(statusIdRaw), 10);
+  const status =
+    row.status ||
+    row.tR_Status ||
+    (statusId && TRANSACTION_STATUS_LABELS[statusId]) ||
+    '';
+
+  return {
+    key: trIdDisplay || internalRef || `row-${index}`,
+    trIdDisplay: trIdDisplay || internalRef,
+    internalRef,
+    status,
+    statusId: Number.isNaN(statusId) ? null : statusId,
+  };
+}
+
+function normalizeTransactionListingResponse(raw) {
+  if (!raw) return [];
+  const list =
+    raw.lTransactionStatusListing ||
+    raw.LTransactionStatusListing ||
+    raw.listing ||
+    [];
+  if (!Array.isArray(list)) return [];
+  return list.map(normalizeTransactionListingRow);
+}
+
+/** POST /api/aml/transactions/listing */
+export const listAmlTransactions = async (req, res) => {
+  try {
+    const body = req.body || {};
+    const raw = await amlListTransactions(body);
+    const err = providerError(res, raw, 'AML transaction listing failed');
+    if (err) return err;
+
+    const listing = normalizeTransactionListingResponse(raw);
+    const noData =
+      !listing.length &&
+      (raw?.messageCode === 'NO_DATA' ||
+        String(raw?.messageDetails || '').toLowerCase().includes('no data'));
+    return res.json({
+      success: true,
+      message: raw?.message || 'AML transactions retrieved',
+      data: {
+        listing,
+        noData,
+        providerMessageCode: raw?.messageCode ?? null,
+        provider: raw,
+      },
+    });
+  } catch (error) {
+    console.error('[AML Admin] listAmlTransactions:', error.message);
+    return res.status(502).json({
+      success: false,
+      message: error.message || 'Failed to fetch AML transaction listing',
+      error: error.data || undefined,
+    });
+  }
+};
+
+/** GET /api/aml/transactions/:trIdDisplay/status */
+export const getAmlTransactionStatus = async (req, res) => {
+  try {
+    const trIdDisplay = decodeURIComponent(req.params.trIdDisplay || '').trim();
+    if (!trIdDisplay) {
+      return res.status(400).json({
+        success: false,
+        message: 'Transaction display ID is required',
+      });
+    }
+
+    const statusRaw = await amlGetTransactionStatus(trIdDisplay);
+    const err = providerError(res, statusRaw, 'Failed to fetch transaction status');
+    if (err) return err;
+
+    return res.json({
+      success: true,
+      data: {
+        trIdDisplay,
+        status: statusRaw,
+        mapped: mapAmlTransactionStatus(statusRaw),
+      },
+    });
+  } catch (error) {
+    console.error('[AML Admin] getAmlTransactionStatus:', error.message);
+    return res.status(502).json({
+      success: false,
+      message: error.message || 'Failed to fetch transaction status',
+      error: error.data || undefined,
+    });
+  }
+};
+
+/** GET /api/aml/transactions/:trIdDisplay/case-status */
+export const getAmlTransactionCaseStatus = async (req, res) => {
+  try {
+    const trIdDisplay = decodeURIComponent(req.params.trIdDisplay || '').trim();
+    if (!trIdDisplay) {
+      return res.status(400).json({
+        success: false,
+        message: 'Transaction display ID is required',
+      });
+    }
+
+    const caseRaw = await amlGetTransactionCaseStatus(trIdDisplay);
+    const err = providerError(res, caseRaw, 'Failed to fetch transaction case status');
+    if (err) return err;
+
+    return res.json({
+      success: true,
+      data: {
+        trIdDisplay,
+        caseStatus: caseRaw,
+        mapped: mapAmlTransactionStatus(caseRaw),
+      },
+    });
+  } catch (error) {
+    console.error('[AML Admin] getAmlTransactionCaseStatus:', error.message);
+    return res.status(502).json({
+      success: false,
+      message: error.message || 'Failed to fetch transaction case status',
+      error: error.data || undefined,
+    });
+  }
+};
+
+/** GET /api/aml/transactions/:trIdDisplay/tms-details */
+export const getAmlTransactionTmsDetails = async (req, res) => {
+  try {
+    const trIdDisplay = decodeURIComponent(req.params.trIdDisplay || '').trim();
+    if (!trIdDisplay) {
+      return res.status(400).json({
+        success: false,
+        message: 'Transaction display ID is required',
+      });
+    }
+
+    const tmsRaw = await amlGetTransactionTmsDetails(trIdDisplay);
+    const err = providerError(res, tmsRaw, 'Failed to fetch TMS transaction details');
+    if (err) return err;
+
+    return res.json({
+      success: true,
+      data: {
+        trIdDisplay,
+        tmsDetails: tmsRaw,
+        mapped: mapAmlTransactionStatus(tmsRaw),
+      },
+    });
+  } catch (error) {
+    console.error('[AML Admin] getAmlTransactionTmsDetails:', error.message);
+    return res.status(502).json({
+      success: false,
+      message: error.message || 'Failed to fetch TMS transaction details',
+      error: error.data || undefined,
+    });
+  }
+};
+
+/** GET /api/aml/transactions/:trIdDisplay — status + case + TMS in one call */
+export const getAmlTransactionFullDetail = async (req, res) => {
+  try {
+    const trIdDisplay = decodeURIComponent(req.params.trIdDisplay || '').trim();
+    if (!trIdDisplay) {
+      return res.status(400).json({
+        success: false,
+        message: 'Transaction display ID is required',
+      });
+    }
+
+    const [statusRaw, caseRaw, tmsRaw] = await Promise.all([
+      amlGetTransactionStatus(trIdDisplay),
+      amlGetTransactionCaseStatus(trIdDisplay),
+      amlGetTransactionTmsDetails(trIdDisplay),
+    ]);
+
+    const errors = [statusRaw, caseRaw, tmsRaw].filter((r) => r?.isError);
+    if (errors.length === 3) {
+      return res.status(400).json({
+        success: false,
+        message: errors[0]?.message || 'Failed to load transaction from AML provider',
+        provider: { status: statusRaw, caseStatus: caseRaw, tmsDetails: tmsRaw },
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        trIdDisplay,
+        status: statusRaw,
+        statusMapped: mapAmlTransactionStatus(statusRaw),
+        caseStatus: caseRaw,
+        caseMapped: mapAmlTransactionStatus(caseRaw),
+        tmsDetails: tmsRaw,
+        tmsMapped: mapAmlTransactionStatus(tmsRaw),
+      },
+    });
+  } catch (error) {
+    console.error('[AML Admin] getAmlTransactionFullDetail:', error.message);
+    return res.status(502).json({
+      success: false,
+      message: error.message || 'Failed to fetch transaction details',
+      error: error.data || undefined,
+    });
+  }
+};
+
+/** POST /api/aml/transactions/update-status */
+export const updateAmlTransactionStatus = async (req, res) => {
+  try {
+    const { transactionRefNo, transactionReamrks, transactionRemarks } = req.body || {};
+    const ref = String(transactionRefNo || '').trim();
+    const remarks = String(
+      transactionReamrks ?? transactionRemarks ?? '',
+    ).trim();
+
+    if (!ref) {
+      return res.status(400).json({
+        success: false,
+        message: 'transactionRefNo is required',
+      });
+    }
+    if (!remarks) {
+      return res.status(400).json({
+        success: false,
+        message: 'transactionReamrks (remarks) is required',
+      });
+    }
+
+    const raw = await submitAmlTransactionStatusUpdate({
+      transactionRefNo: ref,
+      remarks,
+    });
+    const err = providerError(res, raw, 'Failed to update transaction status');
+    if (err) return err;
+
+    return res.json({
+      success: true,
+      message: raw?.message || 'Transaction status updated',
+      data: { provider: raw },
+    });
+  } catch (error) {
+    console.error('[AML Admin] updateAmlTransactionStatus:', error.message);
+    return res.status(502).json({
+      success: false,
+      message: error.message || 'Failed to update transaction status',
+      error: error.data || undefined,
+    });
+  }
+};
+
+/** POST /api/aml/transactions/sync-remittance/:transactionId — push local remittance to TMS */
+export const syncAmlRemittanceTransaction = async (req, res) => {
+  try {
+    const transactionId = decodeURIComponent(req.params.transactionId || '').trim();
+    if (!transactionId) {
+      return res.status(400).json({
+        success: false,
+        message: 'transactionId is required',
+      });
+    }
+
+    const result = await syncRemittanceById(transactionId, {
+      ipAddress:
+        req.headers['x-forwarded-for']?.split(',')[0]?.trim() || null,
+    });
+
+    if (result.skipped) {
+      return res.json({ success: true, data: result, message: result.reason });
+    }
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        message: result.message || 'AML sync failed',
+        data: result,
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: 'Remittance synced to AML TMS',
+      data: result,
+    });
+  } catch (error) {
+    console.error('[AML Admin] syncAmlRemittanceTransaction:', error.message);
+    return res.status(502).json({
+      success: false,
+      message: error.message || 'Failed to sync remittance to AML',
+    });
+  }
+};
+
+/** GET /api/aml/transactions/local — app remittance rows with AML metadata */
+export const listLocalRemittanceAml = async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit || '50', 10) || 50, 200);
+    const rows = await prisma.remittanceTransaction.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      select: {
+        id: true,
+        customerId: true,
+        sendAmount: true,
+        receiveAmount: true,
+        currency: true,
+        status: true,
+        paymentFieldValues: true,
+        createdAt: true,
+        customer: {
+          select: { id: true, email: true, firstName: true, lastName: true },
+        },
+      },
+    });
+
+    const listing = rows.map((row, index) => {
+      const pfv = row.paymentFieldValues || {};
+      const aml = pfv.aml || {};
+      const trIdDisplay =
+        pfv.amlTrIdDisplay ||
+        aml.trIdDisplay ||
+        aml.internalRef ||
+        `REM-${row.id}`;
+      return {
+        key: row.id,
+        trIdDisplay: String(trIdDisplay),
+        internalRef: aml.internalRef || `REM-${row.id}`,
+        status: aml.status || row.status || '',
+        statusId: aml.statusId ?? null,
+        localTransactionId: row.id,
+        localStatus: row.status,
+        amlSyncedAt: aml.syncedAt || null,
+        sendAmount: Number(row.sendAmount),
+        currency: row.currency,
+        customerEmail: row.customer?.email,
+        createdAt: row.createdAt,
+        _index: index,
+      };
+    });
+
+    return res.json({
+      success: true,
+      data: { listing, count: listing.length },
+    });
+  } catch (error) {
+    console.error('[AML Admin] listLocalRemittanceAml:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to list local remittance AML rows',
     });
   }
 };
