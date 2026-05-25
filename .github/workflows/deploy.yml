@@ -46,7 +46,11 @@ jobs:
           port: ${{ secrets.PORT }}
           script: |
             cd /var/www/html/Remittance_backend
-            git restore package-lock.json
+
+            if [ -f package-lock.json ]; then
+              git restore package-lock.json || true
+            fi
+            
             git pull origin main
 
             npm install
