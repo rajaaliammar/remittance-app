@@ -29,6 +29,7 @@ import {
   syncRemittanceById,
   submitAmlTransactionStatusUpdate,
 } from '../services/amlTransaction.service.js';
+import { enrichAmlCustomerListing } from '../utils/amlListingEnrichment.js';
 
 function isAmlProviderNotFound(raw) {
   const msg = String(raw?.message || '').toLowerCase();
@@ -193,7 +194,10 @@ export const listAmlCustomers = async (req, res) => {
     const err = providerError(res, raw, 'AML customer listing failed');
     if (err) return err;
 
-    const listing = normalizeListingResponse(raw);
+    const listing = await enrichAmlCustomerListing(
+      normalizeListingResponse(raw),
+      prisma,
+    );
     return res.json({
       success: true,
       message: raw?.message || 'AML customers retrieved',
