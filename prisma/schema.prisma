@@ -331,6 +331,7 @@ model Customer {
   region          String?
   subRegion       String?
   city            String?
+  profileImage    String?   // URL path e.g. /uploads/kyc/profile_image-123.jpg
   // KYC data stored as JSON
   kycData         Json?     // Store KYC documents and details
   kycRequestedAt   DateTime? // When admin requested user to re-upload KYC

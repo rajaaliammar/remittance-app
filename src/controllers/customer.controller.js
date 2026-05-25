@@ -198,7 +198,8 @@ const ensureCustomerExtendedProfileColumns = async () => {
     ADD COLUMN IF NOT EXISTS "placeOfBirth" TEXT,
     ADD COLUMN IF NOT EXISTS "occupation" TEXT,
     ADD COLUMN IF NOT EXISTS "sourceOfFund" TEXT,
-    ADD COLUMN IF NOT EXISTS "residentCountry" TEXT;
+    ADD COLUMN IF NOT EXISTS "residentCountry" TEXT,
+    ADD COLUMN IF NOT EXISTS "profileImage" TEXT;
   `);
   await prisma.$executeRawUnsafe(`
     ALTER TABLE "customers"
@@ -1137,10 +1138,28 @@ export const completeProfile = async (req, res) => {
     }
     if (city !== undefined && city !== '') updateData.city = String(city);
 
+    // Profile photo (multipart field profile_image)
+    let profileImageUrl = null;
+    if (req.file?.filename) {
+      profileImageUrl = `/uploads/kyc/${req.file.filename}`;
+      try {
+        await prisma.$executeRawUnsafe(
+          `UPDATE "customers" SET "profileImage" = $1, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = $2`,
+          profileImageUrl,
+          customerId
+        );
+      } catch (rawErr) {
+        console.warn('[completeProfile] profileImage raw update failed, trying Prisma:', rawErr?.message);
+        updateData.profileImage = profileImageUrl;
+      }
+    }
+
     // Prisma does not accept undefined in data – remove any undefined values
     Object.keys(updateData).forEach((k) => {
       if (updateData[k] === undefined) delete updateData[k];
     });
+    // Already persisted via raw SQL when possible
+    delete updateData.profileImage;
 
     const { baseData, extendedData } = splitExtendedProfileData(updateData);
 
@@ -1174,10 +1193,26 @@ export const completeProfile = async (req, res) => {
       delete updatedCustomer.pin;
     }
 
+    let profileImage = profileImageUrl;
+    if (!profileImage && updatedCustomer) {
+      try {
+        const rows = await prisma.$queryRawUnsafe(
+          `SELECT "profileImage" FROM "customers" WHERE "id" = $1 LIMIT 1`,
+          customerId
+        );
+        profileImage = rows?.[0]?.profileImage ?? updatedCustomer.profileImage ?? null;
+      } catch {
+        profileImage = updatedCustomer.profileImage ?? null;
+      }
+    }
+
     return res.status(200).json({
       success: true,
       message: 'Profile updated successfully',
-      data: updatedCustomer
+      data: {
+        ...updatedCustomer,
+        profile_image: profileImage,
+      },
     });
   } catch (error) {
     console.error('Error completing profile:', error);
@@ -1716,6 +1751,7 @@ export const getBalance = async (req, res) => {
 // Get current customer profile (for mobile app GET /accounts/profile)
 export const getProfile = async (req, res) => {
   try {
+    await ensureCustomerExtendedProfileColumns();
     const customerId = req.user?.id;
     if (!customerId) {
       return res.status(401).json({
@@ -1743,6 +1779,16 @@ export const getProfile = async (req, res) => {
         updatedAt: true,
       },
     });
+    let profileImageFromDb = null;
+    try {
+      const rows = await prisma.$queryRawUnsafe(
+        `SELECT "profileImage" FROM "customers" WHERE "id" = $1 LIMIT 1`,
+        customerId
+      );
+      profileImageFromDb = rows?.[0]?.profileImage ?? null;
+    } catch {
+      /* column may not exist yet until ensureCustomerExtendedProfileColumns runs */
+    }
     if (!customer) {
       return res.status(404).json({
         success: false,
@@ -1769,7 +1815,7 @@ export const getProfile = async (req, res) => {
       country_code: country_code || null,
       is_verified: customer.status === 'approved',
       has_pin: !!customer.hasPin,
-      profile_image: null,
+      profile_image: profileImageFromDb,
       created_at: customer.createdAt,
       updated_at: customer.updatedAt,
       type: 'customer',
