@@ -20,8 +20,9 @@ import {
   startOfWeekUTC,
   startOfMonthUTC,
 } from '../utils/limitsHelper.js';
-import { sendPushToCustomer } from '../utils/push.js';
-import { notifyCustomerAsync } from '../utils/customerNotify.js';
+import { resolveCustomerFcmToken, sendPushToToken } from '../utils/push.js';
+import { notifyCustomerAsync, deliverCustomerNotification } from '../utils/customerNotify.js';
+import { emitCustomersUpdated } from '../utils/portalNotify.js';
 
 // Fallback dir that is always available (tmpdir) so uploads never fail with EACCES
 const TMPDIR_KYC = path.join(os.tmpdir(), 'remittance-kyc-uploads', 'kyc');
@@ -355,6 +356,7 @@ export const signup = async (req, res) => {
         });
       }
       await applyExtendedProfileRawUpdate(existingByPhone.id, extendedData);
+      emitCustomersUpdated(req);
       return res.status(200).json({
         success: true,
         message: 'Phone number already registered. You can proceed to verify OTP.',
@@ -396,6 +398,7 @@ export const signup = async (req, res) => {
         });
       }
       await applyExtendedProfileRawUpdate(existingByEmail.id, extendedData);
+      emitCustomersUpdated(req);
       return res.status(200).json({
         success: true,
         message: 'Phone number already registered. You can proceed to verify OTP.',
@@ -465,6 +468,7 @@ export const signup = async (req, res) => {
       }
     });
     await applyExtendedProfileRawUpdate(customer.id, extendedCreateData);
+    emitCustomersUpdated(req);
 
     return res.status(201).json({
       success: true,
@@ -2694,28 +2698,29 @@ export const getAllCustomers = async (req, res) => {
       ]
     } : {};
 
-    const customers = await prisma.customer.findMany({
-      where,
-      select: {
-        id: true,
-        email: true,
-        username: true,
-        firstName: true,
-        lastName: true,
-        phone: true,
-        address: true,
-        status: true,
-        approvedAt: true,
-        level: true,
-        balanceLimit: true,
-        createdAt: true
-      },
-      orderBy: {
-        createdAt: 'desc'
-      }
-    });
+    const [customers, total] = await Promise.all([
+      prisma.customer.findMany({
+        where,
+        select: {
+          id: true,
+          email: true,
+          username: true,
+          firstName: true,
+          lastName: true,
+          phone: true,
+          address: true,
+          status: true,
+          approvedAt: true,
+          level: true,
+          balanceLimit: true,
+          createdAt: true,
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+      prisma.customer.count({ where }),
+    ]);
 
-    res.json({ success: true, data: customers });
+    res.json({ success: true, data: customers, total });
   } catch (error) {
     console.error('Error fetching customers:', error);
     res.status(500).json({ success: false, error: error.message });
@@ -2835,6 +2840,112 @@ export const getCustomerDeviceInfoByEmail = async (req, res) => {
   }
 };
 
+/** Store upload paths as /uploads/... so mobile apps resolve against their API host. */
+function normalizeNotificationImageUrl(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  try {
+    if (trimmed.startsWith('/uploads/')) return trimmed;
+    const u = new URL(trimmed);
+    if (u.pathname.startsWith('/uploads/')) {
+      return `${u.pathname}${u.search || ''}`;
+    }
+    return trimmed;
+  } catch {
+    if (trimmed.startsWith('/uploads/')) return trimmed;
+    return trimmed;
+  }
+}
+
+// Admin: broadcast notification to every customer (portal Customer Management).
+export const broadcastNotificationToAllCustomers = async (req, res) => {
+  try {
+    const { title, body, image } = req.body || {};
+    if (!prisma.customerNotification) {
+      return res.status(500).json({
+        success: false,
+        message: 'Notifications not available. Run: npx prisma generate',
+      });
+    }
+
+    const notificationTitle =
+      typeof title === 'string' && title.trim() ? title.trim() : 'BrandPay';
+    const notificationBody = typeof body === 'string' ? body.trim() : '';
+    if (!notificationBody) {
+      return res.status(400).json({ success: false, message: 'Message is required' });
+    }
+    const imageUrl = normalizeNotificationImageUrl(image);
+
+    const customers = await prisma.customer.findMany({
+      select: { id: true },
+    });
+    const total = customers.length;
+    if (total === 0) {
+      return res.json({
+        success: true,
+        message: 'No customers to notify',
+        total: 0,
+        saved: 0,
+        pushed: 0,
+      });
+    }
+
+    const io = req.app?.get?.('io');
+    let saved = 0;
+    let pushed = 0;
+    const batchSize = 10;
+
+    for (let i = 0; i < customers.length; i += batchSize) {
+      const batch = customers.slice(i, i + batchSize);
+      const results = await Promise.all(
+        batch.map((c) =>
+          deliverCustomerNotification(String(c.id), {
+            title: notificationTitle,
+            body: notificationBody,
+            imageUrl,
+            data: { screen: 'notifications', type: 'admin' },
+          })
+        )
+      );
+      for (let j = 0; j < batch.length; j++) {
+        const result = results[j];
+        const customerId = String(batch[j].id);
+        if (result.saved) saved += 1;
+        if (result.pushed) pushed += 1;
+        if (io && result.notificationId) {
+          try {
+            io.to(`user:${customerId}`).emit('admin:notification', {
+              id: result.notificationId,
+              title: notificationTitle,
+              body: notificationBody,
+              imageUrl: imageUrl || null,
+              sentAt: new Date().toISOString(),
+            });
+          } catch (e) {
+            console.warn('[Notification] Broadcast socket emit failed:', e?.message || e);
+          }
+        }
+      }
+    }
+
+    console.log(
+      `[Notification] Broadcast complete: total=${total} saved=${saved} pushed=${pushed}`
+    );
+
+    res.json({
+      success: true,
+      message: `Message sent to ${total} customer${total === 1 ? '' : 's'}. Saved in app for all; push delivered to ${pushed}.`,
+      total,
+      saved,
+      pushed,
+    });
+  } catch (error) {
+    console.error('Error broadcasting notification:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
 // Admin: send push notification to customer's app (with optional image). Saves to CustomerNotification so it appears in app list.
 export const sendNotificationToCustomer = async (req, res) => {
   try {
@@ -2901,7 +3012,7 @@ export const sendNotificationToCustomer = async (req, res) => {
     
     const notificationTitle = typeof title === 'string' && title.trim() ? title.trim() : 'BrandPay';
     const notificationBody = typeof body === 'string' ? body.trim() : '';
-    const imageUrl = typeof image === 'string' && image.trim() ? image.trim() : null;
+    const imageUrl = normalizeNotificationImageUrl(image);
 
     // Save to CustomerNotification so it appears in the app's notifications list (use string id for consistency)
     const customerIdStr = String(id);
@@ -2963,10 +3074,17 @@ export const sendNotificationToCustomer = async (req, res) => {
     }
     
     console.log('[Notification] 📤 Attempting to send push notification...');
-    const pushResult = await sendPushToCustomer(id, {
+    const fcmToken =
+      customer.fcmToken || (await resolveCustomerFcmToken(id));
+    const pushResult = await sendPushToToken(fcmToken, {
       title: notificationTitle,
       body: notificationBody,
       image: imageUrl || undefined,
+      data: {
+        screen: 'notifications',
+        type: 'admin',
+        notificationId: String(created.id),
+      },
     });
     
     if (!pushResult || !pushResult.success) {
@@ -3039,9 +3157,67 @@ export const getCustomerNotifications = async (req, res) => {
       take: limit,
       select: { id: true, title: true, body: true, imageUrl: true, sentAt: true, readAt: true },
     });
-    res.json({ success: true, data: notifications });
+    const data = notifications.map((n) => ({
+      ...n,
+      imageUrl: normalizeNotificationImageUrl(n.imageUrl) ?? n.imageUrl,
+    }));
+    res.json({ success: true, data });
   } catch (error) {
     console.error('Error fetching customer notifications:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// Mark one notification as read (mobile app detail view)
+export const markCustomerNotificationRead = async (req, res) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({ success: false, message: 'Notification ID is required' });
+    }
+    if (!prisma.customerNotification) {
+      return res.status(500).json({ success: false, message: 'Notifications not available' });
+    }
+    const existing = await prisma.customerNotification.findFirst({
+      where: { id: String(id), customerId: String(customerId) },
+    });
+    if (!existing) {
+      return res.status(404).json({ success: false, message: 'Notification not found' });
+    }
+    const updated = await prisma.customerNotification.update({
+      where: { id: String(id) },
+      data: { readAt: existing.readAt || new Date() },
+      select: { id: true, title: true, body: true, imageUrl: true, sentAt: true, readAt: true },
+    });
+    res.json({ success: true, data: updated });
+  } catch (error) {
+    console.error('Error marking notification read:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// Mark all notifications as read (mobile app)
+export const markAllCustomerNotificationsRead = async (req, res) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+    if (!prisma.customerNotification) {
+      return res.status(500).json({ success: false, message: 'Notifications not available' });
+    }
+    const now = new Date();
+    await prisma.customerNotification.updateMany({
+      where: { customerId: String(customerId), readAt: null },
+      data: { readAt: now },
+    });
+    res.json({ success: true, readAt: now.toISOString() });
+  } catch (error) {
+    console.error('Error marking all notifications read:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 };
@@ -3069,6 +3245,7 @@ export const approveCustomer = async (req, res) => {
       }
     });
 
+    emitCustomersUpdated(req);
     res.json({
       success: true,
       message: 'Customer approved successfully',
@@ -3100,6 +3277,7 @@ export const rejectCustomer = async (req, res) => {
       }
     });
 
+    emitCustomersUpdated(req);
     res.json({
       success: true,
       message: 'Customer rejected',

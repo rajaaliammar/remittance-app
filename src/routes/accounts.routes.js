@@ -23,6 +23,8 @@ import {
   updatePushToken,
   reportDeviceInfo,
   getCustomerNotifications,
+  markCustomerNotificationRead,
+  markAllCustomerNotificationsRead,
   upload,
   uploadKYC
 } from '../controllers/customer.controller.js';
@@ -142,6 +144,10 @@ router.put('/device-info/', authenticateCustomer, reportDeviceInfo);
 
 // Notifications list (requires authentication) - for in-app notifications screen
 router.get('/notifications', authenticateCustomer, getCustomerNotifications);
+router.post('/notifications/read-all', authenticateCustomer, markAllCustomerNotificationsRead);
+router.post('/notifications/read-all/', authenticateCustomer, markAllCustomerNotificationsRead);
+router.post('/notifications/:id/read', authenticateCustomer, markCustomerNotificationRead);
+router.post('/notifications/:id/read/', authenticateCustomer, markCustomerNotificationRead);
 
 // Charge calculation (public or authenticated)
 router.post('/calculate-charge', calculateCharge);

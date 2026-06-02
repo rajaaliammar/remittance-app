@@ -326,8 +326,15 @@ export const getCustomerKYCDocuments = async (req, res) => {
       });
     }
 
-    // Parse KYC data from JSON field
-    const kycDocuments = customer.kycData ? (Array.isArray(customer.kycData) ? customer.kycData : [customer.kycData]) : [];
+    let raw = customer.kycData;
+    if (typeof raw === 'string') {
+      try {
+        raw = JSON.parse(raw);
+      } catch {
+        raw = null;
+      }
+    }
+    const kycDocuments = raw ? (Array.isArray(raw) ? raw : [raw]) : [];
 
     res.json({
       success: true,

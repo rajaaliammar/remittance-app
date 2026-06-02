@@ -123,6 +123,40 @@ function getMessaging() {
  * @param {{ title: string, body?: string, data?: object }} options - title, body, and optional data payload
  * @returns {Promise<boolean>} - true if sent, false if skipped/failed
  */
+/** Public API origin for absolute image URLs in FCM (relative /uploads/... paths). */
+function getPublicApiOrigin() {
+  const raw =
+    process.env.PUBLIC_API_URL ||
+    process.env.EXTERNAL_API_URL ||
+    process.env.API_PUBLIC_URL ||
+    `http://localhost:${process.env.PORT || 3001}`;
+  return String(raw).replace(/\/api\/?$/i, '').replace(/\/+$/, '');
+}
+
+function absolutePushImageUrl(image) {
+  if (!image || typeof image !== 'string') return undefined;
+  const trimmed = image.trim();
+  if (!trimmed) return undefined;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  const base = getPublicApiOrigin();
+  const path = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  return `${base}${path}`;
+}
+
+function androidChannelForType(type) {
+  const t = String(type || '').toLowerCase();
+  if (
+    t === 'transaction' ||
+    t === 'activity' ||
+    t === 'transfer' ||
+    t === 'kyc' ||
+    t === 'security'
+  ) {
+    return 'transactions';
+  }
+  return 'default';
+}
+
 /** FCM data payload values must be strings */
 function stringifyData(obj) {
   const out = {};
@@ -131,6 +165,40 @@ function stringifyData(obj) {
     out[k] = typeof v === 'string' ? v : JSON.stringify(v);
   }
   return out;
+}
+
+/** Find FCM token for a customer; copies token onto this record if found on a duplicate account. */
+export async function resolveCustomerFcmToken(customerId) {
+  if (!customerId) return null;
+  try {
+    const customer = await prisma.customer.findUnique({
+      where: { id: customerId },
+      select: { id: true, fcmToken: true, email: true, phone: true },
+    });
+    if (!customer) return null;
+    if (customer.fcmToken) return customer.fcmToken;
+
+    const or = [];
+    if (customer.email) or.push({ email: customer.email });
+    if (customer.phone) or.push({ phone: customer.phone });
+    if (!or.length) return null;
+
+    const other = await prisma.customer.findFirst({
+      where: { OR: or, fcmToken: { not: null }, NOT: { id: customer.id } },
+      select: { fcmToken: true },
+    });
+    if (!other?.fcmToken) return null;
+
+    await prisma.customer.update({
+      where: { id: customerId },
+      data: { fcmToken: other.fcmToken },
+    });
+    console.log('[PUSH] Copied FCM token onto customer record:', customerId);
+    return other.fcmToken;
+  } catch (e) {
+    console.warn('[PUSH] resolveCustomerFcmToken failed:', e?.message || e);
+    return null;
+  }
 }
 
 export async function sendPushToToken(fcmToken, { title, body = '', image, data = {} }) {
@@ -148,40 +216,53 @@ export async function sendPushToToken(fcmToken, { title, body = '', image, data 
     console.log('[PUSH] 📤 Sending push notification to token:', fcmToken.substring(0, 20) + '...');
     console.log('[PUSH] Title:', title, 'Body:', body);
     
+    const notifType = data?.type || 'admin';
+    const channelId = androidChannelForType(notifType);
+    const imageUrl = absolutePushImageUrl(image);
+
     const dataPayload = stringifyData({
       ...data,
       title: String(title),
       body: String(body),
-      ...(image && { image: String(image) }),
-      fromAdmin: 'true', // Mark as admin notification so app always shows it
-      type: data?.type || 'admin', // Ensure type is set
+      ...(imageUrl && { image: imageUrl }),
+      fromAdmin: 'true',
+      type: notifType,
+      screen: data?.screen || 'notifications',
     });
-    const notification = { title, body };
-    if (image && typeof image === 'string' && image.trim()) {
-      notification.image = image.trim();
-    }
+
+    const bodyText = String(body || title || 'OneZaPay');
+    const titleText = String(title || 'OneZaPay');
+
+    // notification + data: Android shows in the system shade when the app is closed/backgrounded.
+    // data payload is still delivered for tap → open app → notifications screen.
     const message = {
-      notification,
+      notification: {
+        title: titleText,
+        body: bodyText,
+        ...(imageUrl ? { imageUrl } : {}),
+      },
       data: dataPayload,
       android: {
-        priority: 'high', // Ensure notification shows even when app is in background
-        data: dataPayload,
+        priority: 'high',
+        ttl: 86400000,
         notification: {
-          ...(notification.image && { image: notification.image }),
-          channelId: 'default', // Use default channel for admin notifications
-          sound: 'default',
+          channelId,
           priority: 'high',
+          defaultSound: true,
+          defaultVibrateTimings: true,
+          ...(imageUrl ? { imageUrl } : {}),
         },
       },
       apns: {
-        payload: { 
-          aps: { 
+        headers: { 'apns-priority': '10' },
+        payload: {
+          aps: {
+            alert: { title: titleText, body: bodyText },
             sound: 'default',
-            contentAvailable: true,
-            priority: 10, // High priority for iOS
-          } 
+            'content-available': 1,
+          },
         },
-        fcmOptions: notification.image ? { image: notification.image } : {},
+        ...(imageUrl ? { fcmOptions: { image: imageUrl } } : {}),
       },
       token: fcmToken,
     };
@@ -236,14 +317,16 @@ export async function sendPushToCustomer(customerId, { title, body = '', image, 
     return { success: false, error: 'Customer ID is required', code: 'NO_CUSTOMER_ID' };
   }
   try {
-    const customer = await prisma.customer.findUnique({
-      where: { id: customerId },
-      select: { fcmToken: true },
-    });
-    if (!customer?.fcmToken) {
+    const fcmToken = await resolveCustomerFcmToken(customerId);
+    if (!fcmToken) {
       return { success: false, error: 'Customer has no FCM token registered', code: 'NO_TOKEN' };
     }
-    return await sendPushToToken(customer.fcmToken, { title, body, image, data });
+    return await sendPushToToken(fcmToken, {
+      title,
+      body,
+      image,
+      data: { screen: 'notifications', ...data },
+    });
   } catch (e) {
     console.error('[PUSH] sendPushToCustomer failed:', e?.message || e);
     return { success: false, error: e?.message || 'Unknown error', code: 'DATABASE_ERROR' };

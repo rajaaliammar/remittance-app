@@ -85,9 +85,16 @@ app.use('/uploads', express.static(getUploadsBase()));
 // Health check route
 app.get('/health', async (req, res) => {
   let push = { configured: false };
+  let customerCount = null;
   try {
     const { getPushConfigStatus } = await import('./utils/push.js');
     push = getPushConfigStatus();
+  } catch {
+    /* ignore */
+  }
+  try {
+    const prisma = (await import('./utils/prisma.js')).default;
+    customerCount = await prisma.customer.count();
   } catch {
     /* ignore */
   }
@@ -96,6 +103,7 @@ app.get('/health', async (req, res) => {
     message: 'Server is running',
     timestamp: new Date().toISOString(),
     push,
+    stats: { customerCount },
   });
 });
 

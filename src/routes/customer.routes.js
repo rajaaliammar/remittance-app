@@ -8,6 +8,7 @@ import {
   getCustomerById,
   getCustomerDeviceInfoByEmail,
   sendNotificationToCustomer,
+  broadcastNotificationToAllCustomers,
   updateCustomer,
   approveCustomer, 
   rejectCustomer, 
@@ -35,6 +36,7 @@ router.post('/verify-otp', verifyOTP);
 
 // Protected routes (require authentication)
 router.get('/', authenticateToken, getAllCustomers);
+router.post('/broadcast-notification', authenticateToken, broadcastNotificationToAllCustomers);
 router.get('/device-info-by-email', authenticateToken, getCustomerDeviceInfoByEmail);
 router.get('/:id/aml/cached', authenticateToken, getCustomerAmlCached);
 router.get('/:id/aml/status', authenticateToken, getCustomerAmlStatus);
