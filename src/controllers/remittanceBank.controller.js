@@ -1,4 +1,5 @@
 import prisma from '../utils/prisma.js';
+import { syncBankToCountryServices } from '../utils/syncBankCountryServices.js';
 
 // Get all remittance banks
 export const getAllRemittanceBanks = async (req, res) => {
@@ -241,6 +242,8 @@ export const createRemittanceBank = async (req, res) => {
       }
     });
 
+    await syncBankToCountryServices(bank);
+
     // Format assignedCountries as array
     const formattedBank = {
       ...bank,
@@ -292,6 +295,12 @@ export const updateRemittanceBank = async (req, res) => {
       where: { id },
       data: updateData
     });
+
+    if (assignedCountries !== undefined) {
+      await syncBankToCountryServices(updatedBank);
+    } else if (active !== undefined) {
+      await syncBankToCountryServices(updatedBank);
+    }
 
     // Format assignedCountries as array
     const formattedBank = {
