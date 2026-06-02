@@ -1,13 +1,16 @@
 import prisma from '../utils/prisma.js';
+import { ensureDefaultFaqs } from '../utils/ensureDefaultFaqs.js';
 
 /**
  * GET /api/faqs - List all FAQs (public, for app and portal)
  */
 export const getFaqs = async (req, res) => {
   try {
+    await ensureDefaultFaqs();
     const faqs = await prisma.fAQ.findMany({
       orderBy: [{ order: 'asc' }, { createdAt: 'asc' }],
     });
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.json({ success: true, data: faqs });
   } catch (error) {
     console.error('[FAQ] getFaqs error:', error);

@@ -1614,6 +1614,158 @@ export const setPin = async (req, res) => {
   }
 };
 
+/** Load hashed PIN for the authenticated customer (Prisma with raw SQL fallback). */
+async function getCustomerPinRecord(customerId) {
+  try {
+    return await prisma.customer.findUnique({
+      where: { id: customerId },
+      select: { id: true, pin: true, hasPin: true },
+    });
+  } catch (prismaError) {
+    if (!prismaError.message?.includes('Unknown argument')) throw prismaError;
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT id, pin, "hasPin" FROM "customers" WHERE "id" = $1 LIMIT 1`,
+      customerId
+    );
+    if (!rows?.length) return null;
+    const row = rows[0];
+    return {
+      id: row.id,
+      pin: row.pin ?? null,
+      hasPin: row.hasPin === true || row.hasPin === 'true' || row.hasPin === 1,
+    };
+  }
+}
+
+/** Persist a new hashed PIN (Prisma with raw SQL fallback). */
+async function updateCustomerPinHash(customerId, hashedPin) {
+  try {
+    return await prisma.customer.update({
+      where: { id: customerId },
+      data: { pin: hashedPin, hasPin: true },
+      select: {
+        id: true,
+        email: true,
+        username: true,
+        phone: true,
+        firstName: true,
+        lastName: true,
+        hasPin: true,
+        status: true,
+      },
+    });
+  } catch (prismaError) {
+    if (!prismaError.message?.includes('Unknown argument')) throw prismaError;
+    await prisma.$executeRawUnsafe(
+      `
+        ALTER TABLE "customers"
+        ADD COLUMN IF NOT EXISTS "pin" TEXT,
+        ADD COLUMN IF NOT EXISTS "hasPin" BOOLEAN NOT NULL DEFAULT false;
+      `
+    );
+    await prisma.$executeRawUnsafe(
+      `
+        UPDATE "customers"
+        SET "pin" = $1, "hasPin" = true, "updatedAt" = CURRENT_TIMESTAMP
+        WHERE "id" = $2
+      `,
+      hashedPin,
+      customerId
+    );
+    const result = await prisma.$queryRawUnsafe(
+      `
+        SELECT id, email, username, phone, "firstName", "lastName", "hasPin", status
+        FROM "customers"
+        WHERE "id" = $1
+      `,
+      customerId
+    );
+    if (!result?.length) return null;
+    const row = result[0];
+    return {
+      id: row.id,
+      email: row.email,
+      username: row.username,
+      phone: row.phone,
+      firstName: row.firstName,
+      lastName: row.lastName,
+      hasPin: row.hasPin === true || row.hasPin === 'true' || row.hasPin === 1,
+      status: row.status,
+    };
+  }
+}
+
+function validateFourDigitPin(pin, label) {
+  if (!pin || typeof pin !== 'string' || pin.length !== 4 || !/^\d{4}$/.test(pin)) {
+    return `${label} must be a 4-digit number`;
+  }
+  return null;
+}
+
+/**
+ * Change PIN for authenticated customer (mobile app Settings → Change PIN).
+ * POST /api/accounts/change-pin
+ */
+export const changePin = async (req, res) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+
+    const { currentPin, newPin } = req.body || {};
+    const currentErr = validateFourDigitPin(currentPin, 'Current PIN');
+    if (currentErr) {
+      return res.status(400).json({ success: false, message: currentErr });
+    }
+    const newErr = validateFourDigitPin(newPin, 'New PIN');
+    if (newErr) {
+      return res.status(400).json({ success: false, message: newErr });
+    }
+    if (String(currentPin) === String(newPin)) {
+      return res.status(400).json({
+        success: false,
+        message: 'New PIN must be different from your current PIN',
+      });
+    }
+
+    const customer = await getCustomerPinRecord(customerId);
+    if (!customer) {
+      return res.status(404).json({ success: false, message: 'Customer not found' });
+    }
+    if (!customer.pin) {
+      return res.status(400).json({
+        success: false,
+        message: 'No PIN is set on this account. Use set PIN during registration instead.',
+      });
+    }
+
+    const currentValid = await bcrypt.compare(String(currentPin).trim(), customer.pin);
+    if (!currentValid) {
+      return res.status(401).json({ success: false, message: 'Current PIN is incorrect' });
+    }
+
+    const saltRounds = 10;
+    const hashedPin = await bcrypt.hash(String(newPin).trim(), saltRounds);
+    const updatedCustomer = await updateCustomerPinHash(customerId, hashedPin);
+    if (!updatedCustomer) {
+      return res.status(404).json({ success: false, message: 'Customer not found' });
+    }
+
+    return res.json({
+      success: true,
+      message: 'PIN updated successfully',
+      data: updatedCustomer,
+    });
+  } catch (error) {
+    console.error('[changePin] error:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to change PIN',
+    });
+  }
+};
+
 // Set password for authenticated customer
 export const setPassword = async (req, res) => {
   try {
@@ -1705,6 +1857,122 @@ export const setPassword = async (req, res) => {
       success: false,
       message: 'Failed to set password',
       error: error.message
+    });
+  }
+};
+
+/**
+ * Change password for authenticated customer (mobile app Settings → Change password).
+ * POST /api/accounts/change-password
+ */
+export const changePassword = async (req, res) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+
+    const { currentPassword, newPassword } = req.body || {};
+    const current = currentPassword != null ? String(currentPassword).trim() : '';
+    const next = newPassword != null ? String(newPassword).trim() : '';
+
+    if (!current || current.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'Current password is required and must be at least 6 characters',
+      });
+    }
+    if (!next || next.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password is required and must be at least 6 characters',
+      });
+    }
+    if (current === next) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password must be different from your current password',
+      });
+    }
+
+    const customer = await prisma.customer.findUnique({
+      where: { id: customerId },
+      select: { id: true, password: true },
+    });
+    if (!customer) {
+      return res.status(404).json({ success: false, message: 'Customer not found' });
+    }
+    if (!customer.password) {
+      return res.status(400).json({
+        success: false,
+        message: 'No password is set on this account yet.',
+      });
+    }
+
+    const currentValid = await bcrypt.compare(current, customer.password);
+    if (!currentValid) {
+      return res.status(401).json({
+        success: false,
+        message: 'Current password is incorrect',
+      });
+    }
+
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash(next, saltRounds);
+
+    let updatedCustomer;
+    try {
+      updatedCustomer = await prisma.customer.update({
+        where: { id: customerId },
+        data: { password: hashedPassword },
+        select: {
+          id: true,
+          email: true,
+          username: true,
+          phone: true,
+          firstName: true,
+          lastName: true,
+          hasPin: true,
+          status: true,
+        },
+      });
+    } catch (prismaError) {
+      if (!prismaError.message?.includes('Unknown argument')) throw prismaError;
+      await prisma.$executeRawUnsafe(
+        `UPDATE "customers" SET "password" = $1, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = $2`,
+        hashedPassword,
+        customerId
+      );
+      const result = await prisma.$queryRawUnsafe(
+        `SELECT id, email, username, phone, "firstName", "lastName", "hasPin", status FROM "customers" WHERE "id" = $1`,
+        customerId
+      );
+      if (!result?.length) {
+        return res.status(404).json({ success: false, message: 'Customer not found' });
+      }
+      const row = result[0];
+      updatedCustomer = {
+        id: row.id,
+        email: row.email,
+        username: row.username,
+        phone: row.phone,
+        firstName: row.firstName,
+        lastName: row.lastName,
+        hasPin: row.hasPin === true || row.hasPin === 'true' || row.hasPin === 1,
+        status: row.status,
+      };
+    }
+
+    return res.json({
+      success: true,
+      message: 'Password updated successfully',
+      data: updatedCustomer,
+    });
+  } catch (error) {
+    console.error('[changePassword] error:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to change password',
     });
   }
 };
@@ -2109,6 +2377,96 @@ export const getFrequentlyPaid = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: error.message || 'Failed to get frequently paid contacts',
+    });
+  }
+};
+
+const SENT_TXN_EXCLUDE_STATUSES = ['Failed', 'Cancelled', 'Canceled', 'Refunded', 'Rejected'];
+
+function recipientDedupeKey(ri) {
+  const accountNumber = String(ri.accountNumber || ri.phone || '').replace(/\D/g, '');
+  const name = String(
+    ri.accountHolderName ||
+      ri.recipientName ||
+      ri.name ||
+      ri.receiverName ||
+      ri.beneficiaryName ||
+      [ri.firstName, ri.lastName].filter(Boolean).join(' ') ||
+      ''
+  ).trim();
+  const beneficiaryKey = String(ri.beneficiaryKey || ri.beneficiaryId || '').trim();
+  return (
+    beneficiaryKey ||
+    (accountNumber || name ? `${accountNumber}|${name.toLowerCase()}` : '')
+  );
+}
+
+/**
+ * Profile hero stats for mobile app (Sent count, unique recipients, promotional savings).
+ * GET /api/accounts/profile-stats
+ */
+export const getProfileStats = async (req, res) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required',
+      });
+    }
+
+    const delegate = prisma.remittanceTransaction;
+    if (!delegate || typeof delegate.findMany !== 'function') {
+      return res.json({
+        success: true,
+        data: { sentCount: 0, recipientsCount: 0, savedAmount: 0, currency: 'USD' },
+      });
+    }
+
+    const rows = await delegate.findMany({
+      where: {
+        customerId,
+        type: 'Sent',
+        status: { notIn: SENT_TXN_EXCLUDE_STATUSES },
+      },
+      select: {
+        id: true,
+        recipientInfo: true,
+        sendAmount: true,
+        currency: true,
+      },
+    });
+
+    const seenRecipients = new Set();
+    let savedAmount = 0;
+    let currency = 'USD';
+
+    for (const row of rows) {
+      const ri = parseRecipientInfoJson(row.recipientInfo);
+      const key = recipientDedupeKey(ri);
+      if (key) seenRecipients.add(key);
+
+      const gift = Number(ri.giftAmount ?? ri.gift_amount ?? 0);
+      if (Number.isFinite(gift) && gift > 0) savedAmount += gift;
+
+      if (row.currency) currency = String(row.currency);
+    }
+
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+    return res.json({
+      success: true,
+      data: {
+        sentCount: rows.length,
+        recipientsCount: seenRecipients.size,
+        savedAmount: Math.round(savedAmount * 100) / 100,
+        currency,
+      },
+    });
+  } catch (error) {
+    console.error('Error getting profile stats:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to get profile stats',
     });
   }
 };

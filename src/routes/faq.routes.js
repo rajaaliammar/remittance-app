@@ -1,4 +1,5 @@
 import express from 'express';
+import { authenticateToken } from '../middleware/auth.js';
 import {
   getFaqs,
   getFaqById,
@@ -15,13 +16,13 @@ router.get('/', getFaqs);
 // GET /api/faqs/:id - Get one (for portal edit)
 router.get('/:id', getFaqById);
 
-// POST /api/faqs - Create (portal)
-router.post('/', createFaq);
+// POST /api/faqs - Create (portal admin)
+router.post('/', authenticateToken, createFaq);
 
-// PUT /api/faqs/:id - Update (portal)
-router.put('/:id', updateFaq);
+// PUT /api/faqs/:id - Update (portal admin)
+router.put('/:id', authenticateToken, updateFaq);
 
-// DELETE /api/faqs/:id - Delete (portal)
-router.delete('/:id', deleteFaq);
+// DELETE /api/faqs/:id - Delete (portal admin)
+router.delete('/:id', authenticateToken, deleteFaq);
 
 export default router;

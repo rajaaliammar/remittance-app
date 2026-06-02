@@ -1,6 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
+import { ensureDefaultKycForms } from '../src/utils/ensureDefaultKycForms.js';
 
 const prisma = new PrismaClient();
 
@@ -137,41 +138,7 @@ async function main() {
     }
   }
 
-  // Dev-friendly default KYC form so GET /api/kyc/forms/country/:code returns data locally.
-  // Empty `countries` means "all countries" (see getKYCFormsByCountry in kyc.controller.js).
-  const devKycName = 'Standard identity verification (dev)';
-  const existingDevKyc = await prisma.kYCForm.findFirst({
-    where: { name: devKycName },
-  });
-  if (!existingDevKyc) {
-    await prisma.kYCForm.create({
-      data: {
-        name: devKycName,
-        description: 'Required for wallet activation, deposits, and transfers',
-        for: 'User',
-        status: 'Active',
-        countries: [],
-        priority: 1,
-        fields: [
-          {
-            id: 'dev-id-front',
-            fieldName: 'Government ID (front)',
-            inputType: 'Upload',
-            validationType: 'Required',
-          },
-          {
-            id: 'dev-id-back',
-            fieldName: 'Government ID (back)',
-            inputType: 'Upload',
-            validationType: 'Required',
-          },
-        ],
-      },
-    });
-    console.log(`✅ KYC form created: ${devKycName}`);
-  } else {
-    console.log(`ℹ️ KYC form already exists: ${devKycName}`);
-  }
+  await ensureDefaultKycForms();
 
   // Demo remittance banks for India (local dev) — app lists banks where assignedCountries includes IN + Active
   const india = await prisma.country.findFirst({

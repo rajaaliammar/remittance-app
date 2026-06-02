@@ -10,6 +10,8 @@ import {
   uploadKycDocument,
   saveKycDetails,
   setPin,
+  changePin,
+  changePassword,
   setPassword,
   getBalance,
   getProfile,
@@ -17,6 +19,7 @@ import {
   getTierAndLimits,
   getConsumedLimits,
   getFrequentlyPaid,
+  getProfileStats,
   updatePushToken,
   reportDeviceInfo,
   getCustomerNotifications,
@@ -88,6 +91,14 @@ router.post('/aml-sync/', authenticateCustomer, customerAmlSync);
 router.post('/set-pin', authenticateCustomer, setPin);
 router.post('/set-pin/', authenticateCustomer, setPin);
 
+// Change PIN (requires authentication) - mobile app Settings
+router.post('/change-pin', authenticateCustomer, changePin);
+router.post('/change-pin/', authenticateCustomer, changePin);
+
+// Change password (requires authentication) - mobile app Settings
+router.post('/change-password', authenticateCustomer, changePassword);
+router.post('/change-password/', authenticateCustomer, changePassword);
+
 // Set or update password (requires authentication) - mobile app registration flow
 router.post('/set-password', authenticateCustomer, setPassword);
 router.post('/set-password/', authenticateCustomer, setPassword);
@@ -114,6 +125,10 @@ router.get('/limits/consumed', authenticateCustomer, getConsumedLimits);
 // Recent recipients from completed sends (Send Again on home)
 router.get('/frequently-paid', authenticateCustomer, getFrequentlyPaid);
 router.get('/frequently-paid/', authenticateCustomer, getFrequentlyPaid);
+
+// Profile screen stats (sent count, recipients, savings)
+router.get('/profile-stats', authenticateCustomer, getProfileStats);
+router.get('/profile-stats/', authenticateCustomer, getProfileStats);
 
 // Push notification token (requires authentication) - mobile app
 router.put('/push-token', authenticateCustomer, updatePushToken);

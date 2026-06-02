@@ -1,6 +1,7 @@
 import prisma from '../utils/prisma.js';
 import { sendPushToCustomer } from '../utils/push.js';
 import { expandKycCountryTokens } from '../utils/kycCountryTokens.js';
+import { ensureDefaultKycForms } from '../utils/ensureDefaultKycForms.js';
 
 // Emit real-time KYC status update to the customer's socket room (for app Verifications screen)
 function emitKYCUpdateToCustomer(req, customerId, payload) {
@@ -883,6 +884,8 @@ export const getKYCFormsByCountry = async (req, res) => {
         error: 'Prisma client not regenerated. Please run: npx prisma generate'
       });
     }
+
+    await ensureDefaultKycForms();
 
     const { countryCode } = req.params;
 

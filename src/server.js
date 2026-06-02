@@ -17,6 +17,7 @@ import apiRoutes from './routes/index.js';
 import { addSessionRequest } from './store/sessionRequestStore.js';
 import { releaseChat } from './store/activeChatStore.js';
 import { ensureDefaultFaqs } from './utils/ensureDefaultFaqs.js';
+import { ensureDefaultKycForms } from './utils/ensureDefaultKycForms.js';
 import {
   logAmlStartupConfig,
   verifyAmlConnectionAtStartup,
@@ -237,6 +238,7 @@ async function startServer() {
     await ensureRegistrationSettingsTable();
     await ensureComplianceColumnsAndTables();
     await ensureDefaultFaqs();
+    await ensureDefaultKycForms();
     console.log('✅ Level & balance limit columns ready');
     console.log('✅ Registration settings table ready');
     console.log('✅ Compliance columns and alerts table ready');
