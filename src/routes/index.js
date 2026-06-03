@@ -42,6 +42,7 @@ import uploadRoutes from './upload.routes.js';
 import complianceRoutes from './compliance.routes.js';
 import acceptblueRoutes from './acceptblue.routes.js';
 import amlRoutes from './aml.routes.js';
+import dashboardRoutes from './dashboard.routes.js';
 
 const router = express.Router();
 
@@ -91,6 +92,7 @@ router.use('/upload', uploadRoutes);
 router.use('/compliance', complianceRoutes);
 router.use('/acceptblue', acceptblueRoutes);
 router.use('/aml', amlRoutes);
+router.use('/dashboard', dashboardRoutes);
 
 // Default route
 router.get('/', (req, res) => {

@@ -209,7 +209,9 @@ export const getAllAgents = async (req, res) => {
         approvedAt: true,
         level: true,
         balanceLimit: true,
-        createdAt: true
+        createdAt: true,
+        updatedAt: true,
+        businessName: true
       },
       orderBy: {
         createdAt: 'desc'

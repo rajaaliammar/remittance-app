@@ -1915,7 +1915,7 @@ export const changePassword = async (req, res) => {
 
     const currentValid = await bcrypt.compare(current, customer.password);
     if (!currentValid) {
-      return res.status(401).json({
+      return res.status(400).json({
         success: false,
         message: 'Current password is incorrect',
       });
@@ -2047,6 +2047,7 @@ export const getProfile = async (req, res) => {
         address: true,
         status: true,
         hasPin: true,
+        password: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -2087,6 +2088,7 @@ export const getProfile = async (req, res) => {
       country_code: country_code || null,
       is_verified: customer.status === 'approved',
       has_pin: !!customer.hasPin,
+      has_password: !!(customer.password && String(customer.password).trim()),
       profile_image: profileImageFromDb,
       created_at: customer.createdAt,
       updated_at: customer.updatedAt,
