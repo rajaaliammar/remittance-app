@@ -83,16 +83,16 @@ export async function resolveCustomerLastIpAddress(customer, prisma) {
   if (fromKyc) return fromKyc;
 
   try {
-    const tx = await prisma.remittanceTransaction.findFirst({
-      where: {
-        customerId: customer.id,
-        ipAddress: { not: null },
-      },
+    const txs = await prisma.remittanceTransaction.findMany({
+      where: { customerId: customer.id },
       orderBy: { createdAt: 'desc' },
+      take: 20,
       select: { ipAddress: true },
     });
-    if (isUsableClientIp(tx?.ipAddress)) {
-      return normalizeClientIp(tx.ipAddress);
+    for (const tx of txs) {
+      if (isUsableClientIp(tx?.ipAddress)) {
+        return normalizeClientIp(tx.ipAddress);
+      }
     }
   } catch (err) {
     console.warn('[resolveCustomerLastIp] transaction lookup failed:', err?.message);

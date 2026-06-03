@@ -93,6 +93,7 @@ router.use('/upload', uploadRoutes);
 router.use('/compliance', complianceRoutes);
 router.use('/acceptblue', acceptblueRoutes);
 router.use('/aml', amlRoutes);
+router.use('/aml/utilities', utilitiesRoutes);
 router.use('/dashboard', dashboardRoutes);
 router.use('/utilities', utilitiesRoutes);
 
@@ -123,7 +124,8 @@ router.get('/', (req, res) => {
       blogs: '/api/blogs',
       menus: '/api/menus',
       levels: '/api/levels',
-      utilities: '/api/utilities'
+      utilities: '/api/utilities',
+      amlUtilities: '/api/aml/utilities'
     }
   });
 });
