@@ -18,6 +18,11 @@ import {
   unwrapAmlDocumentsList,
 } from '../services/amlDocument.service.js';
 import { extractAmlCacheFromKycData } from '../utils/amlKycData.js';
+import { isUsableClientIp } from '../utils/clientIp.js';
+import {
+  buildClientIpFields,
+  resolveLastIpForApi,
+} from '../utils/resolveCustomerLastIp.js';
 
 function mergeKycAml(customer, amlPayload) {
   const syncedAt = new Date().toISOString();
@@ -30,6 +35,9 @@ function mergeKycAml(customer, amlPayload) {
     lastDocumentsUploadResponse: amlPayload.lastDocumentsUploadResponse,
     lastDocumentsUploadAt: amlPayload.lastDocumentsUploadAt,
     lastCaseClearResponse: amlPayload.lastCaseClearResponse,
+    ...(amlPayload.registrationIp
+      ? { registrationIp: amlPayload.registrationIp }
+      : {}),
     syncedAt,
   };
 
@@ -62,6 +70,13 @@ function mergeKycAml(customer, amlPayload) {
 }
 
 async function executeAmlOnboard(customer) {
+  const resolvedBeforeSave = await resolveLastIpForApi(customer, prisma);
+  if (resolvedBeforeSave && !customer.lastIpAddress) {
+    customer = await prisma.customer.update({
+      where: { id: customer.id },
+      data: { lastIpAddress: resolvedBeforeSave },
+    });
+  }
   const payload = buildNaturalCustomerSavePayload(customer);
   const clientNumber = payload.obj_CS_N.csClientNumber;
 
@@ -74,10 +89,12 @@ async function executeAmlOnboard(customer) {
     throw err;
   }
   const mapped = mapAmlCustomerStatus(saveRaw);
+  const registrationIp = payload?.obj_CS_N?.csIPAddress;
   const kycData = mergeKycAml(customer, {
     clientNumber,
     mapped,
     lastSaveResponse: saveRaw,
+    ...(isUsableClientIp(registrationIp) ? { registrationIp } : {}),
   });
 
   await prisma.customer.update({
@@ -184,6 +201,12 @@ export const getCustomerAmlStatus = async (req, res) => {
       `[AML] Customer ${customer.id} status → ${mapped.statusLabel} (client: ${clientNumber})`,
     );
 
+    const customerWithKyc = { ...customer, kycData };
+    const lastIpAddress = await resolveLastIpForApi(customerWithKyc, prisma, [
+      amlRaw,
+      existsResponse,
+    ]);
+
     return res.json({
       success: true,
       message: 'AML status retrieved',
@@ -195,7 +218,7 @@ export const getCustomerAmlStatus = async (req, res) => {
         status: mapped,
         mapped,
         cachedAt: kycData.aml.syncedAt,
-        lastIpAddress: customer.lastIpAddress ?? null,
+        ...buildClientIpFields(lastIpAddress),
       },
     });
   } catch (error) {
@@ -246,6 +269,12 @@ export const runCustomerAmlValidation = async (req, res) => {
       `[AML] Validation done — ${mappedValidate.statusLabel || mapped.statusLabel}`,
     );
 
+    const lastIpAddress = await resolveLastIpForApi(
+      { ...customer, kycData },
+      prisma,
+      [validateRaw, statusRaw],
+    );
+
     return res.json({
       success: true,
       message: 'AML validation completed',
@@ -256,6 +285,7 @@ export const runCustomerAmlValidation = async (req, res) => {
         status: statusRaw,
         mapped: mappedValidate.statusId ? mappedValidate : mapped,
         cachedAt: kycData.aml.syncedAt,
+        ...buildClientIpFields(lastIpAddress),
       },
     });
   } catch (error) {
@@ -529,6 +559,10 @@ export const getCustomerAmlCached = async (req, res) => {
     }
 
     const aml = extractAmlCacheFromKycData(customer.kycData);
+    const lastIpAddress = await resolveLastIpForApi(customer, prisma, [
+      aml?.lastStatusResponse,
+      aml?.lastSaveResponse,
+    ]);
 
     return res.json({
       success: true,
@@ -538,7 +572,7 @@ export const getCustomerAmlCached = async (req, res) => {
         clientNumber: aml?.clientNumber || resolveAmlClientNumber(customer),
         aml,
         cachedAt: aml?.syncedAt ?? null,
-        lastIpAddress: customer.lastIpAddress ?? null,
+        ...buildClientIpFields(lastIpAddress),
       },
     });
   } catch (error) {

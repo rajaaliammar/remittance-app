@@ -30,6 +30,8 @@ const __dirname = path.dirname(__filename);
 
 // Initialize Express app
 const app = express();
+// Honor X-Forwarded-For / X-Real-IP from nginx when capturing client IPs
+app.set('trust proxy', process.env.TRUST_PROXY_HOPS || 1);
 // Default Express ETag on JSON breaks mobile clients: conditional GET → 304 with no body,
 // while Axios/React Native typically do not replay the previous JSON → lists look empty.
 app.set('etag', false);

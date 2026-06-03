@@ -64,9 +64,23 @@ export const validateIp = async (req, res) => {
     const err = providerError(res, raw, 'IP validation failed');
     if (err) return err;
 
+    // Utilities spec: { "isValid": true }
+    const isValid =
+      typeof raw?.isValid === 'boolean'
+        ? raw.isValid
+        : typeof raw?.IsValid === 'boolean'
+          ? raw.IsValid
+          : typeof raw === 'boolean'
+            ? raw
+            : !raw?.isError;
+
     return res.json({
       success: true,
-      data: raw,
+      data: {
+        isValid: Boolean(isValid),
+        IpAddress: ip,
+      },
+      provider: raw && typeof raw === 'object' ? raw : undefined,
     });
   } catch (error) {
     console.error('[Utilities] validateIp:', error.message);

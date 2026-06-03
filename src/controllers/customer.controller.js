@@ -23,15 +23,11 @@ import {
 import { resolveCustomerFcmToken, sendPushToToken, getPushConfigStatus } from '../utils/push.js';
 import { notifyCustomerAsync, deliverCustomerNotification } from '../utils/customerNotify.js';
 import { emitCustomersUpdated } from '../utils/portalNotify.js';
-
-function extractClientIp(req) {
-  return (
-    req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
-    req.connection?.remoteAddress ||
-    req.socket?.remoteAddress ||
-    null
-  );
-}
+import { extractClientIp } from '../utils/clientIp.js';
+import {
+  buildClientIpFields,
+  resolveLastIpForApi,
+} from '../utils/resolveCustomerLastIp.js';
 
 // Fallback dir that is always available (tmpdir) so uploads never fail with EACCES
 const TMPDIR_KYC = path.join(os.tmpdir(), 'remittance-kyc-uploads', 'kyc');
@@ -2821,6 +2817,12 @@ export const getCustomerById = async (req, res) => {
     if (!customer) {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
+
+    const resolvedIp = await resolveLastIpForApi(customer, prisma);
+    if (resolvedIp) {
+      customer.lastIpAddress = resolvedIp;
+    }
+    Object.assign(customer, buildClientIpFields(resolvedIp || customer.lastIpAddress));
 
     res.json({ success: true, data: customer });
   } catch (error) {

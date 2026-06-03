@@ -67,6 +67,7 @@ export function extractAmlCacheFromKycData(kycData) {
     lastValidateResponse: aml.lastValidateResponse ?? null,
     lastDocumentsUploadResponse: aml.lastDocumentsUploadResponse ?? null,
     lastDocumentsUploadAt: aml.lastDocumentsUploadAt ?? null,
+    registrationIp: aml.registrationIp ?? null,
   };
 }
 
