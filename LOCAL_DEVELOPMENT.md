@@ -29,6 +29,19 @@ cd Archive && npm run cap:run:android:local
 - Open http://localhost:3001/health — `stats.customerCount` should match the portal Customer page total.
 - After signup in the app (step 3 phone verify), the portal list refreshes automatically via Socket.IO (`customers:updated`).
 
+## Device notification center (FCM)
+
+Portal **Notify all customers** only shows alerts in the phone’s **notification shade** when Firebase Admin is configured on the backend.
+
+1. Firebase Console → project **super-app-71711** → Project settings → Service accounts → **Generate new private key**
+2. Save as `Remittance_backend/firebase-service-account.json` (or run `./setup-firebase.sh`)
+3. Restart `npm run dev` — logs must show `[PUSH] ✅ Firebase Admin ready`
+4. On the phone: open the app, sign in, allow **Notifications**
+5. Rebuild the app: `cd Archive && npm run cap:run:android:local`
+6. Force-close the app, send from portal, check the notification shade
+
+`GET /health` → `push.configured` should be `true`.
+
 ## Signup flow
 
 `POST /api/accounts/signup/` creates a **pending** customer row immediately. The portal lists all customers from `GET /api/customers`.

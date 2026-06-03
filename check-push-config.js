@@ -9,6 +9,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+import { resolveServiceAccountPath } from './src/utils/push.js';
 
 // Load environment variables from .env file
 dotenv.config();
@@ -50,13 +51,12 @@ if (inlineJson && String(inlineJson).trim()) {
   }
 } else {
   console.log('   ✅ Found path:', firebasePath);
-  resolved = path.isAbsolute(firebasePath)
-    ? firebasePath
-    : path.resolve(process.cwd(), firebasePath);
+  resolved = resolveServiceAccountPath();
 
   if (!fs.existsSync(resolved)) {
     console.log('   ❌ File does not exist:', resolved);
-    console.log('   💡 Download the service account JSON from Firebase Console (see FIREBASE_SETUP.md)');
+    console.log('   💡 Run: npm run firebase:setup  (opens Firebase Console, copies download into place)');
+    console.log('   💡 Or see FIREBASE_SETUP.md');
   } else {
     console.log('   ✅ File exists:', resolved);
     

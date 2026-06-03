@@ -22,6 +22,7 @@ import {
   logAmlStartupConfig,
   verifyAmlConnectionAtStartup,
 } from './services/amlProvider.service.js';
+import { getPushConfigStatus } from './utils/push.js';
 
 // Get __dirname equivalent for ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -271,6 +272,18 @@ async function startServer() {
     console.log(`🔗 API base: http://localhost:${PORT}/api`);
     console.log(`🔌 Socket.io: http://localhost:${PORT}`);
     logAmlStartupConfig();
+    const pushStatus = getPushConfigStatus();
+    if (pushStatus.configured) {
+      console.log(`[PUSH] ✅ Firebase Admin ready (project: ${pushStatus.projectId || 'unknown'})`);
+    } else {
+      console.error(
+        '[PUSH] ❌ Device notification center DISABLED — Firebase Admin not configured.\n' +
+          '       Download service account JSON from Firebase Console (project super-app-71711)\n' +
+          '       → save as Remittance_backend/firebase-service-account.json and restart.\n' +
+          '       Or run: cd Remittance_backend && npm run firebase:setup\n' +
+          (pushStatus.expectedPath ? `       Expected file: ${pushStatus.expectedPath}` : ''),
+      );
+    }
     void verifyAmlConnectionAtStartup().then((result) => {
       if (result.ok) {
         console.log('[AML] Startup login OK — token ready for onboard/save');

@@ -590,6 +590,82 @@ export async function ensureDefaultManageContent() {
       console.log('✅ Merged full contactPage defaults (incl. FAQ) into existing CMS row');
     }
 
+    const APP_HOME_SLIDER_DEFAULT = {
+      sliders: [
+        {
+          showBadge: true,
+          badge: 'INVITE',
+          showTitle: true,
+          title: 'Refer & earn $20',
+          showSubtitle: true,
+          subtitle: 'For every friend who sends their first transfer',
+          showCta: true,
+          ctaText: 'Invite friends',
+          ctaPath: '/refer',
+          ctaAccent: 'primary',
+          gradientColors: ['#1E5BD6', '#6E3CE6'],
+          showDecor: true,
+          decorMode: 'emoji',
+          decorEmoji: '🎁',
+          decorImagePath: '',
+        },
+        {
+          showBadge: true,
+          badge: 'LIMITED',
+          showTitle: true,
+          title: 'Zero fees on your first transfer',
+          showSubtitle: true,
+          subtitle: 'Send anywhere in the world, fee-free',
+          showCta: true,
+          ctaText: 'Send now',
+          ctaPath: '/send',
+          ctaAccent: 'amber',
+          gradientColors: ['#F59E0B', '#EF4444'],
+          showDecor: true,
+          decorMode: 'emoji',
+          decorEmoji: '✨',
+          decorImagePath: '',
+        },
+        {
+          showBadge: true,
+          badge: '0% FEE',
+          showTitle: true,
+          title: 'Send to India · weekend special',
+          showSubtitle: true,
+          subtitle: 'Today and tomorrow only on Bank Transfers',
+          showCta: true,
+          ctaText: 'Send 🇮🇳',
+          ctaPath: '/send?method=bank',
+          ctaAccent: 'accent',
+          gradientColors: ['#1FA64A', '#0F9B8E'],
+          showDecor: true,
+          decorMode: 'emoji',
+          decorEmoji: '🇮🇳',
+          decorImagePath: '',
+        },
+      ],
+    };
+
+    for (const [sectionType, englishData] of [
+      ['appHomeSlider', APP_HOME_SLIDER_DEFAULT],
+    ]) {
+      const row = await prisma.manageContent.findFirst({
+        where: { sectionType },
+        select: { id: true },
+      });
+      if (!row) {
+        await prisma.manageContent.create({
+          data: {
+            sectionType,
+            englishData,
+            spanishData: null,
+            images: null,
+          },
+        });
+        console.log(`✅ Seeded ${sectionType} CMS section`);
+      }
+    }
+
     const { sanitizeAboutTimelineEnglishData } = await import('./sanitizeAboutTimeline.js');
     const timelineRow = await prisma.manageContent.findFirst({
       where: { sectionType: 'aboutTimeline' },

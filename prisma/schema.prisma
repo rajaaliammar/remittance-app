@@ -343,6 +343,7 @@ model Customer {
   fcmToken        String?   // FCM device token for push notifications
   lastDeviceInfo  Json?     // Last reported device: { deviceType, brand, model, os, osVersion, userAgent, appVersion }
   lastLocation    Json?     // Last reported location: { latitude, longitude, city, country, region, address }
+  lastIpAddress   String?   // Last known client IP address (captured on login/signup/device-report)
   lastSeenAt      DateTime? // When the app last reported device/location
   lastTransactionAt DateTime? // When the customer last completed a transaction (for inactive account detection)
   // Accept.blue payment integration

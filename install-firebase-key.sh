@@ -19,8 +19,19 @@ echo ""
 open "$CONSOLE_URL" 2>/dev/null || echo "   Open manually: $CONSOLE_URL"
 echo "Waiting for download (up to 5 minutes)..."
 
+# Use any existing adminsdk download first (not only files from the last 10 minutes)
+EXISTING=$(find "$HOME/Downloads" -maxdepth 1 -name '*firebase-adminsdk*.json' 2>/dev/null | head -1)
+if [ -n "$EXISTING" ] && [ -f "$EXISTING" ]; then
+  cp "$EXISTING" "$TARGET"
+  chmod 600 "$TARGET"
+  echo "✅ Installed: $TARGET (from $EXISTING)"
+  node check-push-config.js 2>/dev/null | head -15
+  echo "👉 Restart backend: npm run dev"
+  exit 0
+fi
+
 for i in $(seq 1 150); do
-  FILE=$(find "$HOME/Downloads" -maxdepth 1 -name '*firebase-adminsdk*.json' -mmin -10 2>/dev/null | head -1)
+  FILE=$(find "$HOME/Downloads" -maxdepth 1 -name '*firebase-adminsdk*.json' -mmin -2 2>/dev/null | head -1)
   if [ -n "$FILE" ] && [ -f "$FILE" ]; then
     cp "$FILE" "$TARGET"
     chmod 600 "$TARGET"

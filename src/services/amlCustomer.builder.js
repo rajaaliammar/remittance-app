@@ -134,7 +134,7 @@ export function buildNaturalCustomerSavePayload(customer) {
     csIsJointAccount: '2',
     csAreYouDoingThirdPartyTr: '2',
     csThirdpartyDeclaration: 'N/A',
-    csIPAddress: '0.0.0.0',
+    csIPAddress: customer.lastIpAddress || '0.0.0.0',
   };
 
   return {

@@ -11,6 +11,94 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 let messaging = null;
 
+const DEFAULT_SERVICE_ACCOUNT_FILE = 'firebase-service-account.json';
+
+function isServiceAccountFileName(name) {
+  return (
+    name === DEFAULT_SERVICE_ACCOUNT_FILE ||
+    (name.endsWith('.json') && name.includes('firebase-adminsdk'))
+  );
+}
+
+function readServiceAccountFile(filePath) {
+  try {
+    const key = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    if (key?.project_id && key?.private_key && key?.client_email) {
+      return key;
+    }
+  } catch {
+    /* invalid */
+  }
+  return null;
+}
+
+/** Resolve Firebase Admin JSON path (env, backend dir, or recent Downloads in dev). */
+export function resolveServiceAccountPath() {
+  const envPath =
+    process.env.FIREBASE_SERVICE_ACCOUNT_PATH ||
+    process.env.GOOGLE_APPLICATION_CREDENTIALS;
+
+  const tryPath = (p) => {
+    if (!p) return null;
+    const resolved = path.isAbsolute(p) ? p : path.resolve(process.cwd(), p);
+    return fs.existsSync(resolved) ? resolved : null;
+  };
+
+  if (envPath) {
+    const hit = tryPath(envPath);
+    if (hit) return hit;
+  }
+
+  const cwd = process.cwd();
+  let dirNames = [];
+  try {
+    dirNames = fs.readdirSync(cwd);
+  } catch {
+    dirNames = [];
+  }
+  const localCandidates = [
+    path.join(cwd, DEFAULT_SERVICE_ACCOUNT_FILE),
+    ...dirNames.filter(isServiceAccountFileName).map((name) => path.join(cwd, name)),
+  ];
+
+  for (const candidate of localCandidates) {
+    if (fs.existsSync(candidate) && readServiceAccountFile(candidate)) {
+      return candidate;
+    }
+  }
+
+  if (process.env.NODE_ENV !== 'production') {
+    const downloads = path.join(process.env.HOME || '', 'Downloads');
+    if (fs.existsSync(downloads)) {
+      const fromDownloads = fs
+        .readdirSync(downloads)
+        .filter(isServiceAccountFileName)
+        .map((name) => path.join(downloads, name))
+        .filter((p) => readServiceAccountFile(p))
+        .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+      if (fromDownloads[0]) {
+        const target = path.join(cwd, DEFAULT_SERVICE_ACCOUNT_FILE);
+        try {
+          fs.copyFileSync(fromDownloads[0], target);
+          fs.chmodSync(target, 0o600);
+          console.log(
+            `[PUSH] Copied Firebase key from Downloads → ${DEFAULT_SERVICE_ACCOUNT_FILE}`,
+          );
+          return target;
+        } catch (e) {
+          console.warn('[PUSH] Could not copy key from Downloads:', e?.message || e);
+          return fromDownloads[0];
+        }
+      }
+    }
+  }
+
+  if (envPath) {
+    return path.isAbsolute(envPath) ? envPath : path.resolve(process.cwd(), envPath);
+  }
+  return path.resolve(cwd, DEFAULT_SERVICE_ACCOUNT_FILE);
+}
+
 /** Whether Firebase credentials are present (does not initialize Admin SDK). */
 export function getPushConfigStatus() {
   const jsonInline = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
@@ -27,35 +115,25 @@ export function getPushConfigStatus() {
     }
   }
 
-  const credPath =
-    process.env.FIREBASE_SERVICE_ACCOUNT_PATH ||
-    process.env.GOOGLE_APPLICATION_CREDENTIALS;
-  if (!credPath) {
-    return { configured: false, projectId: null, source: null };
-  }
-
-  const resolved = path.isAbsolute(credPath)
-    ? credPath
-    : path.resolve(process.cwd(), credPath);
+  const resolved = resolveServiceAccountPath();
   if (!fs.existsSync(resolved)) {
     return {
       configured: false,
       projectId: null,
-      source: credPath,
+      source: process.env.FIREBASE_SERVICE_ACCOUNT_PATH || null,
       error: 'file_not_found',
       expectedPath: resolved,
     };
   }
-  try {
-    const key = JSON.parse(fs.readFileSync(resolved, 'utf8'));
-    return {
-      configured: !!(key?.project_id && key?.private_key && key?.client_email),
-      projectId: key?.project_id || null,
-      source: resolved,
-    };
-  } catch {
+  const key = readServiceAccountFile(resolved);
+  if (!key) {
     return { configured: false, projectId: null, source: resolved, error: 'invalid_json' };
   }
+  return {
+    configured: true,
+    projectId: key.project_id || null,
+    source: resolved,
+  };
 }
 
 function loadServiceAccountKey() {
@@ -69,26 +147,20 @@ function loadServiceAccountKey() {
     }
   }
 
-  const credPath =
-    process.env.FIREBASE_SERVICE_ACCOUNT_PATH ||
-    process.env.GOOGLE_APPLICATION_CREDENTIALS;
-  if (!credPath) return null;
-
-  const resolved = path.isAbsolute(credPath)
-    ? credPath
-    : path.resolve(process.cwd(), credPath);
+  const resolved = resolveServiceAccountPath();
   if (!fs.existsSync(resolved)) {
     console.error('[PUSH] ❌ Firebase service account file not found:', resolved);
     console.error('[PUSH] Download from Firebase Console (project super-app-71711) and save as firebase-service-account.json');
+    console.error('[PUSH] Or run: cd Remittance_backend && npm run firebase:setup');
     console.error('[PUSH] Or set FIREBASE_SERVICE_ACCOUNT_JSON with the full JSON contents');
     return null;
   }
-  try {
-    return JSON.parse(fs.readFileSync(resolved, 'utf8'));
-  } catch (e) {
-    console.error('[PUSH] ❌ Failed to read service account file:', e?.message || e);
+  const key = readServiceAccountFile(resolved);
+  if (!key) {
+    console.error('[PUSH] ❌ Invalid Firebase service account file:', resolved);
     return null;
   }
+  return key;
 }
 
 function getMessaging() {
@@ -117,19 +189,23 @@ function getMessaging() {
 
 /**
  * Send a push notification to an FCM token.
- * Uses both notification and data payloads so the message is delivered and shown by the system
- * even when the app is closed; the user sees it in the notification tray and when they open the app.
+ *
+ * Android: data-only (no top-level `notification` key) so OneZaPayMessagingService
+ * onMessageReceived runs when the app is killed/background and posts to the system tray.
+ * iOS: APNS alert payload for the same behavior on Apple devices.
+ *
  * @param {string} fcmToken - Device FCM token
- * @param {{ title: string, body?: string, data?: object }} options - title, body, and optional data payload
- * @returns {Promise<boolean>} - true if sent, false if skipped/failed
+ * @param {{ title: string, body?: string, image?: string, data?: object }} options
  */
 /** Public API origin for absolute image URLs in FCM (relative /uploads/... paths). */
 function getPublicApiOrigin() {
   const raw =
     process.env.PUBLIC_API_URL ||
-    process.env.EXTERNAL_API_URL ||
     process.env.API_PUBLIC_URL ||
-    `http://localhost:${process.env.PORT || 3001}`;
+    process.env.EXTERNAL_API_URL ||
+    (process.env.NODE_ENV !== 'production'
+      ? `http://10.0.2.2:${process.env.PORT || 3001}`
+      : `http://localhost:${process.env.PORT || 3001}`);
   return String(raw).replace(/\/api\/?$/i, '').replace(/\/+$/, '');
 }
 
@@ -233,25 +309,17 @@ export async function sendPushToToken(fcmToken, { title, body = '', image, data 
     const bodyText = String(body || title || 'OneZaPay');
     const titleText = String(title || 'OneZaPay');
 
-    // notification + data: Android shows in the system shade when the app is closed/backgrounded.
-    // data payload is still delivered for tap → open app → notifications screen.
+    // Data-only on Android → custom MessagingService always runs (app closed/background).
+    // Do not set top-level `notification` — it can prevent onMessageReceived on Android.
     const message = {
-      notification: {
-        title: titleText,
-        body: bodyText,
-        ...(imageUrl ? { imageUrl } : {}),
+      data: {
+        ...dataPayload,
+        channelId,
       },
-      data: dataPayload,
       android: {
         priority: 'high',
         ttl: 86400000,
-        notification: {
-          channelId,
-          priority: 'high',
-          defaultSound: true,
-          defaultVibrateTimings: true,
-          ...(imageUrl ? { imageUrl } : {}),
-        },
+        directBootOk: true,
       },
       apns: {
         headers: { 'apns-priority': '10' },

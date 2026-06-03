@@ -72,6 +72,23 @@ You should now see:
 [PUSH] ✅ Firebase Admin initialized successfully
 ```
 
+## Production server (apibrandpay.appliedline.com)
+
+The Archive mobile app uses the **live API** by default (`VITE_FORCE_LIVE_API=true`). FCM tokens are stored on that server. Device notification center alerts only work if **that** host has Firebase configured.
+
+1. Check: `curl -s https://apibrandpay.appliedline.com/health` → `push.configured` must be `true`.
+2. On the production host, either:
+   - Place `firebase-service-account.json` in `Remittance_backend/` and set `FIREBASE_SERVICE_ACCOUNT_PATH=./firebase-service-account.json`, **or**
+   - Set `FIREBASE_SERVICE_ACCOUNT_JSON` to the **entire** service account JSON (one line), which many hosts prefer over a file.
+3. Restart the Node process and confirm `/health` shows `push.configured: true`.
+
+Quick local install (copies from Downloads):
+
+```bash
+cd Remittance_backend
+./install-firebase-key.sh
+```
+
 ## Verify Setup
 
 Run the diagnostic script:

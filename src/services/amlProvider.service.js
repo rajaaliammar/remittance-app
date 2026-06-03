@@ -358,6 +358,13 @@ export function logAmlStartupConfig() {
   console.log('[AML]   POST /api/Transactions/save (on remittance create)');
   console.log('[AML]   POST /api/aml/transactions/listing');
   console.log('[AML]   POST /api/aml/transactions/update-status');
+  console.log('[AML] Utilities routes:');
+  console.log('[AML]   GET  /api/utilities/last-update-date');
+  console.log('[AML]   POST /api/utilities/validate-ip');
+  console.log('[AML]   GET  /api/utilities/max-occupation-id');
+  console.log('[AML]   POST /api/utilities/business-activity');
+  console.log('[AML]   POST /api/utilities/occupation');
+  console.log('[AML]   GET  /api/utilities/active-rules');
   console.log('────────────────────────────────────────');
 }
 
@@ -596,4 +603,30 @@ export async function amlUpdateTransactionStatus(payload) {
 
 export async function amlSaveTransaction(fullTransactionDto) {
   return amlRequest('POST', '/api/Transactions/save', fullTransactionDto);
+}
+
+// ── Utilities (AML reference-data & config) ──────────────────────────
+
+export async function amlGetLastUpdateDate() {
+  return amlRequest('GET', '/api/Utilities/last-update-date');
+}
+
+export async function amlValidateIp(ipAddress) {
+  return amlRequest('POST', '/api/Utilities/validate-ip', { IpAddress: ipAddress });
+}
+
+export async function amlGetMaxOccupationId() {
+  return amlRequest('GET', '/api/Utilities/max-occupation-id');
+}
+
+export async function amlCreateBusinessActivity(payload) {
+  return amlRequest('POST', '/api/Utilities/business-activity', payload);
+}
+
+export async function amlCreateOccupation(payload) {
+  return amlRequest('POST', '/api/Utilities/occupation', payload);
+}
+
+export async function amlGetActiveRules() {
+  return amlRequest('GET', '/api/Utilities/active-rules');
 }

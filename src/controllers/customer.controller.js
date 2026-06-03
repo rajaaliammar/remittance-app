@@ -20,9 +20,18 @@ import {
   startOfWeekUTC,
   startOfMonthUTC,
 } from '../utils/limitsHelper.js';
-import { resolveCustomerFcmToken, sendPushToToken } from '../utils/push.js';
+import { resolveCustomerFcmToken, sendPushToToken, getPushConfigStatus } from '../utils/push.js';
 import { notifyCustomerAsync, deliverCustomerNotification } from '../utils/customerNotify.js';
 import { emitCustomersUpdated } from '../utils/portalNotify.js';
+
+function extractClientIp(req) {
+  return (
+    req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
+    req.connection?.remoteAddress ||
+    req.socket?.remoteAddress ||
+    null
+  );
+}
 
 // Fallback dir that is always available (tmpdir) so uploads never fail with EACCES
 const TMPDIR_KYC = path.join(os.tmpdir(), 'remittance-kyc-uploads', 'kyc');
@@ -206,6 +215,7 @@ const ensureCustomerExtendedProfileColumns = async () => {
     ALTER TABLE "customers"
     ADD COLUMN IF NOT EXISTS "lastDeviceInfo" JSONB,
     ADD COLUMN IF NOT EXISTS "lastLocation" JSONB,
+    ADD COLUMN IF NOT EXISTS "lastIpAddress" TEXT,
     ADD COLUMN IF NOT EXISTS "lastSeenAt" TIMESTAMPTZ;
   `);
 };
@@ -468,6 +478,13 @@ export const signup = async (req, res) => {
       }
     });
     await applyExtendedProfileRawUpdate(customer.id, extendedCreateData);
+    const signupIp = extractClientIp(req);
+    if (signupIp) {
+      await prisma.customer.update({
+        where: { id: customer.id },
+        data: { lastIpAddress: signupIp, lastSeenAt: new Date() },
+      }).catch(() => {});
+    }
     emitCustomersUpdated(req);
 
     return res.status(201).json({
@@ -709,12 +726,14 @@ export const loginWithPin = async (req, res) => {
         });
       }
       // Ensure hasPin flag is set (fixes cases where pin was set but hasPin wasn't persisted)
-      if (!customer.hasPin) {
-        await prisma.customer.update({
-          where: { id: customer.id },
-          data: { hasPin: true }
-        }).catch(() => {});
-      }
+      const loginIpData = { lastSeenAt: new Date() };
+      const loginIp = extractClientIp(req);
+      if (loginIp) loginIpData.lastIpAddress = loginIp;
+      if (!customer.hasPin) loginIpData.hasPin = true;
+      await prisma.customer.update({
+        where: { id: customer.id },
+        data: loginIpData,
+      }).catch(() => {});
       const token = jwt.sign(
         {
           id: customer.id,
@@ -796,13 +815,15 @@ export const loginWithPin = async (req, res) => {
       });
     }
 
-    // Ensure hasPin flag is set (fixes cases where pin was set but hasPin wasn't persisted)
-    if (!customer.hasPin) {
-      await prisma.customer.update({
-        where: { id: customer.id },
-        data: { hasPin: true }
-      }).catch(() => {});
-    }
+    // Ensure hasPin flag is set + capture IP
+    const phonePinIpData = { lastSeenAt: new Date() };
+    const phonePinIp = extractClientIp(req);
+    if (phonePinIp) phonePinIpData.lastIpAddress = phonePinIp;
+    if (!customer.hasPin) phonePinIpData.hasPin = true;
+    await prisma.customer.update({
+      where: { id: customer.id },
+      data: phonePinIpData,
+    }).catch(() => {});
 
     const token = jwt.sign(
       {
@@ -948,6 +969,11 @@ export const loginWithPassword = async (req, res) => {
           message: 'Invalid password.'
         });
       }
+      const emailPwIp = extractClientIp(req);
+      await prisma.customer.update({
+        where: { id: customer.id },
+        data: { lastSeenAt: new Date(), ...(emailPwIp ? { lastIpAddress: emailPwIp } : {}) },
+      }).catch(() => {});
       const token = jwt.sign(
         {
           id: customer.id,
@@ -1010,6 +1036,12 @@ export const loginWithPassword = async (req, res) => {
         message: 'Invalid password.'
       });
     }
+
+    const phonePwIp = extractClientIp(req);
+    await prisma.customer.update({
+      where: { id: customer.id },
+      data: { lastSeenAt: new Date(), ...(phonePwIp ? { lastIpAddress: phonePwIp } : {}) },
+    }).catch(() => {});
 
     const token = jwt.sign(
       {
@@ -2674,6 +2706,8 @@ export const reportDeviceInfo = async (req, res) => {
     if (location != null && typeof location === 'object') {
       updateData.lastLocation = location;
     }
+    const deviceIp = extractClientIp(req);
+    if (deviceIp) updateData.lastIpAddress = deviceIp;
     await prisma.customer.update({
       where: { id: customerId },
       data: updateData,
@@ -2772,6 +2806,7 @@ export const getCustomerById = async (req, res) => {
           "fcmToken",
           "lastDeviceInfo",
           "lastLocation",
+          "lastIpAddress",
           "lastSeenAt",
           "createdAt",
           "updatedAt"
@@ -2931,16 +2966,27 @@ export const broadcastNotificationToAllCustomers = async (req, res) => {
       }
     }
 
+    const pushStatus = getPushConfigStatus();
     console.log(
-      `[Notification] Broadcast complete: total=${total} saved=${saved} pushed=${pushed}`
+      `[Notification] Broadcast complete: total=${total} saved=${saved} pushed=${pushed} pushConfigured=${pushStatus.configured}`
     );
+
+    let message;
+    if (!pushStatus.configured) {
+      message = `Saved in app for ${total} customer${total === 1 ? '' : 's'}. Device push skipped — configure Firebase Admin on the server (see FIREBASE_SETUP.md).`;
+    } else if (pushed === 0) {
+      message = `Saved in app for ${total} customer${total === 1 ? '' : 's'}. No devices received push (customers need to open the app, log in, and allow notifications).`;
+    } else {
+      message = `Message sent to ${total} customer${total === 1 ? '' : 's'}. Saved in app for all; push delivered to ${pushed}.`;
+    }
 
     res.json({
       success: true,
-      message: `Message sent to ${total} customer${total === 1 ? '' : 's'}. Saved in app for all; push delivered to ${pushed}.`,
+      message,
       total,
       saved,
       pushed,
+      pushConfigured: !!pushStatus.configured,
     });
   } catch (error) {
     console.error('Error broadcasting notification:', error);

@@ -195,6 +195,7 @@ export const getCustomerAmlStatus = async (req, res) => {
         status: mapped,
         mapped,
         cachedAt: kycData.aml.syncedAt,
+        lastIpAddress: customer.lastIpAddress ?? null,
       },
     });
   } catch (error) {
@@ -537,6 +538,7 @@ export const getCustomerAmlCached = async (req, res) => {
         clientNumber: aml?.clientNumber || resolveAmlClientNumber(customer),
         aml,
         cachedAt: aml?.syncedAt ?? null,
+        lastIpAddress: customer.lastIpAddress ?? null,
       },
     });
   } catch (error) {

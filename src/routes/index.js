@@ -43,6 +43,7 @@ import complianceRoutes from './compliance.routes.js';
 import acceptblueRoutes from './acceptblue.routes.js';
 import amlRoutes from './aml.routes.js';
 import dashboardRoutes from './dashboard.routes.js';
+import utilitiesRoutes from './utilities.routes.js';
 
 const router = express.Router();
 
@@ -93,6 +94,7 @@ router.use('/compliance', complianceRoutes);
 router.use('/acceptblue', acceptblueRoutes);
 router.use('/aml', amlRoutes);
 router.use('/dashboard', dashboardRoutes);
+router.use('/utilities', utilitiesRoutes);
 
 // Default route
 router.get('/', (req, res) => {
@@ -120,7 +122,8 @@ router.get('/', (req, res) => {
       blogCategories: '/api/blog-categories',
       blogs: '/api/blogs',
       menus: '/api/menus',
-      levels: '/api/levels'
+      levels: '/api/levels',
+      utilities: '/api/utilities'
     }
   });
 });
