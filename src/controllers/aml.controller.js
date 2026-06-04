@@ -202,6 +202,7 @@ export const getCustomerAmlStatus = async (req, res) => {
     );
 
     const customerWithKyc = { ...customer, kycData };
+    const amlCache = extractAmlCacheFromKycData(kycData);
     const lastIpAddress = await resolveLastIpForApi(customerWithKyc, prisma, [
       amlRaw,
       existsResponse,
@@ -217,7 +218,7 @@ export const getCustomerAmlStatus = async (req, res) => {
         aml: amlRaw,
         status: mapped,
         mapped,
-        cachedAt: kycData.aml.syncedAt,
+        cachedAt: amlCache?.syncedAt ?? null,
         ...buildClientIpFields(lastIpAddress),
       },
     });
@@ -269,6 +270,7 @@ export const runCustomerAmlValidation = async (req, res) => {
       `[AML] Validation done — ${mappedValidate.statusLabel || mapped.statusLabel}`,
     );
 
+    const amlCache = extractAmlCacheFromKycData(kycData);
     const lastIpAddress = await resolveLastIpForApi(
       { ...customer, kycData },
       prisma,
@@ -284,7 +286,7 @@ export const runCustomerAmlValidation = async (req, res) => {
         validate: validateRaw,
         status: statusRaw,
         mapped: mappedValidate.statusId ? mappedValidate : mapped,
-        cachedAt: kycData.aml.syncedAt,
+        cachedAt: amlCache?.syncedAt ?? null,
         ...buildClientIpFields(lastIpAddress),
       },
     });

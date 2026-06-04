@@ -379,7 +379,7 @@ export const createRemittanceTransaction = async (req, res) => {
       return res.status(403).json({
         success: false,
         message: orchestration.message || 'Transaction not allowed by orchestration.',
-        code: 'ORCHESTRATION_DENIED',
+        code: orchestration.code || 'ORCHESTRATION_DENIED',
       });
     }
 
