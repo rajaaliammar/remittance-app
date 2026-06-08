@@ -741,6 +741,195 @@ export const rejectKYCDocumentField = async (req, res) => {
   }
 };
 
+function buildPortalKycFieldRows(fields) {
+  return fields.map((field) => {
+    const value = field.value || '';
+    const fileUrl =
+      field.fileUrl ||
+      (typeof value === 'string' &&
+      (value.startsWith('/') || value.startsWith('http'))
+        ? value
+        : null);
+    return {
+      id: `field_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      fieldName: field.fieldName,
+      inputType: field.inputType,
+      value,
+      fileUrl,
+      status: 'pending',
+      verifiedAt: null,
+      verifiedBy: null,
+    };
+  });
+}
+
+function buildEnhancedKycFieldRows(enhancedKYC) {
+  const rows = [];
+  Object.entries(enhancedKYC).forEach(([key, value]) => {
+    if (value == null || value === '') return;
+    const strVal = typeof value === 'string' ? value : JSON.stringify(value);
+    const isFile =
+      strVal.startsWith('/') ||
+      strVal.startsWith('http') ||
+      strVal.includes('/uploads/kyc/');
+    if (key.endsWith('_url') && !isFile) return;
+    rows.push({
+      id: `field_${key}_${Date.now()}`,
+      fieldName: key,
+      inputType: isFile ? 'upload' : 'text',
+      value: strVal,
+      fileUrl: isFile ? strVal : null,
+      status: 'pending',
+      verifiedAt: null,
+      verifiedBy: null,
+    });
+  });
+  return rows;
+}
+
+/** Customer resubmits a rejected KYC document — updates same row so portal shows fresh pending review. */
+export const resubmitKYCDocument = async (req, res) => {
+  try {
+    const customerId = req.user?.id || req.user?.customerId;
+    if (!customerId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required',
+      });
+    }
+
+    const { documentId, formId, formName, country, fields, enhancedKYC } =
+      req.body || {};
+
+    const customer = await prisma.customer.findUnique({
+      where: { id: customerId },
+    });
+
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Customer not found',
+      });
+    }
+
+    let kycData = customer.kycData
+      ? Array.isArray(customer.kycData)
+        ? customer.kycData
+        : [customer.kycData]
+      : [];
+
+    let idx =
+      documentId != null
+        ? kycData.findIndex((doc) => doc.id === documentId)
+        : -1;
+
+    if (idx === -1 && documentId) {
+      return res.status(404).json({
+        success: false,
+        message: 'KYC document not found',
+      });
+    }
+
+    if (idx === -1) {
+      const targetName = String(formName || 'Enhanced KYC').trim().toLowerCase();
+      idx = kycData.findIndex((doc) => {
+        if (String(doc.status ?? '').toLowerCase() !== 'rejected') return false;
+        const name = String(doc.formName || doc.verificationType || '')
+          .trim()
+          .toLowerCase();
+        return name === targetName || name.includes(targetName) || targetName.includes(name);
+      });
+    }
+
+    if (idx === -1 && kycData.length === 1) {
+      idx = 0;
+    }
+
+    const now = new Date().toISOString();
+    let updatedDoc;
+
+    if (formId && formName && Array.isArray(fields) && fields.length > 0) {
+      updatedDoc = {
+        ...(idx >= 0 ? kycData[idx] : {}),
+        id:
+          idx >= 0
+            ? kycData[idx].id
+            : `doc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        formId,
+        formName,
+        verificationType: formName,
+        country: country || 'USD',
+        status: 'pending',
+        submittedAt: now,
+        date: now,
+        resubmittedAt: now,
+        documents: buildPortalKycFieldRows(fields),
+      };
+      delete updatedDoc.rejectedAt;
+      delete updatedDoc.rejectedBy;
+    } else if (enhancedKYC && typeof enhancedKYC === 'object') {
+      const docFields = buildEnhancedKycFieldRows(enhancedKYC);
+      if (!docFields.length) {
+        return res.status(400).json({
+          success: false,
+          message: 'Upload at least one document to resubmit',
+        });
+      }
+      updatedDoc = {
+        ...(idx >= 0 ? kycData[idx] : {}),
+        id:
+          idx >= 0
+            ? kycData[idx].id
+            : `doc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        verificationType: 'Enhanced KYC',
+        formName: 'Enhanced KYC',
+        country: country || 'USD',
+        status: 'pending',
+        submittedAt: now,
+        date: now,
+        resubmittedAt: now,
+        documents: docFields,
+      };
+      delete updatedDoc.rejectedAt;
+      delete updatedDoc.rejectedBy;
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'Form fields or enhanced KYC payload is required',
+      });
+    }
+
+    if (idx >= 0) {
+      kycData[idx] = updatedDoc;
+    } else {
+      kycData.push(updatedDoc);
+    }
+
+    await prisma.customer.update({
+      where: { id: customerId },
+      data: { kycData },
+    });
+
+    emitKYCUpdateToCustomer(req, customerId, {
+      documentId: updatedDoc.id,
+      status: 'pending',
+      document: updatedDoc,
+    });
+
+    return res.json({
+      success: true,
+      message: 'KYC document resubmitted successfully',
+      data: updatedDoc,
+    });
+  } catch (error) {
+    console.error('Error resubmitting KYC document:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+};
+
 // Submit KYC form data (save customer KYC documents)
 export const submitKYCForm = async (req, res) => {
   try {
@@ -786,16 +975,7 @@ export const submitKYCForm = async (req, res) => {
       country: country || 'USD',
       status: 'pending',
       date: new Date().toISOString(),
-      documents: fields.map(field => ({
-        id: `field_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        fieldName: field.fieldName,
-        inputType: field.inputType,
-        value: field.value || '',
-        fileUrl: field.fileUrl || null,
-        status: 'pending', // Each field has its own status
-        verifiedAt: null,
-        verifiedBy: null,
-      })),
+      documents: buildPortalKycFieldRows(fields),
       submittedAt: new Date().toISOString(),
     };
 

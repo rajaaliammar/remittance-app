@@ -2206,8 +2206,25 @@ export const getVerifications = async (req, res) => {
     }
 
     const kycDocuments = raw ? (Array.isArray(raw) ? raw : [raw]) : [];
-    console.log('[getVerifications] Final kycDocuments count:', kycDocuments.length);
-    console.log('[getVerifications] Final kycDocuments:', JSON.stringify(kycDocuments, null, 2));
+    let needsIdBackfill = false;
+    const normalizedDocuments = kycDocuments.map((doc, index) => {
+      if (doc?.id) return doc;
+      needsIdBackfill = true;
+      return {
+        ...doc,
+        id: `doc_${customerId}_${index}_${Date.now()}`,
+      };
+    });
+
+    if (needsIdBackfill) {
+      await prisma.customer.update({
+        where: { id: customerId },
+        data: { kycData: normalizedDocuments },
+      });
+    }
+
+    console.log('[getVerifications] Final kycDocuments count:', normalizedDocuments.length);
+    console.log('[getVerifications] Final kycDocuments:', JSON.stringify(normalizedDocuments, null, 2));
     console.log('[getVerifications] ========== END ==========');
 
     const kycRequest =
@@ -2228,7 +2245,7 @@ export const getVerifications = async (req, res) => {
 
     return res.json({
       success: true,
-      data: kycDocuments,
+      data: normalizedDocuments,
       kycRequest,
       message: 'Verifications retrieved successfully',
     });
@@ -2569,12 +2586,19 @@ export const saveKycDetails = async (req, res) => {
       const fields = [];
       Object.entries(body.enhancedKYC).forEach(([key, value]) => {
         if (value != null && value !== '') {
+          const strVal =
+            typeof value === 'string' ? value : JSON.stringify(value);
+          const isFile =
+            strVal.startsWith('/') ||
+            strVal.startsWith('http') ||
+            strVal.includes('/uploads/kyc/');
+          if (key.endsWith('_url') && !isFile) return;
           fields.push({
             id: `field_${key}_${Date.now()}`,
             fieldName: key,
-            inputType: 'text',
-            value: typeof value === 'string' ? value : JSON.stringify(value),
-            fileUrl: typeof value === 'string' && value.startsWith('http') ? value : null,
+            inputType: isFile ? 'upload' : 'text',
+            value: strVal,
+            fileUrl: isFile ? strVal : null,
             status: 'pending',
             verifiedAt: null,
             verifiedBy: null,
