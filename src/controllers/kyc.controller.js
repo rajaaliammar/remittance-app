@@ -2,6 +2,7 @@ import prisma from '../utils/prisma.js';
 import { sendPushToCustomer } from '../utils/push.js';
 import { expandKycCountryTokens } from '../utils/kycCountryTokens.js';
 import { ensureDefaultKycForms } from '../utils/ensureDefaultKycForms.js';
+import { tryClearAmlCaseAfterKycApproval } from '../utils/amlCaseSync.js';
 
 // Emit real-time KYC status update to the customer's socket room (for app Verifications screen)
 function emitKYCUpdateToCustomer(req, customerId, payload) {
@@ -391,6 +392,13 @@ export const approveKYCDocument = async (req, res) => {
     emitKYCUpdateToCustomer(req, customerId, { documentId, status: 'approved', document: kycData[documentIndex] });
     await notifyCustomerKYCStatus(customerId, 'approved', kycData[documentIndex]);
 
+    void tryClearAmlCaseAfterKycApproval(
+      customerId,
+      `KYC document approved in portal (${documentId})`,
+    ).catch((err) => {
+      console.warn('[KYC] AML case-clear after approval failed:', err?.message || err);
+    });
+
     res.json({
       success: true,
       message: 'KYC document approved successfully',
@@ -631,6 +639,12 @@ export const approveKYCDocumentField = async (req, res) => {
     emitKYCUpdateToCustomer(req, customerId, { documentId, status: kycData[documentIndex].status, document: kycData[documentIndex] });
     if (kycData[documentIndex].status === 'approved') {
       await notifyCustomerKYCStatus(customerId, 'approved', kycData[documentIndex]);
+      void tryClearAmlCaseAfterKycApproval(
+        customerId,
+        `KYC document fully approved in portal (${documentId})`,
+      ).catch((err) => {
+        console.warn('[KYC] AML case-clear after field approval failed:', err?.message || err);
+      });
     }
 
     res.json({

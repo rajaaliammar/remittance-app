@@ -4,8 +4,66 @@ import {
   amlGetCustomerStatus,
   mapAmlCustomerStatus,
 } from '../services/amlProvider.service.js';
+import { customerHasApprovedKyc } from './kycApproval.js';
+import { tryClearAmlCaseAfterKycApproval } from './amlCaseSync.js';
 
 const GATE_ENABLED = process.env.AML_TRANSACTION_GATE_ENABLED !== 'false';
+
+async function evaluateAmlStatus(customer, clientNumber, amlRaw) {
+  if (amlRaw?.isError) {
+    return {
+      allowed: false,
+      message:
+        amlRaw.message ||
+        'AML verification failed. Complete compliance review before sending money.',
+      code: 'AML_NOT_ONBOARDED',
+    };
+  }
+
+  const mapped = mapAmlCustomerStatus(amlRaw);
+  if (mapped.isOnboarded) {
+    return { allowed: true, mapped, clientNumber };
+  }
+
+  if (mapped.isBlocked) {
+    return {
+      allowed: false,
+      message:
+        'Your account is blocked by compliance review. Contact support for assistance.',
+      code: 'AML_CUSTOMER_BLOCKED',
+      mapped,
+    };
+  }
+
+  if (
+    (mapped.isFrozen || !mapped.isOnboarded) &&
+    customerHasApprovedKyc(customer.kycData)
+  ) {
+    const cleared = await tryClearAmlCaseAfterKycApproval(
+      customer.id,
+      'Auto-cleared: KYC approved — enabling send transaction',
+    );
+    if (cleared.cleared && cleared.mapped?.isOnboarded) {
+      return { allowed: true, mapped: cleared.mapped, clientNumber, autoCleared: true };
+    }
+  }
+
+  if (mapped.isFrozen) {
+    return {
+      allowed: false,
+      message: `Your account is under compliance review (${mapped.statusLabel || 'pending'}). You cannot send money until AML verification is complete.`,
+      code: 'AML_COMPLIANCE_PENDING',
+      mapped,
+    };
+  }
+
+  return {
+    allowed: false,
+    message: `AML verification required. Your status is "${mapped.statusLabel || 'Pending'}". You must be onboarded in AML before sending money.`,
+    code: 'AML_NOT_ONBOARDED',
+    mapped,
+  };
+}
 
 /**
  * Live AML check before any customer send transaction.
@@ -53,44 +111,5 @@ export async function verifyAmlOnboardedForTransaction(customerId) {
     };
   }
 
-  if (amlRaw?.isError) {
-    return {
-      allowed: false,
-      message:
-        amlRaw.message ||
-        'AML verification failed. Complete compliance review before sending money.',
-      code: 'AML_NOT_ONBOARDED',
-    };
-  }
-
-  const mapped = mapAmlCustomerStatus(amlRaw);
-  if (mapped.isOnboarded) {
-    return { allowed: true, mapped, clientNumber };
-  }
-
-  if (mapped.isBlocked) {
-    return {
-      allowed: false,
-      message:
-        'Your account is blocked by compliance review. Contact support for assistance.',
-      code: 'AML_CUSTOMER_BLOCKED',
-      mapped,
-    };
-  }
-
-  if (mapped.isFrozen) {
-    return {
-      allowed: false,
-      message: `Your account is under compliance review (${mapped.statusLabel || 'pending'}). You cannot send money until AML verification is complete.`,
-      code: 'AML_COMPLIANCE_PENDING',
-      mapped,
-    };
-  }
-
-  return {
-    allowed: false,
-    message: `AML verification required. Your status is "${mapped.statusLabel || 'Pending'}". You must be onboarded in AML before sending money.`,
-    code: 'AML_NOT_ONBOARDED',
-    mapped,
-  };
+  return evaluateAmlStatus(customer, clientNumber, amlRaw);
 }
