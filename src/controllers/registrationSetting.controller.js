@@ -1,4 +1,10 @@
 import prisma from '../utils/prisma.js';
+import {
+  CacheKeys,
+  REFERENCE_TTL_SECONDS,
+  getOrSet,
+  invalidateRegistrationSettingsCache,
+} from '../utils/cache.js';
 
 /**
  * Get value from raw row - PostgreSQL raw queries may return lowercase or snake_case column names
@@ -76,159 +82,156 @@ const ensureRegistrationSettingColumns = async () => {
  */
 export const getUserRegistrationSettings = async (req, res) => {
   try {
-    await ensureRegistrationSettingColumns();
+    const response = await getOrSet(CacheKeys.registrationSettings(), REFERENCE_TTL_SECONDS, async () => {
+      await ensureRegistrationSettingColumns();
 
-    // Read via raw SQL so newly added columns are returned even if Prisma client is stale.
-    let settings = null;
-    const rawSettings = await prisma.$queryRawUnsafe(`
-      SELECT * FROM "registration_settings" LIMIT 1
-    `);
-    if (rawSettings && rawSettings.length > 0) {
-      settings = normalizeSettings(rawSettings[0]);
-    }
+      let settings = null;
+      const rawSettings = await prisma.$queryRawUnsafe(`
+        SELECT * FROM "registration_settings" LIMIT 1
+      `);
+      if (rawSettings && rawSettings.length > 0) {
+        settings = normalizeSettings(rawSettings[0]);
+      }
 
-    if (!settings) {
-      // Create default settings
-      try {
-        settings = await prisma.registrationSetting.create({
-          data: {
-            phoneNumber: true,
-            phoneNumberRequired: true,
-            emailAddress: true,
-            emailAddressRequired: false,
-            fullName: true,
-            fullNameRequired: true,
-            middleName: false,
-            middleNameRequired: false,
-            telephone: false,
-            telephoneRequired: false,
-            unitApt: false,
-            unitAptRequired: false,
-            zipCode: false,
-            zipCodeRequired: false,
-            dateOfBirth: false,
-            dateOfBirthRequired: false,
-            gender: false,
-            genderRequired: false,
-            nationality: false,
-            nationalityRequired: false,
-            placeOfBirth: false,
-            placeOfBirthRequired: false,
-            occupation: false,
-            occupationRequired: false,
-            sourceOfFund: false,
-            sourceOfFundRequired: false,
-            residentCountry: false,
-            residentCountryRequired: false,
-            country: false,
-            countryRequired: false,
-            regionState: false,
-            regionStateRequired: false,
-            woredaDistrict: false,
-            woredaDistrictRequired: false,
-            city: false,
-            cityRequired: false,
-          },
-        });
-      } catch (error) {
-        // Fallback to raw query if Prisma client not regenerated
-        if (error.message.includes('registrationSetting') || error.message.includes('undefined')) {
-          const crypto = await import('crypto');
-          const id = crypto.randomUUID();
-          const query = `
-            INSERT INTO "registration_settings" (
-              "id", "phoneNumber", "phoneNumberRequired", "emailAddress", "emailAddressRequired",
-              "fullName", "fullNameRequired", "middleName", "middleNameRequired",
-              "telephone", "telephoneRequired", "unitApt", "unitAptRequired",
-              "zipCode", "zipCodeRequired", "dateOfBirth", "dateOfBirthRequired",
-              "gender", "genderRequired", "nationality", "nationalityRequired",
-              "placeOfBirth", "placeOfBirthRequired", "occupation", "occupationRequired",
-              "sourceOfFund", "sourceOfFundRequired", "residentCountry", "residentCountryRequired",
-              "country", "countryRequired", "regionState", "regionStateRequired",
-              "woredaDistrict", "woredaDistrictRequired", "city", "cityRequired",
-              "createdAt", "updatedAt"
-            ) VALUES (
-              $1, $2, $3, $4, $5,
-              $6, $7, $8, $9,
-              $10, $11, $12, $13,
-              $14, $15, $16, $17,
-              $18, $19, $20, $21,
-              $22, $23, $24, $25,
-              $26, $27, $28, $29,
-              $30, $31, $32, $33,
-              $34, $35, $36, $37,
-              NOW(), NOW()
-            )
-          `;
-          await prisma.$executeRawUnsafe(query,
-            id, true, true, true, false,
-            true, true, false, false,
-            false, false, false, false,
-            false, false, false, false,
-            false, false, false, false,
-            false, false, false, false,
-            false, false, false, false,
-            false, false, false, false,
-            false, false, false, false
-          );
-          const rawSettings = await prisma.$queryRawUnsafe(
-            `SELECT * FROM "registration_settings" WHERE "id" = $1`,
-            id
-          );
-          if (rawSettings && rawSettings.length > 0) {
-            settings = normalizeSettings(rawSettings[0]);
+      if (!settings) {
+        try {
+          settings = await prisma.registrationSetting.create({
+            data: {
+              phoneNumber: true,
+              phoneNumberRequired: true,
+              emailAddress: true,
+              emailAddressRequired: false,
+              fullName: true,
+              fullNameRequired: true,
+              middleName: false,
+              middleNameRequired: false,
+              telephone: false,
+              telephoneRequired: false,
+              unitApt: false,
+              unitAptRequired: false,
+              zipCode: false,
+              zipCodeRequired: false,
+              dateOfBirth: false,
+              dateOfBirthRequired: false,
+              gender: false,
+              genderRequired: false,
+              nationality: false,
+              nationalityRequired: false,
+              placeOfBirth: false,
+              placeOfBirthRequired: false,
+              occupation: false,
+              occupationRequired: false,
+              sourceOfFund: false,
+              sourceOfFundRequired: false,
+              residentCountry: false,
+              residentCountryRequired: false,
+              country: false,
+              countryRequired: false,
+              regionState: false,
+              regionStateRequired: false,
+              woredaDistrict: false,
+              woredaDistrictRequired: false,
+              city: false,
+              cityRequired: false,
+            },
+          });
+        } catch (error) {
+          if (error.message.includes('registrationSetting') || error.message.includes('undefined')) {
+            const crypto = await import('crypto');
+            const id = crypto.randomUUID();
+            const query = `
+              INSERT INTO "registration_settings" (
+                "id", "phoneNumber", "phoneNumberRequired", "emailAddress", "emailAddressRequired",
+                "fullName", "fullNameRequired", "middleName", "middleNameRequired",
+                "telephone", "telephoneRequired", "unitApt", "unitAptRequired",
+                "zipCode", "zipCodeRequired", "dateOfBirth", "dateOfBirthRequired",
+                "gender", "genderRequired", "nationality", "nationalityRequired",
+                "placeOfBirth", "placeOfBirthRequired", "occupation", "occupationRequired",
+                "sourceOfFund", "sourceOfFundRequired", "residentCountry", "residentCountryRequired",
+                "country", "countryRequired", "regionState", "regionStateRequired",
+                "woredaDistrict", "woredaDistrictRequired", "city", "cityRequired",
+                "createdAt", "updatedAt"
+              ) VALUES (
+                $1, $2, $3, $4, $5,
+                $6, $7, $8, $9,
+                $10, $11, $12, $13,
+                $14, $15, $16, $17,
+                $18, $19, $20, $21,
+                $22, $23, $24, $25,
+                $26, $27, $28, $29,
+                $30, $31, $32, $33,
+                $34, $35, $36, $37,
+                NOW(), NOW()
+              )
+            `;
+            await prisma.$executeRawUnsafe(
+              query,
+              id, true, true, true, false,
+              true, true, false, false,
+              false, false, false, false,
+              false, false, false, false,
+              false, false, false, false,
+              false, false, false, false,
+              false, false, false, false,
+              false, false, false, false,
+              false, false, false, false,
+            );
+            const created = await prisma.$queryRawUnsafe(
+              `SELECT * FROM "registration_settings" WHERE "id" = $1`,
+              id,
+            );
+            if (created && created.length > 0) {
+              settings = normalizeSettings(created[0]);
+            }
           } else {
-            settings = null;
+            throw error;
           }
-        } else {
-          throw error;
         }
       }
-    }
 
-    // Always normalize so response has consistent booleans (Prisma or raw may return different shapes)
-    const out = normalizeSettings(settings);
-    const response = {
-      success: true,
-      data: {
-        phoneNumber: out.phoneNumber,
-        phoneNumberRequired: out.phoneNumberRequired,
-        emailAddress: out.emailAddress,
-        emailAddressRequired: out.emailAddressRequired,
-        fullName: out.fullName,
-        fullNameRequired: out.fullNameRequired,
-        middleName: out.middleName,
-        middleNameRequired: out.middleNameRequired,
-        telephone: out.telephone,
-        telephoneRequired: out.telephoneRequired,
-        unitApt: out.unitApt,
-        unitAptRequired: out.unitAptRequired,
-        zipCode: out.zipCode,
-        zipCodeRequired: out.zipCodeRequired,
-        dateOfBirth: out.dateOfBirth,
-        dateOfBirthRequired: out.dateOfBirthRequired,
-        gender: out.gender,
-        genderRequired: out.genderRequired,
-        nationality: out.nationality,
-        nationalityRequired: out.nationalityRequired,
-        placeOfBirth: out.placeOfBirth,
-        placeOfBirthRequired: out.placeOfBirthRequired,
-        occupation: out.occupation,
-        occupationRequired: out.occupationRequired,
-        sourceOfFund: out.sourceOfFund,
-        sourceOfFundRequired: out.sourceOfFundRequired,
-        residentCountry: out.residentCountry,
-        residentCountryRequired: out.residentCountryRequired,
-        country: out.country,
-        countryRequired: out.countryRequired,
-        regionState: out.regionState,
-        regionStateRequired: out.regionStateRequired,
-        woredaDistrict: out.woredaDistrict,
-        woredaDistrictRequired: out.woredaDistrictRequired,
-        city: out.city,
-        cityRequired: out.cityRequired,
-      },
-    };
+      const out = normalizeSettings(settings);
+      return {
+        success: true,
+        data: {
+          phoneNumber: out.phoneNumber,
+          phoneNumberRequired: out.phoneNumberRequired,
+          emailAddress: out.emailAddress,
+          emailAddressRequired: out.emailAddressRequired,
+          fullName: out.fullName,
+          fullNameRequired: out.fullNameRequired,
+          middleName: out.middleName,
+          middleNameRequired: out.middleNameRequired,
+          telephone: out.telephone,
+          telephoneRequired: out.telephoneRequired,
+          unitApt: out.unitApt,
+          unitAptRequired: out.unitAptRequired,
+          zipCode: out.zipCode,
+          zipCodeRequired: out.zipCodeRequired,
+          dateOfBirth: out.dateOfBirth,
+          dateOfBirthRequired: out.dateOfBirthRequired,
+          gender: out.gender,
+          genderRequired: out.genderRequired,
+          nationality: out.nationality,
+          nationalityRequired: out.nationalityRequired,
+          placeOfBirth: out.placeOfBirth,
+          placeOfBirthRequired: out.placeOfBirthRequired,
+          occupation: out.occupation,
+          occupationRequired: out.occupationRequired,
+          sourceOfFund: out.sourceOfFund,
+          sourceOfFundRequired: out.sourceOfFundRequired,
+          residentCountry: out.residentCountry,
+          residentCountryRequired: out.residentCountryRequired,
+          country: out.country,
+          countryRequired: out.countryRequired,
+          regionState: out.regionState,
+          regionStateRequired: out.regionStateRequired,
+          woredaDistrict: out.woredaDistrict,
+          woredaDistrictRequired: out.woredaDistrictRequired,
+          city: out.city,
+          cityRequired: out.cityRequired,
+        },
+      };
+    });
 
     res.json(response);
   } catch (error) {
@@ -540,6 +543,7 @@ export const updateUserRegistrationSettings = async (req, res) => {
         cityRequired: out.cityRequired,
       },
     });
+    void invalidateRegistrationSettingsCache();
   } catch (error) {
     console.error('Error updating registration settings:', error);
     res.status(500).json({

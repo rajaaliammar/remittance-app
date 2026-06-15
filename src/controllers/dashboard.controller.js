@@ -77,14 +77,15 @@ const countryPairKey = (tx) => {
     tx.recipientInfo && typeof tx.recipientInfo === 'object' ? tx.recipientInfo : {};
   const paymentFields =
     tx.paymentFieldValues && typeof tx.paymentFieldValues === 'object'
-      ? tx.paymentFieldValues : {};
+      ? tx.paymentFieldValues
+      : {};
 
   const sendCode = String(
     paymentFields.sendingCountryCode ||
       paymentFields.senderCountryCode ||
       recipientInfo.sendingCountryCode ||
       recipientInfo.senderCountry ||
-      '—'
+      '—',
   )
     .trim()
     .toUpperCase()
@@ -95,7 +96,7 @@ const countryPairKey = (tx) => {
       recipientInfo.receivingBranchCountryCode ||
       recipientInfo.countryCode ||
       recipientInfo.country ||
-      '—'
+      '—',
   )
     .trim()
     .toUpperCase()
@@ -107,10 +108,18 @@ const countryPairKey = (tx) => {
 
 /**
  * GET /api/dashboard/stats — portal dashboard metrics from live database.
+ * Uses aggregate()/groupBy() and bounded samples — never loads all transactions.
  */
 export const getDashboardStats = async (req, res) => {
   try {
     const monthStart = startOfMonth();
+    const analyticsStart = new Date();
+    analyticsStart.setMonth(analyticsStart.getMonth() - (ANALYTICS_MONTH_COUNT - 1));
+    analyticsStart.setDate(1);
+    analyticsStart.setHours(0, 0, 0, 0);
+
+    const channelSampleStart = new Date();
+    channelSampleStart.setDate(channelSampleStart.getDate() - 90);
 
     const [
       totalUsers,
@@ -118,7 +127,10 @@ export const getDashboardStats = async (req, res) => {
       activeAgents,
       pendingAgents,
       thisMonthTransactions,
-      transactions,
+      statusGroups,
+      transferTypeGroups,
+      monthlyRows,
+      channelSample,
       latestTransactions,
       latestUsers,
       latestAgents,
@@ -132,26 +144,37 @@ export const getDashboardStats = async (req, res) => {
       prisma.remittanceTransaction.count({
         where: { createdAt: { gte: monthStart } },
       }),
+      prisma.remittanceTransaction.groupBy({
+        by: ['status'],
+        _count: { _all: true },
+        _sum: { sendAmount: true },
+      }),
+      prisma.remittanceTransaction.groupBy({
+        by: ['transferType'],
+        _sum: { sendAmount: true },
+      }),
+      prisma.$queryRaw`
+        SELECT
+          to_char("createdAt", 'YYYY-MM') AS month,
+          COALESCE(SUM("sendAmount"), 0)::float AS amount,
+          COUNT(*)::int AS count
+        FROM "remittance_transactions"
+        WHERE "createdAt" >= ${analyticsStart}
+        GROUP BY 1
+        ORDER BY 1
+      `,
       prisma.remittanceTransaction.findMany({
+        where: { createdAt: { gte: channelSampleStart } },
+        take: 2000,
+        orderBy: { createdAt: 'desc' },
         select: {
-          id: true,
           sendAmount: true,
           receiveAmount: true,
           transferType: true,
-          status: true,
           recipientInfo: true,
           paymentFieldValues: true,
           createdAt: true,
-          customer: {
-            select: {
-              id: true,
-              firstName: true,
-              lastName: true,
-              email: true,
-            },
-          },
         },
-        orderBy: { createdAt: 'desc' },
       }),
       prisma.remittanceTransaction.findMany({
         take: 5,
@@ -215,48 +238,63 @@ export const getDashboardStats = async (req, res) => {
     let pendingSendMoney = 0;
     let completedSendMoney = 0;
     const statusCounts = {};
-    const analyticsByMonth = new Map();
-    const countryFlows = new Map();
 
-    for (const tx of transactions) {
-      const status = normalizeStatus(tx.status);
-      statusCounts[status] = (statusCounts[status] || 0) + 1;
+    for (const row of statusGroups) {
+      const status = normalizeStatus(row.status);
+      const count = row._count?._all ?? 0;
+      statusCounts[status] = count;
+      if (PENDING_STATUSES.has(status)) pendingSendMoney += count;
+      if (COMPLETED_STATUSES.has(status)) completedSendMoney += count;
+    }
 
-      if (PENDING_STATUSES.has(status)) pendingSendMoney += 1;
-      if (COMPLETED_STATUSES.has(status)) completedSendMoney += 1;
-
+    for (const tx of channelSample) {
       const sendAmount = toNumber(tx.sendAmount);
       const channel = classifyChannel(tx);
       volume[channel] += sendAmount;
+    }
 
-      const monthKey = monthKeyFromDate(tx.createdAt);
-      if (monthKey) {
-        const bucket = analyticsByMonth.get(monthKey) || { date: monthKey, amount: 0, count: 0 };
-        bucket.amount += sendAmount;
-        bucket.count += 1;
-        analyticsByMonth.set(monthKey, bucket);
-      }
+    const transferTypeVolume = { bank: 0, wallet: 0 };
+    for (const row of transferTypeGroups) {
+      const key = String(row.transferType || 'bank').toLowerCase();
+      const sum = toNumber(row._sum?.sendAmount);
+      if (key === 'wallet') transferTypeVolume.wallet += sum;
+      else transferTypeVolume.bank += sum;
+    }
 
-      const pair = countryPairKey(tx);
-      if (pair) {
-        const receiveAmount = toNumber(tx.receiveAmount);
-        const row = countryFlows.get(pair) || { country: pair, send: 0, receive: 0, net: 0 };
-        row.send += sendAmount;
-        row.receive += receiveAmount;
-        row.net = row.send - row.receive;
-        countryFlows.set(pair, row);
-      }
+    if (volume.bankTransfer === 0 && volume.mobileMoney === 0) {
+      volume.bankTransfer = transferTypeVolume.bank;
+      volume.mobileMoney = transferTypeVolume.wallet;
     }
 
     const combinedVolume =
       volume.airtime + volume.bankTransfer + volume.cashPickup + volume.mobileMoney;
 
+    const analyticsByMonth = new Map(
+      (monthlyRows || []).map((row) => [
+        row.month,
+        { date: row.month, amount: toNumber(row.amount), count: Number(row.count) || 0 },
+      ]),
+    );
+
     const analyticsMonthKeys = buildRecentMonthKeys();
     const analytics = analyticsMonthKeys.map(
-      (key) => analyticsByMonth.get(key) || { date: key, amount: 0, count: 0 }
+      (key) => analyticsByMonth.get(key) || { date: key, amount: 0, count: 0 },
     );
 
     const analyticsTotal = analytics.reduce((sum, row) => sum + row.amount, 0);
+
+    const countryFlows = new Map();
+    for (const tx of channelSample) {
+      const pair = countryPairKey(tx);
+      if (!pair) continue;
+      const sendAmount = toNumber(tx.sendAmount);
+      const receiveAmount = toNumber(tx.receiveAmount);
+      const row = countryFlows.get(pair) || { country: pair, send: 0, receive: 0, net: 0 };
+      row.send += sendAmount;
+      row.receive += receiveAmount;
+      row.net = row.send - row.receive;
+      countryFlows.set(pair, row);
+    }
 
     const countryFlowRows = [...countryFlows.values()]
       .sort((a, b) => b.send + b.receive - (a.send + a.receive))

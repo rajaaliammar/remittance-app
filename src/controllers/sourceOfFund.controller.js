@@ -1,4 +1,10 @@
 import prisma from '../utils/prisma.js';
+import {
+  CacheKeys,
+  REFERENCE_TTL_SECONDS,
+  getOrSet,
+  invalidateSourceOfFundsCache,
+} from '../utils/cache.js';
 
 const DEFAULT_SOURCE_OF_FUNDS = [
   'Salary or wages',
@@ -20,23 +26,24 @@ async function seedDefaultSourceOfFunds() {
 // Get all source of funds
 export const getAllSourceOfFunds = async (req, res) => {
   try {
-    await seedDefaultSourceOfFunds();
-
     const { search, status } = req.query;
+    const cacheKey = CacheKeys.sourceOfFundsList({ search, status });
 
-    const where = {};
-    
-    if (status) {
-      where.status = status;
-    }
-    
-    if (search) {
-      where.name = { contains: search, mode: 'insensitive' };
-    }
+    const sourceOfFunds = await getOrSet(cacheKey, REFERENCE_TTL_SECONDS, async () => {
+      await seedDefaultSourceOfFunds();
 
-    const sourceOfFunds = await prisma.sourceOfFund.findMany({
-      where,
-      orderBy: { createdAt: 'desc' }
+      const where = {};
+      if (status) {
+        where.status = status;
+      }
+      if (search) {
+        where.name = { contains: search, mode: 'insensitive' };
+      }
+
+      return prisma.sourceOfFund.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+      });
     });
 
     res.json({ success: true, data: sourceOfFunds });
@@ -93,6 +100,7 @@ export const createSourceOfFund = async (req, res) => {
       message: 'Source of fund created successfully',
       data: sourceOfFund
     });
+    void invalidateSourceOfFundsCache();
   } catch (error) {
     console.error('Error creating source of fund:', error);
     
@@ -155,6 +163,7 @@ export const updateSourceOfFund = async (req, res) => {
       message: 'Source of fund updated successfully',
       data: updatedSourceOfFund
     });
+    void invalidateSourceOfFundsCache();
   } catch (error) {
     console.error('Error updating source of fund:', error);
     
@@ -198,8 +207,9 @@ export const deleteSourceOfFund = async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Source of fund deleted successfully'
+      message: 'Source of fund deleted successfully',
     });
+    void invalidateSourceOfFundsCache();
   } catch (error) {
     console.error('Error deleting source of fund:', error);
     

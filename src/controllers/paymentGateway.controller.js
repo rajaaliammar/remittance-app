@@ -1,4 +1,5 @@
 import prisma from '../utils/prisma.js';
+import { sanitizeLogoField } from '../utils/imageFieldSanitizer.js';
 
 // Get all payment gateways
 export const getAllPaymentGateways = async (req, res) => {
@@ -76,7 +77,7 @@ export const createPaymentGateway = async (req, res) => {
     const gateway = await prisma.paymentGateway.create({
       data: {
         name,
-        logo: logo || null,
+        logo: logo ? await sanitizeLogoField(logo, 'gateways') : null,
         logoColor: logoColor || null,
         gatewayCurrencies: gatewayCurrencies ? parseInt(gatewayCurrencies) : null,
         supportedCurrency: supportedCurrency ? parseInt(supportedCurrency) : null,
@@ -127,7 +128,7 @@ export const updatePaymentGateway = async (req, res) => {
       where: { id },
       data: {
         name: name !== undefined ? name : gateway.name,
-        logo: logo !== undefined ? logo : gateway.logo,
+        logo: logo !== undefined ? await sanitizeLogoField(logo, 'gateways') : gateway.logo,
         logoColor: logoColor !== undefined ? logoColor : gateway.logoColor,
         gatewayCurrencies: gatewayCurrencies !== undefined ? parseInt(gatewayCurrencies) : gateway.gatewayCurrencies,
         supportedCurrency: supportedCurrency !== undefined ? parseInt(supportedCurrency) : gateway.supportedCurrency,

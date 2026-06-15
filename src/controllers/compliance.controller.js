@@ -6,6 +6,7 @@
  */
 
 import prisma from '../utils/prisma.js';
+import { WalletError, creditCustomerWallet } from '../utils/walletLock.js';
 
 const txInclude = {
   customer: {
@@ -227,38 +228,42 @@ export const rejectHeldTransaction = async (req, res) => {
     );
     const totalToRefund = sendAmount + fee;
 
-    const rows = await prisma.$queryRaw`
-      SELECT "availableBalance" FROM customers WHERE id = ${customerId}
-    `;
-    const currentBalance =
-      rows?.[0]?.availableBalance != null ? Number(rows[0].availableBalance) : 0;
-    const newBalance = currentBalance + totalToRefund;
-
-    await Promise.all([
-      prisma.$transaction([
-        prisma.remittanceTransaction.update({
+    let newBalance;
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        const creditResult = await creditCustomerWallet(tx, customerId, totalToRefund);
+        await tx.remittanceTransaction.update({
           where: { id },
           data: {
             status: 'Failed',
             complianceReviewNote: note || null,
             updatedAt: new Date(),
           },
-        }),
-        prisma.$executeRaw`
-          UPDATE customers SET "availableBalance" = ${newBalance}, "updatedAt" = NOW() WHERE id = ${customerId}
-        `,
-      ]),
-      prisma.complianceAlert.updateMany({
-        where: { transactionId: id, status: 'OPEN' },
-        data: {
-          status: 'CLOSED',
-          resolvedBy: adminId || null,
-          resolvedAt: new Date(),
-          resolvedNote: note || 'Rejected by compliance officer',
-          updatedAt: new Date(),
-        },
-      }),
-    ]);
+        });
+        return { newBalance: creditResult.newBalance };
+      });
+      newBalance = result.newBalance;
+    } catch (walletErr) {
+      if (walletErr instanceof WalletError) {
+        return res.status(walletErr.statusCode).json({
+          success: false,
+          message: walletErr.message,
+          code: walletErr.code,
+        });
+      }
+      throw walletErr;
+    }
+
+    await prisma.complianceAlert.updateMany({
+      where: { transactionId: id, status: 'OPEN' },
+      data: {
+        status: 'CLOSED',
+        resolvedBy: adminId || null,
+        resolvedAt: new Date(),
+        resolvedNote: note || 'Rejected by compliance officer',
+        updatedAt: new Date(),
+      },
+    });
 
     const io = req.app?.get?.('io');
     if (io) {

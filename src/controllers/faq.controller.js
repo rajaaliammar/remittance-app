@@ -1,16 +1,24 @@
 import prisma from '../utils/prisma.js';
 import { ensureDefaultFaqs } from '../utils/ensureDefaultFaqs.js';
+import {
+  CacheKeys,
+  REFERENCE_TTL_SECONDS,
+  getOrSet,
+  invalidateFaqsCache,
+} from '../utils/cache.js';
 
 /**
  * GET /api/faqs - List all FAQs (public, for app and portal)
  */
 export const getFaqs = async (req, res) => {
   try {
-    await ensureDefaultFaqs();
-    const faqs = await prisma.fAQ.findMany({
-      orderBy: [{ order: 'asc' }, { createdAt: 'asc' }],
+    const faqs = await getOrSet(CacheKeys.faqsList(), REFERENCE_TTL_SECONDS, async () => {
+      await ensureDefaultFaqs();
+      return prisma.fAQ.findMany({
+        orderBy: [{ order: 'asc' }, { createdAt: 'asc' }],
+      });
     });
-    res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.set('Cache-Control', 'public, max-age=60');
     res.json({ success: true, data: faqs });
   } catch (error) {
     console.error('[FAQ] getFaqs error:', error);
@@ -55,6 +63,7 @@ export const createFaq = async (req, res) => {
       },
     });
     res.status(201).json({ success: true, data: faq });
+    void invalidateFaqsCache();
   } catch (error) {
     console.error('[FAQ] createFaq error:', error);
     res.status(500).json({ success: false, message: error.message || 'Failed to create FAQ' });
@@ -82,6 +91,7 @@ export const updateFaq = async (req, res) => {
       data,
     });
     res.json({ success: true, data: faq });
+    void invalidateFaqsCache();
   } catch (error) {
     console.error('[FAQ] updateFaq error:', error);
     res.status(500).json({ success: false, message: error.message || 'Failed to update FAQ' });
@@ -100,6 +110,7 @@ export const deleteFaq = async (req, res) => {
     }
     await prisma.fAQ.delete({ where: { id } });
     res.json({ success: true, message: 'FAQ deleted' });
+    void invalidateFaqsCache();
   } catch (error) {
     console.error('[FAQ] deleteFaq error:', error);
     res.status(500).json({ success: false, message: error.message || 'Failed to delete FAQ' });

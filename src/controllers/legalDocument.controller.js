@@ -1,4 +1,10 @@
 import prisma from '../utils/prisma.js';
+import {
+  CacheKeys,
+  REFERENCE_TTL_SECONDS,
+  getOrSet,
+  invalidateLegalDocumentsCache,
+} from '../utils/cache.js';
 
 const DOC_TYPES = ['privacy', 'terms', 'compliance'];
 
@@ -110,14 +116,26 @@ export async function ensureLegalDocumentDefaults() {
  */
 export const getLegalDocuments = async (req, res) => {
   try {
-    await ensureLegalDocumentDefaults();
     const isAdmin = Boolean(req.user);
-    const where = isAdmin ? {} : { status: 'published' };
-    const docs = await prisma.legalDocument.findMany({
-      where,
-      orderBy: { docType: 'asc' },
+
+    if (isAdmin) {
+      await ensureLegalDocumentDefaults();
+      const docs = await prisma.legalDocument.findMany({
+        where: {},
+        orderBy: { docType: 'asc' },
+      });
+      return res.json({ success: true, data: docs });
+    }
+
+    const docs = await getOrSet(CacheKeys.legalDocumentsPublished(), REFERENCE_TTL_SECONDS, async () => {
+      await ensureLegalDocumentDefaults();
+      return prisma.legalDocument.findMany({
+        where: { status: 'published' },
+        orderBy: { docType: 'asc' },
+      });
     });
-    res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+
+    res.set('Cache-Control', 'public, max-age=60');
     res.json({ success: true, data: docs });
   } catch (error) {
     console.error('[LegalDocument] getLegalDocuments error:', error);
@@ -134,15 +152,31 @@ export const getLegalDocumentByType = async (req, res) => {
     if (!DOC_TYPES.includes(docType)) {
       return res.status(400).json({ success: false, message: 'Invalid document type' });
     }
-    await ensureLegalDocumentDefaults();
-    const doc = await prisma.legalDocument.findUnique({ where: { docType } });
+
+    const isAdmin = Boolean(req.user);
+    const cacheKey = CacheKeys.legalDocumentByType(docType);
+
+    const doc = isAdmin
+      ? await (async () => {
+          await ensureLegalDocumentDefaults();
+          return prisma.legalDocument.findUnique({ where: { docType } });
+        })()
+      : await getOrSet(cacheKey, REFERENCE_TTL_SECONDS, async () => {
+          await ensureLegalDocumentDefaults();
+          const row = await prisma.legalDocument.findUnique({ where: { docType } });
+          if (!row || row.status !== 'published') return null;
+          return row;
+        });
+
     if (!doc) {
       return res.status(404).json({ success: false, message: 'Legal document not found' });
     }
-    if (!req.user && doc.status !== 'published') {
+
+    if (!isAdmin && doc.status !== 'published') {
       return res.status(404).json({ success: false, message: 'Legal document not found' });
     }
-    res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+
+    res.set('Cache-Control', isAdmin ? 'no-store' : 'public, max-age=60');
     res.json({ success: true, data: doc });
   } catch (error) {
     console.error('[LegalDocument] getLegalDocumentByType error:', error);
@@ -186,6 +220,7 @@ export const upsertLegalDocument = async (req, res) => {
       update: data,
     });
     res.json({ success: true, data: doc });
+    void invalidateLegalDocumentsCache();
   } catch (error) {
     console.error('[LegalDocument] upsertLegalDocument error:', error);
     res.status(500).json({ success: false, message: error.message || 'Failed to save legal document' });
@@ -216,6 +251,7 @@ export const clearLegalDocument = async (req, res) => {
       },
     });
     res.json({ success: true, data: doc, message: 'Document cleared and set to draft' });
+    void invalidateLegalDocumentsCache();
   } catch (error) {
     console.error('[LegalDocument] clearLegalDocument error:', error);
     res.status(500).json({ success: false, message: error.message || 'Failed to clear legal document' });

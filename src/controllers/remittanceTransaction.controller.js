@@ -12,23 +12,22 @@ import {
 } from '../utils/limitsHelper.js';
 import { runOrchestrationBeforeTransaction } from '../utils/orchestration.js';
 import {
-  createAccountingEntryFromTransaction,
   updateAccountingEntriesForTransactionStatus,
   createRefundAccountingEntries,
 } from '../utils/accounting.js';
 import {
-  createRemittanceInitiateJournal,
   createRemittanceCompleteJournal,
   createRemittanceRefundJournal,
 } from '../utils/ledgerService.js';
 import { notifyCustomerAsync } from '../utils/customerNotify.js';
-import {
-  runComplianceRules,
-  createComplianceAlerts,
-  extractBeneficiaryKey,
-} from '../services/complianceRuleEngine.js';
 import acceptblueService from '../services/acceptblue.service.js';
-import { syncRemittanceTransactionToAml } from '../services/amlTransaction.service.js';
+import { enqueuePostTransactionJobs } from '../queues/enqueue.js';
+import {
+  WalletError,
+  debitCustomerWallet,
+  creditCustomerWallet,
+  lockCustomerWallet,
+} from '../utils/walletLock.js';
 
 const US_STATE_NAME_TO_CODE = {
   ALABAMA: 'AL',
@@ -237,28 +236,6 @@ export const createRemittanceTransaction = async (req, res) => {
       });
     }
 
-    const rows = await prisma.$queryRaw`
-      SELECT "availableBalance" FROM customers WHERE id = ${customerId}
-    `;
-    const row = rows?.[0];
-    if (!row) {
-      return res.status(404).json({
-        success: false,
-        message: 'Customer not found',
-      });
-    }
-    const currentBalance = row.availableBalance != null
-      ? Number(row.availableBalance)
-      : 12000;
-
-    // Wallet-funded transfer only — card-funded transfers charge Accept.blue instead (see below).
-    if (!paymentMethodLocalId && currentBalance < totalToDeduct) {
-      return res.status(400).json({
-        success: false,
-        message: `Insufficient balance. Available: ${currentBalance.toFixed(2)}, required (including fees): ${totalToDeduct.toFixed(2)}`,
-      });
-    }
-
     // Check daily / weekly / monthly limits from user level
     const limits = await getCustomerLimits(customerId);
     if (limits) {
@@ -293,8 +270,6 @@ export const createRemittanceTransaction = async (req, res) => {
         });
       }
     }
-
-    const newBalance = paymentMethodLocalId ? currentBalance : currentBalance - totalToDeduct;
 
     const txType = (transferType === 'wallet' ? 'wallet' : 'bank');
 
@@ -454,26 +429,48 @@ export const createRemittanceTransaction = async (req, res) => {
       ...(acceptBlueChargeMeta || {}),
     };
 
-    const [transaction] = await prisma.$transaction([
-      delegate.create({
-        data: {
-          customerId,
-          type: 'Sent',
-          transferType: txType,
-          sendAmount: send,
-          receiveAmount: receive,
-          currency: currency || null,
-          gatewayId: gatewayId || null,
-          gatewayName: gatewayName || null,
-          recipientInfo: enrichedRecipientInfo,
-          paymentFieldValues: enrichedPaymentFieldValues,
-          status: 'Processing',
-        },
-      }),
-      prisma.$executeRaw`
-        UPDATE customers SET "availableBalance" = ${newBalance} WHERE id = ${customerId}
-      `,
-    ]);
+    let transaction;
+    let newBalance;
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        let balanceAfterDebit = null;
+        if (!paymentMethodLocalId) {
+          const debitResult = await debitCustomerWallet(tx, customerId, totalToDeduct);
+          balanceAfterDebit = debitResult.newBalance;
+        } else {
+          balanceAfterDebit = await lockCustomerWallet(tx, customerId);
+        }
+
+        const created = await tx.remittanceTransaction.create({
+          data: {
+            customerId,
+            type: 'Sent',
+            transferType: txType,
+            sendAmount: send,
+            receiveAmount: receive,
+            currency: currency || null,
+            gatewayId: gatewayId || null,
+            gatewayName: gatewayName || null,
+            recipientInfo: enrichedRecipientInfo,
+            paymentFieldValues: enrichedPaymentFieldValues,
+            status: 'Processing',
+          },
+        });
+
+        return { transaction: created, newBalance: balanceAfterDebit };
+      });
+      transaction = result.transaction;
+      newBalance = result.newBalance;
+    } catch (walletErr) {
+      if (walletErr instanceof WalletError) {
+        return res.status(walletErr.statusCode).json({
+          success: false,
+          message: walletErr.message,
+          code: walletErr.code,
+        });
+      }
+      throw walletErr;
+    }
 
     if (canStoreOrchestration && job) {
       try {
@@ -487,218 +484,50 @@ export const createRemittanceTransaction = async (req, res) => {
       }
     }
 
-    // ── Compliance Rule Engine ────────────────────────────────────────────
-    // Run AML/threshold/behavioral rules. On a match, update transaction
-    // status to "Hold" and create compliance alerts. Never block the
-    // response — if the engine fails, the transaction stays as Processing.
-    let complianceHold = false;
-    try {
-      const beneficiaryCustomerId = enrichedRecipientInfo?.beneficiaryId || null;
-      const beneficiaryKeyPlain = enrichedRecipientInfo?.beneficiaryKey || null;
-      const currentBeneficiaryKey = extractBeneficiaryKey(enrichedRecipientInfo);
-      const ipAddress =
-        req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
-        req.connection?.remoteAddress ||
-        req.socket?.remoteAddress ||
-        null;
-      const deviceId =
-        req.headers['x-device-id'] || req.headers['x-device-fingerprint'] || null;
+    const ipAddress =
+      req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
+      req.connection?.remoteAddress ||
+      req.socket?.remoteAddress ||
+      null;
+    const deviceId =
+      req.headers['x-device-id'] || req.headers['x-device-fingerprint'] || null;
 
-      console.log('[Compliance] Running AML rules | transactionId=', transaction.id, '| amount=', send);
-
-      const { hold, triggeredRules, riskScore } = await runComplianceRules({
-        senderId: customerId,
-        beneficiaryCustomerId,
-        beneficiaryKeyPlain,
-        currentBeneficiaryKey,
-        amount: send,
-        excludeTransactionId: transaction.id,
-        ipAddress,
-        deviceId,
-      });
-
-      // Always persist risk score, triggered rules, IP and device info
-      const complianceUpdate = {
-        riskScore,
-        triggeredRules: triggeredRules.map((r) => r.code),
-        ipAddress: ipAddress || null,
-        deviceId: deviceId || null,
-      };
-
-      if (hold) {
-        complianceHold = true;
-        complianceUpdate.status = 'Hold';
-        complianceUpdate.complianceHoldAt = new Date();
-
-        await prisma.remittanceTransaction.update({
-          where: { id: transaction.id },
-          data: complianceUpdate,
-        });
-
-        await createComplianceAlerts(transaction.id, customerId, triggeredRules);
-
-        // Notify the customer's socket room about the hold
-        const io = req.app?.get?.('io');
-        if (io) {
-          io.to(`user:${customerId}`).emit('transaction-status', {
-            transactionId: transaction.id,
-            status: 'Hold',
-            message: 'Your transaction is under compliance review. Estimated review time: 2–24 hours.',
-          });
-        }
-
-        console.log(
-          '[Compliance] Transaction placed on HOLD | transactionId=', transaction.id,
-          '| rules=', triggeredRules.map((r) => r.code).join(', '),
-          '| riskScore=', riskScore,
-        );
-      } else {
-        // No hold — still persist risk score and device info
-        await prisma.remittanceTransaction.update({
-          where: { id: transaction.id },
-          data: complianceUpdate,
-        });
-        console.log('[Compliance] No rules triggered | transactionId=', transaction.id, '| riskScore=', riskScore);
-      }
-    } catch (compErr) {
-      console.warn('[Compliance] Rule engine error (transaction unaffected):', compErr.message);
-    }
-
-    // LiveEx TMS: POST /api/Transactions/save (non-blocking — local remittance still succeeds)
-    let amlSync = null;
-    try {
-      const customerForAml = await prisma.customer.findUnique({
-        where: { id: customerId },
-      });
-      if (customerForAml) {
-        const txForAml = await prisma.remittanceTransaction.findUnique({
-          where: { id: transaction.id },
-        });
-        amlSync = await syncRemittanceTransactionToAml({
-          customer: customerForAml,
-          transaction: txForAml || transaction,
-          recipientInfo: enrichedRecipientInfo,
-          reqMeta: {
-            ipAddress:
-              req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
-              req.connection?.remoteAddress ||
-              null,
-            deviceId:
-              req.headers['x-device-id'] ||
-              req.headers['x-device-fingerprint'] ||
-              null,
-          },
-        });
-        if (!amlSync?.success && !amlSync?.skipped) {
-          console.warn(
-            '[AML] Transaction save to TMS failed | transactionId=',
-            transaction.id,
-            '|',
-            amlSync?.message,
-          );
-        }
-      }
-    } catch (amlErr) {
-      console.warn('[AML] Transaction sync error (transaction unaffected):', amlErr.message);
-      amlSync = { success: false, message: amlErr.message };
-    }
-
-    // Accounting: create revenue (fee + tax) and expense entries from this transaction (so app transactions appear in portal)
-    try {
-      await createAccountingEntryFromTransaction(transaction, 'pending', {
-        totalCharge,
-        tax: typeof taxAmount === 'number' ? taxAmount : undefined,
-        fee: typeof feeAmount === 'number' ? feeAmount : undefined,
-      });
-    } catch (accErr) {
-      console.warn('Accounting entry creation skipped:', accErr.message);
-    }
-
-    // Ledger Service: Phase 1 - Remittance Initiate
-    try {
-      // transaction.currency is the receive currency (destination), send is always USD
-      const sendCurrency = 'USD'; // Base currency for sending (always USD)
-      const receiveCurrency = currency || transaction.currency || 'USD'; // Destination currency (user selected: ETB, GBP, etc.)
-      const exchangeRate = receive > 0 && send > 0 ? (receive / send).toFixed(6) : null;
-      
-      console.log('[Ledger Service] Phase 1 (initiate) - Preparing journal entry:');
-      console.log(`  Transaction ID: ${transaction.id}`);
-      console.log(`  Job ID: ${job?.id || 'N/A'}`);
-      console.log(`  Actor ID (Customer): ${customerId}`);
-      console.log(`  Send Amount: ${send} ${sendCurrency}`);
-      console.log(`  Fee Amount: ${feeAmount || totalCharge}`);
-      console.log(`  Receive Amount: ${receive} ${receiveCurrency}`);
-      console.log(`  Exchange Rate: ${exchangeRate || 'N/A'}`);
-      
-      await createRemittanceInitiateJournal({
-        transactionId: transaction.id,
-        jobId: job?.id,
-        actorId: customerId,
-        sendAmount: send,
-        feeAmount: feeAmount || totalCharge,
-        currency: sendCurrency, // Always USD for send
-        receiveAmount: receive,
-        receiveCurrency: receiveCurrency, // Destination currency (ETB, GBP, etc. - user selected)
-        exchangeRate,
-      });
-    } catch (ledgerErr) {
-      console.warn('[Ledger Service] Phase 1 (initiate) journal creation failed:', ledgerErr.message);
-      // Don't fail the transaction if ledger call fails
-    }
-
-    console.log('[Orchestration] createRemittanceTransaction: completed successfully | transactionId=', transaction.id);
-
-    const io = req.app && req.app.get && req.app.get('io');
-    if (io) {
-      io.emit('accounting:updated');
-      console.log('[Socket] Emitted accounting:updated after transaction create');
-    }
-
-    // Re-read the transaction to return the latest status (may have been updated to Hold)
-    const finalTransaction = await prisma.remittanceTransaction.findUnique({
-      where: { id: transaction.id },
+    const queueResult = await enqueuePostTransactionJobs({
+      transactionId: transaction.id,
+      customerId,
+      send,
+      receive,
+      currency: currency || transaction.currency,
+      feeAmount,
+      totalCharge,
+      taxAmount,
+      orchestrationJobId: job?.id || null,
+      enrichedRecipientInfo,
+      recipientInfo: enrichedRecipientInfo,
+      transaction,
+      ipAddress,
+      deviceId,
+      reqMeta: { ipAddress, deviceId },
     });
 
-    const finalStatus = String((finalTransaction || transaction).status || 'Processing');
-    const holdActive = complianceHold || finalStatus.toLowerCase() === 'hold';
-    notifyCustomerAsync(
-      customerId,
-      {
-        title: holdActive ? 'Transfer under review' : 'Transfer submitted',
-        body: holdActive
-          ? 'Your transfer is being reviewed. We will notify you when it is updated.'
-          : `Your transfer of $${send.toFixed(2)} USD has been submitted and is being processed.`,
-        data: {
-          type: 'transaction',
-          screen: 'history',
-          transactionId: transaction.id,
-          status: finalStatus,
-        },
-      },
-      io
+    console.log(
+      '[Orchestration] createRemittanceTransaction: completed | transactionId=',
+      transaction.id,
+      '| background=',
+      queueResult.mode,
     );
 
     res.status(201).json({
       success: true,
       data: {
-        ...(finalTransaction || transaction),
+        ...transaction,
+        status: 'Processing',
         newBalance,
       },
-      ...(amlSync?.success && {
-        aml: {
-          trIdDisplay: amlSync.trIdDisplay,
-          internalRef: amlSync.internalRef,
-          status: amlSync.status,
-          statusId: amlSync.statusId,
-        },
-      }),
-      ...(amlSync && !amlSync.success && !amlSync.skipped && {
-        amlSyncWarning: amlSync.message || 'Transaction saved locally but AML TMS sync failed',
-      }),
-      ...(complianceHold && {
-        complianceHold: true,
-        holdMessage: 'Your transaction is under compliance review. Estimated review time: 2–24 hours.',
-      }),
+      backgroundProcessing: true,
+      queued: queueResult.queued,
+      message:
+        'Transfer submitted successfully. AML, ledger, and compliance checks are processing in the background.',
     });
   } catch (error) {
     console.error('Error creating remittance transaction:', error);
@@ -731,25 +560,36 @@ export const listRemittanceTransactions = async (req, res) => {
       });
     }
 
-    const { limit = 50, offset = 0 } = req.query;
-    const take = Math.min(parseInt(limit, 10) || 50, 100);
-    const skip = Math.max(parseInt(offset, 10) || 0, 0);
+    const { parsePaginationQuery, parseSortQuery, sendPaginatedJson } = await import('../utils/pagination.js');
+    const pagination = parsePaginationQuery(req.query, { defaultLimit: 50, maxLimit: 100 });
+    const { status, type } = req.query;
+
+    const where = { customerId };
+    if (status) {
+      const normalized = String(status).toLowerCase();
+      if (normalized === 'pending') {
+        where.status = { in: ['processing', 'hold', 'manual_review'] };
+      } else {
+        where.status = normalized;
+      }
+    }
+    if (type) {
+      where.type = String(type);
+    }
+
+    const orderBy = parseSortQuery(req.query, ['createdAt', 'sendAmount', 'status'], 'createdAt');
 
     const [transactions, total] = await Promise.all([
       delegate.findMany({
-        where: { customerId },
-        orderBy: { createdAt: 'desc' },
-        take,
-        skip,
+        where,
+        orderBy,
+        take: pagination.take,
+        skip: pagination.skip,
       }),
-      delegate.count({ where: { customerId } }),
+      delegate.count({ where }),
     ]);
 
-    res.json({
-      success: true,
-      data: transactions,
-      total,
-    });
+    sendPaginatedJson(res, { data: transactions, total, pagination });
   } catch (error) {
     console.error('Error listing remittance transactions:', error);
     res.status(500).json({
@@ -793,6 +633,13 @@ export const getRemittanceTransactionById = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: 'Transaction not found',
+      });
+    }
+
+    if (req.user?.type === 'customer' && transaction.customerId !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied',
       });
     }
 
@@ -1057,33 +904,39 @@ export const rejectRemittanceTransaction = async (req, res) => {
     const fee = Number(recipientInfo.fee ?? paymentFieldValues.charge ?? paymentFieldValues.fee ?? 0);
     const totalToRefund = sendAmount + fee;
 
-    const rows = await prisma.$queryRaw`
-      SELECT "availableBalance" FROM customers WHERE id = ${customerId}
-    `;
-    const currentBalance = rows?.[0]?.availableBalance != null ? Number(rows[0].availableBalance) : 0;
-    const newBalance = currentBalance + totalToRefund;
+    let newBalance;
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        const creditResult = await creditCustomerWallet(tx, customerId, totalToRefund);
+        const updated = await tx.remittanceTransaction.update({
+          where: { id },
+          data: { status: 'Failed', updatedAt: new Date() },
+        });
 
-    const txOperations = [
-      delegate.update({
-        where: { id },
-        data: { status: 'Failed', updatedAt: new Date() },
-      }),
-      prisma.$executeRaw`
-        UPDATE customers SET "availableBalance" = ${newBalance}, "updatedAt" = NOW() WHERE id = ${customerId}
-      `,
-    ];
+        if (prisma.orchestrationJob && typeof tx.orchestrationJob?.updateMany === 'function') {
+          await tx.orchestrationJob.updateMany({
+            where: { remittanceTransactionId: id },
+            data: {
+              status: 'failed',
+              message: 'Transaction rejected by admin.',
+              updatedAt: new Date(),
+            },
+          });
+        }
 
-    // Mark related orchestration job(s) as failed so Orchestration Jobs table shows rejected state
-    if (prisma.orchestrationJob && typeof prisma.orchestrationJob.updateMany === 'function') {
-      txOperations.push(
-        prisma.orchestrationJob.updateMany({
-          where: { remittanceTransactionId: id },
-          data: { status: 'failed', message: 'Transaction rejected by admin.', updatedAt: new Date() },
-        })
-      );
+        return { updated, newBalance: creditResult.newBalance };
+      });
+      newBalance = result.newBalance;
+    } catch (walletErr) {
+      if (walletErr instanceof WalletError) {
+        return res.status(walletErr.statusCode).json({
+          success: false,
+          message: walletErr.message,
+          code: walletErr.code,
+        });
+      }
+      throw walletErr;
     }
-
-    await prisma.$transaction(txOperations);
 
     // Accounting: mark related entries as reversed and create refund entry
     try {
@@ -1162,17 +1015,46 @@ export const listAllRemittanceTransactions = async (req, res) => {
       });
     }
 
-    const { limit = 100, offset = 0, customerId } = req.query;
-    const take = Math.min(parseInt(limit, 10) || 100, 500);
-    const skip = Math.max(parseInt(offset, 10) || 0, 0);
-    const where = customerId && String(customerId).trim() ? { customerId: String(customerId).trim() } : {};
+    const { parsePaginationQuery, parseSortQuery, sendPaginatedJson } = await import('../utils/pagination.js');
+    const pagination = parsePaginationQuery(req.query, { defaultLimit: 50, maxLimit: 500 });
+    const { customerId, search, status, transferType } = req.query;
+
+    const where = {};
+    if (customerId && String(customerId).trim()) {
+      where.customerId = String(customerId).trim();
+    }
+    if (status) {
+      where.status = String(status);
+    }
+    if (transferType) {
+      where.transferType = String(transferType);
+    }
+    if (search && String(search).trim()) {
+      const q = String(search).trim();
+      where.OR = [
+        { id: { contains: q, mode: 'insensitive' } },
+        { orderNumber: { contains: q, mode: 'insensitive' } },
+        { remittanceId: { contains: q, mode: 'insensitive' } },
+        { gatewayName: { contains: q, mode: 'insensitive' } },
+        { customer: { email: { contains: q, mode: 'insensitive' } } },
+        { customer: { firstName: { contains: q, mode: 'insensitive' } } },
+        { customer: { lastName: { contains: q, mode: 'insensitive' } } },
+        { customer: { phone: { contains: q, mode: 'insensitive' } } },
+      ];
+    }
+
+    const orderBy = parseSortQuery(
+      req.query,
+      ['createdAt', 'sendAmount', 'receiveAmount', 'status', 'updatedAt'],
+      'createdAt',
+    );
 
     const [transactions, total] = await Promise.all([
       delegate.findMany({
         where,
-        orderBy: { createdAt: 'desc' },
-        take,
-        skip,
+        orderBy,
+        take: pagination.take,
+        skip: pagination.skip,
         include: {
           customer: {
             select: senderCustomerSelect,
@@ -1182,11 +1064,7 @@ export const listAllRemittanceTransactions = async (req, res) => {
       delegate.count({ where }),
     ]);
 
-    res.json({
-      success: true,
-      data: transactions,
-      total,
-    });
+    sendPaginatedJson(res, { data: transactions, total, pagination });
   } catch (error) {
     console.error('Error listing all remittance transactions:', error);
     res.status(500).json({

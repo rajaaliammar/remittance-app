@@ -1,11 +1,12 @@
 import prisma from '../utils/prisma.js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import multer from 'multer';
-import path from 'path';
-import fs from 'fs';
-import os from 'os';
-import { getWritableKycUploadDir, getNotificationUploadDir, getCountryServiceUploadDir } from '../utils/uploadPath.js';
+import {
+  persistMulterFile,
+  resolvePublicFileUrl,
+} from '../utils/objectStorage.js';
+import { upload, uploadNotificationImageMulter, uploadCountryServiceImageMulter } from '../utils/uploadMulter.js';
+export { upload, uploadNotificationImageMulter, uploadCountryServiceImageMulter };
 import {
   getCustomerLimits,
   getNextLevelForCustomer,
@@ -28,104 +29,6 @@ import {
   buildClientIpFields,
   resolveLastIpForApi,
 } from '../utils/resolveCustomerLastIp.js';
-
-// Fallback dir that is always available (tmpdir) so uploads never fail with EACCES
-const TMPDIR_KYC = path.join(os.tmpdir(), 'remittance-kyc-uploads', 'kyc');
-
-// Configure multer for file uploads (uses writable dir; never passes EACCES to client)
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    let uploadDir;
-    try {
-      uploadDir = getWritableKycUploadDir();
-      console.log('[KYC Upload] Upload destination:', uploadDir);
-    } catch (err) {
-      console.warn('[KYC Upload] getWritableKycUploadDir failed, using tmpdir:', err?.message);
-      try {
-        if (!fs.existsSync(TMPDIR_KYC)) {
-          fs.mkdirSync(TMPDIR_KYC, { recursive: true, mode: 0o755 });
-        }
-        uploadDir = TMPDIR_KYC;
-        console.log('[KYC Upload] Fallback destination:', uploadDir);
-      } catch (e) {
-        console.error('[KYC Upload] tmpdir fallback failed:', e);
-        return cb(e);
-      }
-    }
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
-export const upload = multer({
-  storage: storage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
-  fileFilter: (req, file, cb) => {
-    const allowedTypes = /jpeg|jpg|png|pdf/;
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = allowedTypes.test(file.mimetype);
-    if (mimetype && extname) {
-      return cb(null, true);
-    } else {
-      cb(new Error('Only images (JPEG, JPG, PNG) and PDF files are allowed'));
-    }
-  }
-});
-
-// Multer for notification image upload (portal admin)
-const notificationStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    try {
-      cb(null, getNotificationUploadDir());
-    } catch (e) {
-      cb(e);
-    }
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
-    cb(null, 'notification-' + Date.now() + '-' + Math.round(Math.random() * 1E9) + ext);
-  },
-});
-export const uploadNotificationImageMulter = multer({
-  storage: notificationStorage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
-  fileFilter: (req, file, cb) => {
-    const allowed = /jpeg|jpg|png|gif|webp/;
-    const ext = allowed.test(path.extname(file.originalname).toLowerCase());
-    const mime = allowed.test(file.mimetype);
-    if (ext && mime) return cb(null, true);
-    cb(new Error('Only images (JPEG, PNG, GIF, WebP) are allowed'));
-  },
-});
-
-// Portal admin: country service display image (mobile app bank/service cards)
-const countryServiceImageStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    try {
-      cb(null, getCountryServiceUploadDir());
-    } catch (e) {
-      cb(e);
-    }
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
-    cb(null, 'country-service-' + Date.now() + '-' + Math.round(Math.random() * 1e9) + ext);
-  },
-});
-export const uploadCountryServiceImageMulter = multer({
-  storage: countryServiceImageStorage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
-  fileFilter: (req, file, cb) => {
-    const allowed = /jpeg|jpg|png|gif|webp/;
-    const ext = allowed.test(path.extname(file.originalname).toLowerCase());
-    const mime = allowed.test(file.mimetype);
-    if (ext && mime) return cb(null, true);
-    cb(new Error('Only images (JPEG, PNG, GIF, WebP) are allowed'));
-  },
-});
 
 // Static OTP for development/testing
 const STATIC_OTP = '123456';
@@ -1172,17 +1075,22 @@ export const completeProfile = async (req, res) => {
 
     // Profile photo (multipart field profile_image)
     let profileImageUrl = null;
-    if (req.file?.filename) {
-      profileImageUrl = `/uploads/kyc/${req.file.filename}`;
-      try {
-        await prisma.$executeRawUnsafe(
-          `UPDATE "customers" SET "profileImage" = $1, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = $2`,
-          profileImageUrl,
-          customerId
-        );
-      } catch (rawErr) {
-        console.warn('[completeProfile] profileImage raw update failed, trying Prisma:', rawErr?.message);
-        updateData.profileImage = profileImageUrl;
+    if (req.file) {
+      const stored = await persistMulterFile(req.file, 'kyc', {
+        filenamePrefix: 'profile_image',
+      });
+      profileImageUrl = stored?.url ?? null;
+      if (profileImageUrl) {
+        try {
+          await prisma.$executeRawUnsafe(
+            `UPDATE "customers" SET "profileImage" = $1, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = $2`,
+            profileImageUrl,
+            customerId
+          );
+        } catch (rawErr) {
+          console.warn('[completeProfile] profileImage raw update failed, trying Prisma:', rawErr?.message);
+          updateData.profileImage = profileImageUrl;
+        }
       }
     }
 
@@ -1271,7 +1179,10 @@ export const uploadNotificationImage = async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'No image file uploaded.' });
     }
-    const url = '/uploads/notifications/' + req.file.filename;
+    const stored = await persistMulterFile(req.file, 'notifications', {
+      filenamePrefix: 'notification',
+    });
+    const url = resolvePublicFileUrl(stored?.url);
     res.json({ success: true, url });
   } catch (error) {
     console.error('Error uploading notification image:', error);
@@ -1285,7 +1196,10 @@ export const uploadCountryServiceImage = async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'No image file uploaded.' });
     }
-    const url = '/uploads/country-services/' + req.file.filename;
+    const stored = await persistMulterFile(req.file, 'country-services', {
+      filenamePrefix: 'country-service',
+    });
+    const url = resolvePublicFileUrl(stored?.url);
     res.json({ success: true, url });
   } catch (error) {
     console.error('Error uploading country service image:', error);
@@ -1315,7 +1229,7 @@ export const uploadKycDocument = async (req, res) => {
     }
 
     // Validate file properties
-    if (!req.file.filename || !req.file.path) {
+    if (!req.file.buffer && !req.file.path) {
       console.error('[KYC Upload] Invalid file object:', req.file);
       return res.status(400).json({
         success: false,
@@ -1333,10 +1247,11 @@ export const uploadKycDocument = async (req, res) => {
     }
 
     const { category, side } = req.body;
-    const fileUrl = `/uploads/kyc/${req.file.filename}`;
+    const stored = await persistMulterFile(req.file, 'kyc');
+    const fileUrl = resolvePublicFileUrl(stored?.url);
 
     console.log(`[KYC Upload] ✅ File uploaded successfully for customer ${customerId}:`, {
-      filename: req.file.filename,
+      filename: stored?.filename,
       size: req.file.size,
       mimetype: req.file.mimetype,
       category: category || 'N/A'
@@ -1350,7 +1265,7 @@ export const uploadKycDocument = async (req, res) => {
         url: fileUrl,
         category: category || null,
         side: side || null,
-        filename: req.file.filename
+        filename: stored?.filename
       }
     });
   } catch (error) {
@@ -1407,23 +1322,29 @@ export const uploadKYC = async (req, res) => {
     const documents = [];
 
     if (frontIdFile) {
+      const storedFront = await persistMulterFile(frontIdFile, 'kyc', {
+        filenamePrefix: 'frontId',
+      });
       documents.push({
         id: `field_front_${Date.now()}`,
         fieldName: 'National ID Front',
         inputType: 'file',
-        value: frontIdFile.filename,
-        fileUrl: `/uploads/kyc/${frontIdFile.filename}`,
+        value: storedFront?.filename,
+        fileUrl: resolvePublicFileUrl(storedFront?.url),
         status: 'pending'
       });
     }
 
     if (backIdFile) {
+      const storedBack = await persistMulterFile(backIdFile, 'kyc', {
+        filenamePrefix: 'backId',
+      });
       documents.push({
         id: `field_back_${Date.now()}`,
         fieldName: 'National ID Back',
         inputType: 'file',
-        value: backIdFile.filename,
-        fileUrl: `/uploads/kyc/${backIdFile.filename}`,
+        value: storedBack?.filename,
+        fileUrl: resolvePublicFileUrl(storedBack?.url),
         status: 'pending'
       });
     }
@@ -2206,25 +2127,8 @@ export const getVerifications = async (req, res) => {
     }
 
     const kycDocuments = raw ? (Array.isArray(raw) ? raw : [raw]) : [];
-    let needsIdBackfill = false;
-    const normalizedDocuments = kycDocuments.map((doc, index) => {
-      if (doc?.id) return doc;
-      needsIdBackfill = true;
-      return {
-        ...doc,
-        id: `doc_${customerId}_${index}_${Date.now()}`,
-      };
-    });
-
-    if (needsIdBackfill) {
-      await prisma.customer.update({
-        where: { id: customerId },
-        data: { kycData: normalizedDocuments },
-      });
-    }
-
-    console.log('[getVerifications] Final kycDocuments count:', normalizedDocuments.length);
-    console.log('[getVerifications] Final kycDocuments:', JSON.stringify(normalizedDocuments, null, 2));
+    console.log('[getVerifications] Final kycDocuments count:', kycDocuments.length);
+    console.log('[getVerifications] Final kycDocuments:', JSON.stringify(kycDocuments, null, 2));
     console.log('[getVerifications] ========== END ==========');
 
     const kycRequest =
@@ -2245,7 +2149,7 @@ export const getVerifications = async (req, res) => {
 
     return res.json({
       success: true,
-      data: normalizedDocuments,
+      data: kycDocuments,
       kycRequest,
       message: 'Verifications retrieved successfully',
     });
@@ -2586,19 +2490,12 @@ export const saveKycDetails = async (req, res) => {
       const fields = [];
       Object.entries(body.enhancedKYC).forEach(([key, value]) => {
         if (value != null && value !== '') {
-          const strVal =
-            typeof value === 'string' ? value : JSON.stringify(value);
-          const isFile =
-            strVal.startsWith('/') ||
-            strVal.startsWith('http') ||
-            strVal.includes('/uploads/kyc/');
-          if (key.endsWith('_url') && !isFile) return;
           fields.push({
             id: `field_${key}_${Date.now()}`,
             fieldName: key,
-            inputType: isFile ? 'upload' : 'text',
-            value: strVal,
-            fileUrl: isFile ? strVal : null,
+            inputType: 'text',
+            value: typeof value === 'string' ? value : JSON.stringify(value),
+            fileUrl: typeof value === 'string' && value.startsWith('http') ? value : null,
             status: 'pending',
             verifiedAt: null,
             verifiedBy: null,
@@ -2742,41 +2639,77 @@ export const reportDeviceInfo = async (req, res) => {
 // Get all customers
 export const getAllCustomers = async (req, res) => {
   try {
-    const { search } = req.query;
+    const { search, status } = req.query;
+    const { parsePaginationQuery, parseSortQuery, sendPaginatedJson } = await import('../utils/pagination.js');
+    const pagination = parsePaginationQuery(req.query, { defaultLimit: 50, maxLimit: 200 });
 
-    const where = search ? {
-      OR: [
+    const where = {};
+    if (search) {
+      where.OR = [
         { email: { contains: search, mode: 'insensitive' } },
         { username: { contains: search, mode: 'insensitive' } },
         { firstName: { contains: search, mode: 'insensitive' } },
         { lastName: { contains: search, mode: 'insensitive' } },
-        { phone: { contains: search, mode: 'insensitive' } }
-      ]
-    } : {};
+        { phone: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+    if (status) {
+      where.status = String(status).toLowerCase();
+    }
 
-    const [customers, total] = await Promise.all([
-      prisma.customer.findMany({
-        where,
-        select: {
-          id: true,
-          email: true,
-          username: true,
-          firstName: true,
-          lastName: true,
-          phone: true,
-          address: true,
-          status: true,
-          approvedAt: true,
-          level: true,
-          balanceLimit: true,
-          createdAt: true,
-        },
-        orderBy: { createdAt: 'desc' },
-      }),
-      prisma.customer.count({ where }),
+    const orderBy = parseSortQuery(req.query, [
+      'createdAt',
+      'email',
+      'firstName',
+      'lastName',
+      'status',
     ]);
 
-    res.json({ success: true, data: customers, total });
+    const select = {
+      id: true,
+      email: true,
+      username: true,
+      firstName: true,
+      lastName: true,
+      phone: true,
+      address: true,
+      status: true,
+      approvedAt: true,
+      level: true,
+      balanceLimit: true,
+      createdAt: true,
+    };
+
+    const [customers, total, statusGroups] = await Promise.all([
+      prisma.customer.findMany({
+        where,
+        select,
+        orderBy,
+        take: pagination.take,
+        skip: pagination.skip,
+      }),
+      prisma.customer.count({ where }),
+      prisma.customer.groupBy({
+        by: ['status'],
+        where,
+        _count: { _all: true },
+      }),
+    ]);
+
+    const stats = { pending: 0, approved: 0, rejected: 0, blocked: 0, other: 0 };
+    for (const row of statusGroups) {
+      const key = String(row.status || '').toLowerCase();
+      const count = row._count?._all ?? 0;
+      if (key in stats) stats[key] += count;
+      else stats.other += count;
+    }
+
+    sendPaginatedJson(res, {
+      data: customers,
+      total,
+      pagination,
+      extra: { stats },
+    });
   } catch (error) {
     console.error('Error fetching customers:', error);
     res.status(500).json({ success: false, error: error.message });
@@ -2903,11 +2836,12 @@ export const getCustomerDeviceInfoByEmail = async (req, res) => {
   }
 };
 
-/** Store upload paths as /uploads/... so mobile apps resolve against their API host. */
+/** Accept /uploads/ paths or full S3/CDN URLs for notification images. */
 function normalizeNotificationImageUrl(raw) {
   if (!raw || typeof raw !== 'string') return null;
   const trimmed = raw.trim();
   if (!trimmed) return null;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
   try {
     if (trimmed.startsWith('/uploads/')) return trimmed;
     const u = new URL(trimmed);
@@ -2940,11 +2874,8 @@ export const broadcastNotificationToAllCustomers = async (req, res) => {
     }
     const imageUrl = normalizeNotificationImageUrl(image);
 
-    const customers = await prisma.customer.findMany({
-      select: { id: true },
-    });
-    const total = customers.length;
-    if (total === 0) {
+    const totalCustomers = await prisma.customer.count();
+    if (totalCustomers === 0) {
       return res.json({
         success: true,
         message: 'No customers to notify',
@@ -2954,65 +2885,20 @@ export const broadcastNotificationToAllCustomers = async (req, res) => {
       });
     }
 
-    const io = req.app?.get?.('io');
-    let saved = 0;
-    let pushed = 0;
-    const batchSize = 10;
+    const { enqueueBroadcastNotificationJob } = await import('../queues/enqueue.js');
+    const queueResult = await enqueueBroadcastNotificationJob({
+      title: notificationTitle,
+      body: notificationBody,
+      imageUrl,
+    });
 
-    for (let i = 0; i < customers.length; i += batchSize) {
-      const batch = customers.slice(i, i + batchSize);
-      const results = await Promise.all(
-        batch.map((c) =>
-          deliverCustomerNotification(String(c.id), {
-            title: notificationTitle,
-            body: notificationBody,
-            imageUrl,
-            data: { screen: 'notifications', type: 'admin' },
-          })
-        )
-      );
-      for (let j = 0; j < batch.length; j++) {
-        const result = results[j];
-        const customerId = String(batch[j].id);
-        if (result.saved) saved += 1;
-        if (result.pushed) pushed += 1;
-        if (io && result.notificationId) {
-          try {
-            io.to(`user:${customerId}`).emit('admin:notification', {
-              id: result.notificationId,
-              title: notificationTitle,
-              body: notificationBody,
-              imageUrl: imageUrl || null,
-              sentAt: new Date().toISOString(),
-            });
-          } catch (e) {
-            console.warn('[Notification] Broadcast socket emit failed:', e?.message || e);
-          }
-        }
-      }
-    }
-
-    const pushStatus = getPushConfigStatus();
-    console.log(
-      `[Notification] Broadcast complete: total=${total} saved=${saved} pushed=${pushed} pushConfigured=${pushStatus.configured}`
-    );
-
-    let message;
-    if (!pushStatus.configured) {
-      message = `Saved in app for ${total} customer${total === 1 ? '' : 's'}. Device push skipped — configure Firebase Admin on the server (see FIREBASE_SETUP.md).`;
-    } else if (pushed === 0) {
-      message = `Saved in app for ${total} customer${total === 1 ? '' : 's'}. No devices received push (customers need to open the app, log in, and allow notifications).`;
-    } else {
-      message = `Message sent to ${total} customer${total === 1 ? '' : 's'}. Saved in app for all; push delivered to ${pushed}.`;
-    }
-
-    res.json({
+    res.status(202).json({
       success: true,
-      message,
-      total,
-      saved,
-      pushed,
-      pushConfigured: !!pushStatus.configured,
+      message: `Broadcast queued for ${totalCustomers} customer${totalCustomers === 1 ? '' : 's'}. Notifications are processing in the background.`,
+      total: totalCustomers,
+      queued: queueResult.queued,
+      mode: queueResult.mode,
+      jobId: queueResult.jobId,
     });
   } catch (error) {
     console.error('Error broadcasting notification:', error);
@@ -3224,18 +3110,29 @@ export const getCustomerNotifications = async (req, res) => {
       return res.status(401).json({ success: false, message: 'Authentication required' });
     }
     const id = String(customerId);
-    const limit = Math.min(parseInt(req.query?.limit, 10) || 50, 100);
-    const notifications = await prisma.customerNotification.findMany({
-      where: { customerId: id },
-      orderBy: { sentAt: 'desc' },
-      take: limit,
-      select: { id: true, title: true, body: true, imageUrl: true, sentAt: true, readAt: true },
-    });
+    const { parsePaginationQuery, sendPaginatedJson } = await import('../utils/pagination.js');
+    const pagination = parsePaginationQuery(req.query, { defaultLimit: 50, maxLimit: 100 });
+
+    const where = { customerId: id };
+    const select = { id: true, title: true, body: true, imageUrl: true, sentAt: true, readAt: true };
+
+    const [notifications, total] = await Promise.all([
+      prisma.customerNotification.findMany({
+        where,
+        orderBy: { sentAt: 'desc' },
+        take: pagination.take,
+        skip: pagination.skip,
+        select,
+      }),
+      prisma.customerNotification.count({ where }),
+    ]);
+
     const data = notifications.map((n) => ({
       ...n,
       imageUrl: normalizeNotificationImageUrl(n.imageUrl) ?? n.imageUrl,
     }));
-    res.json({ success: true, data });
+
+    sendPaginatedJson(res, { data, total, pagination });
   } catch (error) {
     console.error('Error fetching customer notifications:', error);
     res.status(500).json({ success: false, error: error.message });

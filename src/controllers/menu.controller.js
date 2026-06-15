@@ -1,4 +1,5 @@
 import prisma from '../utils/prisma.js';
+import { sanitizeMenuPayload } from '../utils/imageFieldSanitizer.js';
 
 // Get menu by type (header or footer)
 export const getMenuByType = async (req, res) => {
@@ -177,7 +178,8 @@ export const getAllMenus = async (req, res) => {
 // Create or update menu
 export const saveMenu = async (req, res) => {
   try {
-    const { menuType, items, footerPages, footerUsefulLinks, footerSupportLinks, logo, brandName } = req.body;
+    const { menuType, items, footerPages, footerUsefulLinks, footerSupportLinks, logo, brandName } =
+      await sanitizeMenuPayload(req.body);
 
     if (!menuType || !['header', 'footer'].includes(menuType)) {
       return res.status(400).json({ 

@@ -1,4 +1,5 @@
 import prisma from '../utils/prisma.js';
+import { sanitizeLogoField } from '../utils/imageFieldSanitizer.js';
 
 // Get all manual gateways
 export const getAllManualGateways = async (req, res) => {
@@ -75,7 +76,7 @@ export const createManualGateway = async (req, res) => {
     const gateway = await prisma.manualGateway.create({
       data: {
         name,
-        logo: logo || null,
+        logo: logo ? await sanitizeLogoField(logo, 'gateways') : null,
         logoColor: logoColor || null,
         supportedCurrency: supportedCurrency ? parseInt(supportedCurrency) : null,
         description: description || null,
@@ -124,7 +125,7 @@ export const updateManualGateway = async (req, res) => {
       where: { id },
       data: {
         name: name !== undefined ? name : gateway.name,
-        logo: logo !== undefined ? logo : gateway.logo,
+        logo: logo !== undefined ? await sanitizeLogoField(logo, 'gateways') : gateway.logo,
         logoColor: logoColor !== undefined ? logoColor : gateway.logoColor,
         supportedCurrency: supportedCurrency !== undefined ? parseInt(supportedCurrency) : gateway.supportedCurrency,
         description: description !== undefined ? description : gateway.description,

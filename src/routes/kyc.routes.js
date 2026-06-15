@@ -14,8 +14,7 @@ import {
   approveKYCDocumentField,
   rejectKYCDocumentField,
   getKYCFormsByCountry,
-  submitKYCForm,
-  resubmitKYCDocument
+  submitKYCForm
 } from '../controllers/kyc.controller.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { authenticateCustomer } from '../middleware/customerAuth.js';
@@ -24,7 +23,6 @@ const router = express.Router();
 
 // Customer: get own KYC documents (for app Verifications screen)
 router.get('/my-documents', authenticateCustomer, getMyKYCDocuments);
-router.post('/resubmit', authenticateCustomer, resubmitKYCDocument);
 
 // Admin portal: list all KYC requests (Pending / Approved / Rejected) - same data source as app
 router.get('/requests', authenticateToken, getKYCRequests);

@@ -23,6 +23,18 @@ import {
   verifyAmlConnectionAtStartup,
 } from './services/amlProvider.service.js';
 import { getPushConfigStatus } from './utils/push.js';
+import { setSocketIo } from './utils/socketIo.js';
+import { startTransactionWorkers, stopTransactionWorkers } from './workers/transactionWorkers.js';
+import { closeQueueConnection } from './queues/connection.js';
+import { closeQueues } from './queues/enqueue.js';
+import { closeRedis } from './utils/redis.js';
+import { logDatabasePoolConfig } from './utils/databasePool.js';
+import { logObjectStorageConfig } from './utils/objectStorage.js';
+import {
+  attachSocketRedisAdapter,
+  closeSocketRedisAdapter,
+  isSocketRedisAdapterAttached,
+} from './utils/socketRedisAdapter.js';
 
 // Get __dirname equivalent for ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -80,9 +92,8 @@ app.use(morgan('dev'));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Serve agent KYC uploads from the same dir we write to (so images load after onboarding)
+// Legacy local uploads (pre-S3 migration); new uploads use S3 public URLs when S3_ENABLED=true
 app.use('/uploads/agentKyc', express.static(getWritableAgentKycUploadDir()));
-// Serve other static files (customer KYC, notifications, etc.)
 app.use('/uploads', express.static(getUploadsBase()));
 
 // Health check route
@@ -120,6 +131,7 @@ const io = new SocketServer(server, {
   path: '/socket.io',
 });
 app.set('io', io);
+setSocketIo(io);
 io.on('connection', (socket) => {
   socket.on('join:user', (data) => {
     const userId = data?.userId != null ? String(data.userId) : null;
@@ -264,8 +276,13 @@ async function startServer() {
     console.error('❌ KYC upload dir not writable:', err.message);
     process.exit(1);
   }
+
+  await attachSocketRedisAdapter(io);
+
   const HOST = process.env.HOST || '0.0.0.0';
   server.listen(PORT, HOST, () => {
+    logDatabasePoolConfig();
+    logObjectStorageConfig();
     console.log(`🚀 Server is running on http://localhost:${PORT}`);
     console.log(`📱 Android emulator: http://10.0.2.2:${PORT}/api`);
     console.log(`📱 iOS simulator: http://localhost:${PORT}/api`);
@@ -273,6 +290,9 @@ async function startServer() {
     console.log(`📊 Health check: http://localhost:${PORT}/health`);
     console.log(`🔗 API base: http://localhost:${PORT}/api`);
     console.log(`🔌 Socket.io: http://localhost:${PORT}`);
+    if (isSocketRedisAdapterAttached()) {
+      console.log('[Socket] Multi-instance mode — Redis pub/sub adapter active');
+    }
     logAmlStartupConfig();
     const pushStatus = getPushConfigStatus();
     if (pushStatus.configured) {
@@ -296,20 +316,27 @@ async function startServer() {
         );
       }
     });
+
+    if (process.env.WORKERS_INLINE !== 'false') {
+      startTransactionWorkers();
+    } else {
+      console.log('[Workers] Inline workers disabled — run: npm run worker');
+    }
   });
 }
 startServer();
 
-// Graceful shutdown
-process.on('SIGINT', async () => {
+async function shutdown() {
   console.log('\n🛑 Shutting down gracefully...');
+  await stopTransactionWorkers();
+  await closeQueues();
+  await closeQueueConnection();
+  await closeSocketRedisAdapter();
+  await closeRedis();
   await prisma.$disconnect();
   process.exit(0);
-});
+}
 
-process.on('SIGTERM', async () => {
-  console.log('\n🛑 Shutting down gracefully...');
-  await prisma.$disconnect();
-  process.exit(0);
-});
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
 

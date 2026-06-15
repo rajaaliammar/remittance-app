@@ -2,6 +2,10 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { getUploadsBase, getKycUploadDir } from '../utils/uploadPath.js';
+import {
+  readStoredFileBase64,
+  resolveLocalPathFromStoredUrl,
+} from '../utils/objectStorage.js';
 import { resolveAmlClientNumber } from './amlProvider.service.js';
 import {
   extractAmlCacheFromKycData,
@@ -70,39 +74,7 @@ export function toAmlDocumentDateIso(input) {
 }
 
 function resolveLocalFilePath(fileUrl) {
-  if (!fileUrl) return null;
-  let pathname = String(fileUrl).trim();
-  try {
-    if (pathname.startsWith('http://') || pathname.startsWith('https://')) {
-      pathname = new URL(pathname).pathname;
-    }
-  } catch {
-    return null;
-  }
-  if (!pathname.includes('/uploads/') && !pathname.includes('/kyc/')) {
-    return null;
-  }
-
-  const rel = pathname.replace(/^\/+/, '').replace(/^uploads\/?/, '');
-  const candidates = [
-    path.join(getUploadsBase(), rel),
-    path.join(getKycUploadDir(), path.basename(pathname)),
-    path.join(getUploadsBase(), 'kyc', path.basename(pathname)),
-  ];
-
-  for (const full of candidates) {
-    if (full && fs.existsSync(full)) return full;
-  }
-
-  const projectRoot = path.resolve(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..'));
-  const projectKyc = path.join(projectRoot, 'uploads', 'kyc');
-  const base = path.basename(pathname);
-  for (const dir of [projectKyc, getKycUploadDir()]) {
-    const alt = path.join(dir, base);
-    if (fs.existsSync(alt)) return alt;
-  }
-
-  return null;
+  return resolveLocalPathFromStoredUrl(fileUrl);
 }
 
 /** Find file on disk when KYC URL metadata is stale but upload timestamp matches AML doc_name. */
@@ -275,18 +247,8 @@ export async function findCustomerByAmlClientNumber(clientNumber, prisma) {
 }
 
 async function readUrlAsBase64(fileUrl) {
-  const local = resolveLocalFilePath(fileUrl);
-  if (local) return readFileAsBase64(local);
-
-  const trimmed = String(fileUrl).trim();
-  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-    const res = await fetch(trimmed, { signal: AbortSignal.timeout(30000) });
-    if (!res.ok) {
-      throw new Error(`Could not download file (${res.status})`);
-    }
-    const buf = Buffer.from(await res.arrayBuffer());
-    return buf.toString('base64');
-  }
+  const fromStorage = await readStoredFileBase64(fileUrl);
+  if (fromStorage) return fromStorage;
   return null;
 }
 

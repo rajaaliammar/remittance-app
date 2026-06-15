@@ -1,4 +1,10 @@
 import prisma from '../utils/prisma.js';
+import {
+  CacheKeys,
+  EXCHANGE_RATE_TTL_SECONDS,
+  getOrSet,
+  invalidateCountriesCache,
+} from '../utils/cache.js';
 
 // Get all services for a country
 export const getCountryServices = async (req, res) => {
@@ -372,86 +378,92 @@ export const getCountryInfo = async (req, res) => {
   try {
     const { countryId } = req.params;
     const { bankId, walletId, serviceId } = req.query;
+    const cacheKey = CacheKeys.exchangeRate({ countryId, bankId, walletId, serviceId });
 
-    const country = await prisma.country.findUnique({
-      where: { id: countryId },
-      select: {
-        id: true,
-        name: true,
-        iso2: true,
-        iso3: true,
-        currencyName: true,
-        currencyCode: true,
-        currencyRate: true,
-        currencySymbol: true,
-        status: true,
-      },
+    const payload = await getOrSet(cacheKey, EXCHANGE_RATE_TTL_SECONDS, async () => {
+      const country = await prisma.country.findUnique({
+        where: { id: countryId },
+        select: {
+          id: true,
+          name: true,
+          iso2: true,
+          iso3: true,
+          currencyName: true,
+          currencyCode: true,
+          currencyRate: true,
+          currencySymbol: true,
+          status: true,
+        },
+      });
+
+      if (!country) {
+        return null;
+      }
+
+      let effectiveRate = parsePositiveRate(country.currencyRate);
+      let rateSource = 'country';
+
+      if (serviceId) {
+        const svc = await prisma.countryService.findFirst({
+          where: { id: String(serviceId), countryId, status: 'Active' },
+          include: {
+            remittanceBank: { select: { id: true, name: true, dollarRate: true } },
+          },
+        });
+        const svcBankRate = parsePositiveRate(svc?.remittanceBank?.dollarRate);
+        if (svcBankRate) {
+          effectiveRate = svcBankRate;
+          rateSource = 'bank';
+        }
+      }
+
+      if (bankId) {
+        const bank = await prisma.remittanceBank.findUnique({
+          where: { id: String(bankId) },
+          select: { id: true, name: true, dollarRate: true, active: true },
+        });
+        const bankRate = parsePositiveRate(bank?.dollarRate);
+        if (bankRate) {
+          effectiveRate = bankRate;
+          rateSource = 'bank';
+        }
+      }
+
+      if (walletId) {
+        const wallet = await prisma.remittanceWallet.findUnique({
+          where: { id: String(walletId) },
+          select: { id: true, name: true, assignedCountries: true, active: true },
+        });
+        const walletRate = wallet ? walletRateForCountry(wallet, country) : null;
+        if (walletRate) {
+          effectiveRate = walletRate;
+          rateSource = 'wallet';
+        }
+      }
+
+      if (effectiveRate == null) {
+        const countryOnly = parsePositiveRate(country.currencyRate);
+        if (countryOnly) {
+          effectiveRate = countryOnly;
+          rateSource = 'country';
+        }
+      }
+
+      return {
+        ...country,
+        effectiveRate: effectiveRate != null ? String(effectiveRate) : null,
+        rateSource,
+      };
     });
 
-    if (!country) {
+    if (!payload) {
       return res.status(404).json({
         success: false,
         message: 'Country not found',
       });
     }
 
-    let effectiveRate = parsePositiveRate(country.currencyRate);
-    let rateSource = 'country';
-
-    if (serviceId) {
-      const svc = await prisma.countryService.findFirst({
-        where: { id: String(serviceId), countryId, status: 'Active' },
-        include: {
-          remittanceBank: { select: { id: true, name: true, dollarRate: true } },
-        },
-      });
-      const svcBankRate = parsePositiveRate(svc?.remittanceBank?.dollarRate);
-      if (svcBankRate) {
-        effectiveRate = svcBankRate;
-        rateSource = 'bank';
-      }
-    }
-
-    if (bankId) {
-      const bank = await prisma.remittanceBank.findUnique({
-        where: { id: String(bankId) },
-        select: { id: true, name: true, dollarRate: true, active: true },
-      });
-      const bankRate = parsePositiveRate(bank?.dollarRate);
-      if (bankRate) {
-        effectiveRate = bankRate;
-        rateSource = 'bank';
-      }
-    }
-
-    if (walletId) {
-      const wallet = await prisma.remittanceWallet.findUnique({
-        where: { id: String(walletId) },
-        select: { id: true, name: true, assignedCountries: true, active: true },
-      });
-      const walletRate = wallet ? walletRateForCountry(wallet, country) : null;
-      if (walletRate) {
-        effectiveRate = walletRate;
-        rateSource = 'wallet';
-      }
-    }
-
-    if (effectiveRate == null) {
-      const countryOnly = parsePositiveRate(country.currencyRate);
-      if (countryOnly) {
-        effectiveRate = countryOnly;
-        rateSource = 'country';
-      }
-    }
-
-    res.json({
-      success: true,
-      data: {
-        ...country,
-        effectiveRate: effectiveRate != null ? String(effectiveRate) : null,
-        rateSource,
-      },
-    });
+    res.json({ success: true, data: payload });
   } catch (error) {
     console.error('Error fetching country info:', error);
     res.status(500).json({ success: false, error: error.message });

@@ -31,17 +31,27 @@ npm install
 cp .env.example .env
 ```
 
-3. Update `.env` with your database connection string:
-```
-DATABASE_URL="postgresql://user:password@localhost:5432/remittance_db?schema=public"
+3. Start PostgreSQL, PgBouncer, and Redis (optional but recommended):
+```bash
+npm run docker:up
 ```
 
-4. Generate Prisma Client:
+4. Update `.env` with your database connection strings:
+```
+# Runtime → PgBouncer (port 6432); migrations → Postgres directly (5432)
+DATABASE_URL="postgresql://postgres:password@localhost:6432/remittance_db?schema=public&pgbouncer=true"
+DIRECT_DATABASE_URL="postgresql://postgres:password@localhost:5432/remittance_db?schema=public"
+PRISMA_CONNECTION_LIMIT=10
+```
+
+For simple local dev without Docker, use port `5432` for both URLs (same value is fine).
+
+5. Generate Prisma Client:
 ```bash
 npm run prisma:generate
 ```
 
-5. Run database migrations:
+6. Run database migrations:
 ```bash
 npm run prisma:migrate
 ```
@@ -92,9 +102,63 @@ backend/
 └── README.md
 ```
 
-## Database
+## Database & connection pooling
 
-This project uses Prisma with PostgreSQL. Update the `DATABASE_URL` in your `.env` file to connect to your database.
+```
+Express (× N instances)
+      ↓  DATABASE_URL (:6432, ?pgbouncer=true)
+  PgBouncer  (transaction pool, ~25 server connections)
+      ↓
+  PostgreSQL (:5432)
+```
+
+- **Runtime queries** use `DATABASE_URL` through PgBouncer — many client connections multiplex onto a small Postgres pool.
+- **Migrations / `prisma db push`** use `DIRECT_DATABASE_URL` (direct Postgres on port 5432).
+- Set `PRISMA_CONNECTION_LIMIT` per API process (default `10`). Example: 5 servers × 10 = 50 app connections → PgBouncer holds ~25 Postgres connections.
+
+```bash
+npm run docker:up      # postgres + pgbouncer + redis
+npm run docker:logs    # tail pooler / db logs
+npm run docker:down
+```
+
+Bare-metal PgBouncer config: `pgbouncer/pgbouncer.ini` + `pgbouncer/userlist.txt`.
+
+### Object storage (S3)
+
+Uploads (KYC, agent docs, notification images, country service images) go to **Amazon S3** when `S3_ENABLED=true`. The API stores the public URL in the database — any server instance can read metadata; files are served from S3/CDN.
+
+```
+Upload → S3 → store URL in DB
+```
+
+Set `S3_PUBLIC_URL` to a CloudFront domain in production. Without S3, files stay on local disk under `uploads/` (single-server only).
+
+### Socket.io across multiple servers
+
+When running **2+ API instances** behind a load balancer, enable Redis so Socket.io broadcasts reach every server:
+
+```
+Client → Server A                    Client → Server B
+              ↘                      ↙
+            Redis pub/sub (@socket.io/redis-adapter)
+```
+
+Uses the same `REDIS_URL` as caching and BullMQ. Set `SOCKET_REDIS_ADAPTER=false` to disable (single-instance dev).
+
+Chat, transaction status, KYC updates, and admin notifications all use `io.emit()` / `io.to(room)` — the adapter forwards these across instances automatically.
+
+### Image storage (no base64 in PostgreSQL)
+
+Logos, flags, and CMS images are uploaded to **S3** (or `/uploads/cms/`) and only the **URL** is stored in the database. The API automatically externalizes any legacy base64 sent by old clients on save.
+
+```bash
+npm run migrate:base64-images:dry-run   # preview
+npm run migrate:base64-images             # convert existing rows
+```
+
+Portal uploads use `POST /api/upload/cms-image` → returns `{ url: "https://..." }`.
+
 
 To create a new migration:
 ```bash

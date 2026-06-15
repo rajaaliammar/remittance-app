@@ -1,11 +1,19 @@
 import prisma from '../utils/prisma.js';
+import {
+  CacheKeys,
+  REFERENCE_TTL_SECONDS,
+  getOrSet,
+  invalidateLevelsCache,
+} from '../utils/cache.js';
 
 // Get all levels (ordered by priority)
 export const getLevels = async (req, res) => {
   try {
-    const levels = await prisma.level.findMany({
-      orderBy: { priority: 'asc' }
-    });
+    const levels = await getOrSet(CacheKeys.levelsList(), REFERENCE_TTL_SECONDS, () =>
+      prisma.level.findMany({
+        orderBy: { priority: 'asc' },
+      }),
+    );
     res.json({ success: true, data: levels });
   } catch (error) {
     console.error('Error fetching levels:', error);
@@ -64,6 +72,7 @@ export const createLevel = async (req, res) => {
     });
 
     res.status(201).json({ success: true, data: level });
+    void invalidateLevelsCache();
   } catch (error) {
     console.error('Error creating level:', error);
     console.error('Level create stack:', error?.stack);
@@ -99,6 +108,7 @@ export const updateLevel = async (req, res) => {
     });
 
     res.json({ success: true, data: level });
+    void invalidateLevelsCache();
   } catch (error) {
     console.error('Error updating level:', error);
     res.status(500).json({ success: false, error: error.message });
@@ -117,6 +127,7 @@ export const deleteLevel = async (req, res) => {
 
     await prisma.level.delete({ where: { id } });
     res.json({ success: true, message: 'Level deleted' });
+    void invalidateLevelsCache();
   } catch (error) {
     console.error('Error deleting level:', error);
     res.status(500).json({ success: false, error: error.message });

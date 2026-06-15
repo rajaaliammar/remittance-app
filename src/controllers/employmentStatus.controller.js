@@ -1,4 +1,10 @@
 import prisma from '../utils/prisma.js';
+import {
+  CacheKeys,
+  REFERENCE_TTL_SECONDS,
+  getOrSet,
+  invalidateEmploymentStatusesCache,
+} from '../utils/cache.js';
 
 const DEFAULT_EMPLOYMENT_STATUSES = [
   'Employed full-time',
@@ -38,17 +44,21 @@ async function seedDefaultEmploymentStatuses() {
 
 export const getAllEmploymentStatuses = async (req, res) => {
   try {
-    await ensureEmploymentStatusTable();
-    await seedDefaultEmploymentStatuses();
-
     const { search, status } = req.query;
-    const where = {};
-    if (status) where.status = status;
-    if (search) where.name = { contains: search, mode: 'insensitive' };
+    const cacheKey = CacheKeys.employmentStatusesList({ search, status });
 
-    const items = await prisma.employmentStatus.findMany({
-      where,
-      orderBy: { name: 'asc' },
+    const items = await getOrSet(cacheKey, REFERENCE_TTL_SECONDS, async () => {
+      await ensureEmploymentStatusTable();
+      await seedDefaultEmploymentStatuses();
+
+      const where = {};
+      if (status) where.status = status;
+      if (search) where.name = { contains: search, mode: 'insensitive' };
+
+      return prisma.employmentStatus.findMany({
+        where,
+        orderBy: { name: 'asc' },
+      });
     });
 
     res.json({ success: true, data: items });
@@ -89,6 +99,7 @@ export const createEmploymentStatus = async (req, res) => {
       message: 'Employment status created successfully',
       data: item,
     });
+    void invalidateEmploymentStatusesCache();
   } catch (error) {
     if (error.code === 'P2002') {
       return res.status(409).json({ success: false, message: 'Name already exists' });
@@ -123,6 +134,7 @@ export const updateEmploymentStatus = async (req, res) => {
       message: 'Employment status updated successfully',
       data: item,
     });
+    void invalidateEmploymentStatusesCache();
   } catch (error) {
     console.error('Error updating employment status:', error);
     res.status(500).json({ success: false, error: error.message });
@@ -138,6 +150,7 @@ export const deleteEmploymentStatus = async (req, res) => {
     }
     await prisma.employmentStatus.delete({ where: { id } });
     res.json({ success: true, message: 'Employment status deleted successfully' });
+    void invalidateEmploymentStatusesCache();
   } catch (error) {
     console.error('Error deleting employment status:', error);
     res.status(500).json({ success: false, error: error.message });

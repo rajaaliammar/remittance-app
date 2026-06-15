@@ -2,10 +2,13 @@ import prisma from '../utils/prisma.js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { randomBytes } from 'crypto';
-import fs from 'fs';
-import path from 'path';
 import { sendAgentInvitationEmail } from '../utils/email.js';
-import { getWritableAgentKycUploadDir } from '../utils/uploadPath.js';
+import { persistBase64Image, resolvePublicFileUrl } from '../utils/objectStorage.js';
+import {
+  parsePaginationQuery,
+  parseSortQuery,
+  sendPaginatedJson,
+} from '../utils/pagination.js';
 
 // Temporary in-memory store for invite tokens (until migration is run)
 // TODO: Remove this after running migration - tokens will be stored in database
@@ -183,42 +186,60 @@ export const login = async (req, res) => {
 // Get all agents
 export const getAllAgents = async (req, res) => {
   try {
-    const { search } = req.query;
-    
-    const where = search ? {
-      OR: [
+    const { search, status } = req.query;
+    const pagination = parsePaginationQuery(req.query, { defaultLimit: 50, maxLimit: 200 });
+
+    const where = {};
+    if (search) {
+      where.OR = [
         { email: { contains: search, mode: 'insensitive' } },
         { username: { contains: search, mode: 'insensitive' } },
         { firstName: { contains: search, mode: 'insensitive' } },
         { lastName: { contains: search, mode: 'insensitive' } },
-        { phone: { contains: search, mode: 'insensitive' } }
-      ]
-    } : {};
+        { phone: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+    if (status) {
+      where.status = String(status).toLowerCase();
+    }
 
-    const agents = await prisma.agent.findMany({
-      where,
-      select: {
-        id: true,
-        email: true,
-        username: true,
-        firstName: true,
-        lastName: true,
-        phone: true,
-        address: true,
-        status: true,
-        approvedAt: true,
-        level: true,
-        balanceLimit: true,
-        createdAt: true,
-        updatedAt: true,
-        businessName: true
-      },
-      orderBy: {
-        createdAt: 'desc'
-      }
-    });
+    const orderBy = parseSortQuery(req.query, [
+      'createdAt',
+      'email',
+      'firstName',
+      'lastName',
+      'status',
+    ]);
 
-    res.json({ success: true, data: agents });
+    const select = {
+      id: true,
+      email: true,
+      username: true,
+      firstName: true,
+      lastName: true,
+      phone: true,
+      address: true,
+      status: true,
+      approvedAt: true,
+      level: true,
+      balanceLimit: true,
+      createdAt: true,
+      updatedAt: true,
+      businessName: true,
+    };
+
+    const [agents, total] = await Promise.all([
+      prisma.agent.findMany({
+        where,
+        select,
+        orderBy,
+        take: pagination.take,
+        skip: pagination.skip,
+      }),
+      prisma.agent.count({ where }),
+    ]);
+
+    sendPaginatedJson(res, { data: agents, total, pagination });
   } catch (error) {
     console.error('Error fetching agents:', error);
     res.status(500).json({ success: false, error: error.message });
@@ -942,31 +963,19 @@ export const completeOnboarding = async (req, res) => {
       dob = new Date(dateOfBirth);
     }
 
-    // Helper function to save base64 image to file
-    const saveBase64ToFile = (base64String, filename) => {
+    // Helper: save base64 image to S3 or local disk
+    const saveBase64ToFile = async (base64String, filename) => {
       if (!base64String) return null;
-      
+
       try {
-        // Remove data URL prefix if present (e.g., "data:image/jpeg;base64,")
-        const base64Data = base64String.includes(',') 
-          ? base64String.split(',')[1] 
-          : base64String;
-        
-        const uploadDir = getWritableAgentKycUploadDir();
-        const filePath = path.join(uploadDir, filename);
-        const buffer = Buffer.from(base64Data, 'base64');
-        
-        // Ensure directory exists
-        if (!fs.existsSync(uploadDir)) {
-          fs.mkdirSync(uploadDir, { recursive: true, mode: 0o755 });
-        }
-        
-        fs.writeFileSync(filePath, buffer);
-        console.log(`[Agent KYC] File saved: ${filePath}`);
-        
-        // Always return path relative to /uploads/agentKyc/ for static serving
-        // The actual file might be in project folder or tmpdir, but URL should be consistent
-        return `/uploads/agentKyc/${filename}`;
+        const stored = await persistBase64Image(
+          base64String,
+          'agentKyc',
+          filename,
+          'image/jpeg',
+        );
+        console.log(`[Agent KYC] File saved: ${stored?.url}`);
+        return resolvePublicFileUrl(stored?.url);
       } catch (error) {
         console.error(`[Agent KYC] Error saving file ${filename}:`, error);
         return null;
@@ -984,32 +993,32 @@ export const completeOnboarding = async (req, res) => {
 
     if (nationalIdFront) {
       const filename = `nationalIdFront-${uniqueSuffix}.jpg`;
-      savedNationalIdFront = saveBase64ToFile(nationalIdFront, filename);
+      savedNationalIdFront = await saveBase64ToFile(nationalIdFront, filename);
     }
 
     if (nationalIdBack) {
       const filename = `nationalIdBack-${uniqueSuffix}.jpg`;
-      savedNationalIdBack = saveBase64ToFile(nationalIdBack, filename);
+      savedNationalIdBack = await saveBase64ToFile(nationalIdBack, filename);
     }
 
     if (passportPhoto) {
       const filename = `passport-${uniqueSuffix}.jpg`;
-      savedPassportPhoto = saveBase64ToFile(passportPhoto, filename);
+      savedPassportPhoto = await saveBase64ToFile(passportPhoto, filename);
     }
 
     if (businessLicenseFile) {
       const filename = `businessLicense-${uniqueSuffix}.jpg`;
-      savedBusinessLicenseFile = saveBase64ToFile(businessLicenseFile, filename);
+      savedBusinessLicenseFile = await saveBase64ToFile(businessLicenseFile, filename);
     }
 
     if (selfiePhoto) {
       const filename = `selfie-${uniqueSuffix}.jpg`;
-      savedSelfiePhoto = saveBase64ToFile(selfiePhoto, filename);
+      savedSelfiePhoto = await saveBase64ToFile(selfiePhoto, filename);
     }
 
     if (shopPhoto) {
       const filename = `shop-${uniqueSuffix}.jpg`;
-      savedShopPhoto = saveBase64ToFile(shopPhoto, filename);
+      savedShopPhoto = await saveBase64ToFile(shopPhoto, filename);
     }
 
     // Save all onboarding data directly to database fields

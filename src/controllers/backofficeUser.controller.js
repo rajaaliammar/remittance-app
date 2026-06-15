@@ -226,7 +226,9 @@ export const completeProfile = async (req, res) => {
 export const getAllUsers = async (req, res) => {
   try {
     const { status, search } = req.query;
-    
+    const { parsePaginationQuery, parseSortQuery, sendPaginatedJson } = await import('../utils/pagination.js');
+    const pagination = parsePaginationQuery(req.query, { defaultLimit: 50, maxLimit: 200 });
+
     const where = {};
     if (status) {
       where.status = status;
@@ -236,30 +238,45 @@ export const getAllUsers = async (req, res) => {
         { email: { contains: search, mode: 'insensitive' } },
         { username: { contains: search, mode: 'insensitive' } },
         { firstName: { contains: search, mode: 'insensitive' } },
-        { lastName: { contains: search, mode: 'insensitive' } }
+        { lastName: { contains: search, mode: 'insensitive' } },
       ];
     }
 
-    const users = await prisma.backofficeUser.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-      select: {
-        id: true,
-        email: true,
-        username: true,
-        firstName: true,
-        lastName: true,
-        phone: true,
-        country: true,
-        photo: true,
-        status: true,
-        isSuperAdmin: true,
-        invitedAt: true,
-        profileCompletedAt: true,
-        approvedAt: true,
-        createdAt: true
-      }
-    });
+    const orderBy = parseSortQuery(req.query, [
+      'createdAt',
+      'email',
+      'firstName',
+      'lastName',
+      'status',
+    ]);
+
+    const select = {
+      id: true,
+      email: true,
+      username: true,
+      firstName: true,
+      lastName: true,
+      phone: true,
+      country: true,
+      photo: true,
+      status: true,
+      isSuperAdmin: true,
+      invitedAt: true,
+      profileCompletedAt: true,
+      approvedAt: true,
+      createdAt: true,
+    };
+
+    const [users, total] = await Promise.all([
+      prisma.backofficeUser.findMany({
+        where,
+        orderBy,
+        select,
+        take: pagination.take,
+        skip: pagination.skip,
+      }),
+      prisma.backofficeUser.count({ where }),
+    ]);
 
     // Include level & balanceLimit (via raw SQL so we get them even if Prisma schema is out of sync)
     let data = users.map((u) => ({ ...u, level: null, balanceLimit: null }));
@@ -278,7 +295,7 @@ export const getAllUsers = async (req, res) => {
       }
     }
 
-    res.json({ success: true, data });
+    sendPaginatedJson(res, { data, total, pagination });
   } catch (error) {
     console.error('Error fetching users:', error);
     res.status(500).json({ success: false, error: error.message });

@@ -26,6 +26,11 @@ function loadEnvFiles() {
 
 loadEnvFiles();
 
+// Migrations / db push use DIRECT_DATABASE_URL; runtime uses DATABASE_URL (often via PgBouncer).
+if (!process.env.DIRECT_DATABASE_URL?.trim() && process.env.DATABASE_URL?.trim()) {
+  process.env.DIRECT_DATABASE_URL = process.env.DATABASE_URL.trim();
+}
+
 if (!process.env.DATABASE_URL?.trim()) {
   console.error(
     '\n❌ DATABASE_URL is not set.\n' +

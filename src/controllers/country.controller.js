@@ -1,9 +1,16 @@
 import prisma from '../utils/prisma.js';
+import { sanitizeLogoField } from '../utils/imageFieldSanitizer.js';
 import {
   shapeCountryFromRestCountry,
   dialCodeFromRestCountriesIdd,
   normalizeStoredPhoneCode,
 } from '../utils/countryMeta.js';
+import {
+  CacheKeys,
+  REFERENCE_TTL_SECONDS,
+  getOrSet,
+  invalidateCountriesCache,
+} from '../utils/cache.js';
 
 /**
  * Country metadata: https://restcountries.com/ (free, no key).
@@ -93,32 +100,35 @@ const searchCountriesFromAPI = async (query, continent = null) => {
 export const getAllCountries = async (req, res) => {
   try {
     const { search, status, continentId, popular } = req.query;
-    
-    const where = {};
-    if (status) {
-      where.status = status;
-    }
-    if (continentId) {
-      where.continentId = continentId;
-    }
-    if (search) {
-      where.name = { contains: search, mode: 'insensitive' };
-    }
-    if (popular === 'true' || popular === '1') {
-      where.isPopular = true;
-    }
+    const cacheKey = CacheKeys.countriesList({ search, status, continentId, popular });
 
-    const countries = await prisma.country.findMany({
-      where,
-      include: {
-        continent: {
-          select: {
-            id: true,
-            name: true
-          }
-        }
-      },
-      orderBy: { createdAt: 'desc' }
+    const countries = await getOrSet(cacheKey, REFERENCE_TTL_SECONDS, async () => {
+      const where = {};
+      if (status) {
+        where.status = status;
+      }
+      if (continentId) {
+        where.continentId = continentId;
+      }
+      if (search) {
+        where.name = { contains: search, mode: 'insensitive' };
+      }
+      if (popular === 'true' || popular === '1') {
+        where.isPopular = true;
+      }
+
+      return prisma.country.findMany({
+        where,
+        include: {
+          continent: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
     });
 
     res.json({ success: true, data: countries });
@@ -327,7 +337,7 @@ export const createCountry = async (req, res) => {
       currencyRate: currencyRate || null,
       currencySymbol: currencySymbol || null,
       currencyNativeSymbol: currencyNativeSymbol || null,
-      flag: flag || null,
+      flag: flag ? await sanitizeLogoField(flag, 'countries') : null,
       status: status || 'Active',
       sendable: sendable || false,
       receivable: receivable || false,
@@ -372,13 +382,14 @@ export const createCountry = async (req, res) => {
       message: 'Country created successfully',
       data: country
     });
+    void invalidateCountriesCache();
   } catch (error) {
     console.error('Error creating country:', error);
-    
+
     if (error.code === 'P2002') {
-      return res.status(409).json({ 
-        success: false, 
-        message: 'Country with this ISO code already exists' 
+      return res.status(409).json({
+        success: false,
+        message: 'Country with this ISO code already exists',
       });
     }
 
@@ -470,7 +481,7 @@ export const updateCountry = async (req, res) => {
     if (currencyRate !== undefined) updateData.currencyRate = currencyRate;
     if (currencySymbol !== undefined) updateData.currencySymbol = currencySymbol;
     if (currencyNativeSymbol !== undefined) updateData.currencyNativeSymbol = currencyNativeSymbol;
-    if (flag !== undefined) updateData.flag = flag;
+    if (flag !== undefined) updateData.flag = await sanitizeLogoField(flag, 'countries');
     if (status !== undefined) updateData.status = status;
     if (isPopular !== undefined) updateData.isPopular = Boolean(isPopular);
     if (sendable !== undefined) updateData.sendable = sendable;
@@ -509,6 +520,7 @@ export const updateCountry = async (req, res) => {
       message: 'Country updated successfully',
       data: updatedCountry
     });
+    void invalidateCountriesCache();
   } catch (error) {
     console.error('Error updating country:', error);
     
@@ -552,8 +564,9 @@ export const deleteCountry = async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Country deleted successfully'
+      message: 'Country deleted successfully',
     });
+    void invalidateCountriesCache();
   } catch (error) {
     console.error('Error deleting country:', error);
     

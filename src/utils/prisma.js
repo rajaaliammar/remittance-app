@@ -1,8 +1,34 @@
 import { PrismaClient } from '@prisma/client';
+import { ensurePerformanceIndexes } from './performanceIndexes.js';
+import { getPrismaConnectionLimit, usesPgBouncer } from './databasePool.js';
 
-// Create a singleton instance of Prisma Client
+function buildRuntimeDatabaseUrl() {
+  const base = process.env.DATABASE_URL?.trim();
+  if (!base) return undefined;
+
+  const limit = getPrismaConnectionLimit();
+  const separator = base.includes('?') ? '&' : '?';
+  let url = base;
+
+  if (!/[?&]connection_limit=/i.test(url)) {
+    url = `${url}${separator}connection_limit=${limit}`;
+  }
+
+  if (usesPgBouncer(url) && !/[?&]pgbouncer=true/i.test(url)) {
+    url = `${url}&pgbouncer=true`;
+  }
+
+  return url;
+}
+
+const runtimeDatabaseUrl = buildRuntimeDatabaseUrl();
+
+// Singleton Prisma Client — connections go through PgBouncer when DATABASE_URL points to :6432
 const prisma = new PrismaClient({
   log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+  ...(runtimeDatabaseUrl
+    ? { datasources: { db: { url: runtimeDatabaseUrl } } }
+    : {}),
 });
 
 // Ensure level and balanceLimit columns exist (safe to run every startup)
@@ -172,6 +198,7 @@ async function ensureComplianceColumnsAndTables() {
     'CREATE INDEX IF NOT EXISTS "remittance_transactions_status_idx"  ON "remittance_transactions" ("status")',
     'CREATE INDEX IF NOT EXISTS "remittance_transactions_customer_created_idx" ON "remittance_transactions" ("customerId", "createdAt")',
   ];
+  // Legacy subset — full index set applied via ensurePerformanceIndexes()
   for (const sql of indexStatements) {
     try {
       await prisma.$executeRawUnsafe(sql);
@@ -297,6 +324,7 @@ prisma.$connect()
   })
   .then(() => ensureCustomerNotificationsTable())
   .then(() => ensureComplianceColumnsAndTables())
+  .then(() => ensurePerformanceIndexes(prisma))
   .then(() => ensureManageContentSectionTypeUnique())
   .then(() => ensureLegalDocumentsTable())
   .catch((error) => {
@@ -310,6 +338,7 @@ export {
   ensureRegistrationSettingsTable,
   ensureCustomerNotificationsTable,
   ensureComplianceColumnsAndTables,
+  ensurePerformanceIndexes,
   ensureManageContentSectionTypeUnique,
   ensureLegalDocumentsTable,
 };

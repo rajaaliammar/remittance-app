@@ -1,23 +1,29 @@
 import prisma from '../utils/prisma.js';
+import {
+  CacheKeys,
+  REFERENCE_TTL_SECONDS,
+  getOrSet,
+  invalidatePurposesCache,
+} from '../utils/cache.js';
 
 // Get all purposes
 export const getAllPurposes = async (req, res) => {
   try {
     const { search, status } = req.query;
+    const cacheKey = CacheKeys.purposesList({ search, status });
 
-    const where = {};
-    
-    if (status) {
-      where.status = status;
-    }
-    
-    if (search) {
-      where.name = { contains: search, mode: 'insensitive' };
-    }
-
-    const purposes = await prisma.purpose.findMany({
-      where,
-      orderBy: { createdAt: 'desc' }
+    const purposes = await getOrSet(cacheKey, REFERENCE_TTL_SECONDS, async () => {
+      const where = {};
+      if (status) {
+        where.status = status;
+      }
+      if (search) {
+        where.name = { contains: search, mode: 'insensitive' };
+      }
+      return prisma.purpose.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+      });
     });
 
     res.json({ success: true, data: purposes });
@@ -74,6 +80,7 @@ export const createPurpose = async (req, res) => {
       message: 'Purpose created successfully',
       data: purpose
     });
+    void invalidatePurposesCache();
   } catch (error) {
     console.error('Error creating purpose:', error);
     
@@ -136,6 +143,7 @@ export const updatePurpose = async (req, res) => {
       message: 'Purpose updated successfully',
       data: updatedPurpose
     });
+    void invalidatePurposesCache();
   } catch (error) {
     console.error('Error updating purpose:', error);
     
@@ -179,8 +187,9 @@ export const deletePurpose = async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Purpose deleted successfully'
+      message: 'Purpose deleted successfully',
     });
+    void invalidatePurposesCache();
   } catch (error) {
     console.error('Error deleting purpose:', error);
     

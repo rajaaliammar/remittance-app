@@ -1,4 +1,5 @@
 import prisma from '../utils/prisma.js';
+import { sanitizeManageContentPayload } from '../utils/imageFieldSanitizer.js';
 
 // Check if manageContent model exists
 if (!prisma.manageContent) {
@@ -83,10 +84,16 @@ export const upsertManageContent = async (req, res) => {
       });
     }
 
-    const payload = {
+    const sanitized = await sanitizeManageContentPayload({
       englishData: englishData || {},
       spanishData: spanishData ?? null,
       images: images ?? null,
+    });
+
+    const payload = {
+      englishData: sanitized.englishData,
+      spanishData: sanitized.spanishData,
+      images: sanitized.images,
       updatedAt: new Date(),
     };
 
@@ -146,9 +153,30 @@ export const updateManageContent = async (req, res) => {
     }
 
     const updateData = {};
-    if (englishData !== undefined) updateData.englishData = englishData;
-    if (spanishData !== undefined) updateData.spanishData = spanishData;
-    if (images !== undefined) updateData.images = images;
+    if (englishData !== undefined) {
+      const sanitized = await sanitizeManageContentPayload({
+        englishData,
+        spanishData: undefined,
+        images: undefined,
+      });
+      updateData.englishData = sanitized.englishData;
+    }
+    if (spanishData !== undefined) {
+      const sanitized = await sanitizeManageContentPayload({
+        englishData: undefined,
+        spanishData,
+        images: undefined,
+      });
+      updateData.spanishData = sanitized.spanishData;
+    }
+    if (images !== undefined) {
+      const sanitized = await sanitizeManageContentPayload({
+        englishData: undefined,
+        spanishData: undefined,
+        images,
+      });
+      updateData.images = sanitized.images;
+    }
 
     const updatedContent = await prisma.manageContent.update({
       where: { id },

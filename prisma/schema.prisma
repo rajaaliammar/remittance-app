@@ -6,8 +6,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_DATABASE_URL")
 }
 
 // Example models - customize based on your needs
@@ -50,6 +51,10 @@ model BackofficeUser {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
+  @@index([status])
+  @@index([createdAt])
+  @@index([status, createdAt])
+  @@index([phone])
   @@map("backoffice_users")
 }
 
@@ -102,6 +107,8 @@ model Country {
   states                 State[]
   taxFeeCountries        TaxFeeCountry[]
 
+  @@index([status])
+  @@index([continentId])
   @@map("countries")
 }
 
@@ -295,6 +302,9 @@ model Blog {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
+  @@index([status])
+  @@index([createdAt])
+  @@index([categoryId])
   @@map("blogs")
 }
 
@@ -354,6 +364,11 @@ model Customer {
   notifications   CustomerNotification[]
   paymentMethods  PaymentMethod[]
 
+  @@index([status])
+  @@index([createdAt])
+  @@index([status, createdAt])
+  @@index([phone])
+  @@index([telephone])
   @@map("customers")
 }
 
@@ -385,6 +400,9 @@ model CustomerNotification {
   sentAt     DateTime  @default(now())
   readAt     DateTime? // When user viewed it in the app (optional)
 
+  @@index([customerId])
+  @@index([customerId, sentAt])
+  @@index([customerId, readAt])
   @@map("customer_notifications")
 }
 
@@ -418,7 +436,12 @@ model RemittanceTransaction {
   complianceAlerts    ComplianceAlert[]
 
   @@index([status])
+  @@index([createdAt])
+  @@index([customerId])
   @@index([customerId, createdAt])
+  @@index([status, createdAt])
+  @@index([transferType])
+  @@index([type])
   @@map("remittance_transactions")
 }
 
@@ -635,6 +658,10 @@ model Agent {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
+  @@index([status])
+  @@index([createdAt])
+  @@index([status, createdAt])
+  @@index([phone])
   @@map("agents")
 }
 
@@ -772,8 +799,11 @@ model Message {
   rating      Int?      // 1-5, set when recipient rates the chat session (for __CHAT_ENDED__ messages)
   ratedAt     DateTime? // When the rating was submitted
 
+  @@index([createdAt])
   @@index([senderId, recipientId])
   @@index([recipientId, senderId])
+  @@index([senderId, createdAt])
+  @@index([recipientId, createdAt])
   @@map("messages")
 }
 

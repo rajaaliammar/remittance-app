@@ -47,15 +47,27 @@ export const getMessagesWithUser = async (req, res) => {
     if (!otherUserId) {
       return res.status(400).json({ success: false, message: 'userId is required' });
     }
-    const messages = await prisma.message.findMany({
-      where: {
-        OR: [
-          { senderId: userId, recipientId: otherUserId },
-          { senderId: otherUserId, recipientId: userId },
-        ],
-      },
-      orderBy: { createdAt: 'asc' },
-    });
+
+    const { parsePaginationQuery, sendPaginatedJson } = await import('../utils/pagination.js');
+    const pagination = parsePaginationQuery(req.query, { defaultLimit: 100, maxLimit: 200 });
+
+    const where = {
+      OR: [
+        { senderId: userId, recipientId: otherUserId },
+        { senderId: otherUserId, recipientId: userId },
+      ],
+    };
+
+    const [messages, total] = await Promise.all([
+      prisma.message.findMany({
+        where,
+        orderBy: { createdAt: 'asc' },
+        take: pagination.take,
+        skip: pagination.skip,
+      }),
+      prisma.message.count({ where }),
+    ]);
+
     const list = messages.map((m) => ({
       id: m.id,
       senderId: m.senderId,
@@ -65,6 +77,11 @@ export const getMessagesWithUser = async (req, res) => {
       rating: m.rating ?? undefined,
       ratedAt: m.ratedAt ? (m.ratedAt.getTime ? m.ratedAt.getTime() : m.ratedAt) : undefined,
     }));
+
+    if (req.query.page != null || req.query.limit != null || req.query.offset != null) {
+      return sendPaginatedJson(res, { data: list, total, pagination });
+    }
+
     res.json(list);
   } catch (error) {
     console.error('getMessagesWithUser error:', error);
@@ -139,16 +156,14 @@ const CHAT_ELIGIBLE_TX_WHERE = {
 };
 
 async function getChatEligibleCustomerIdSet() {
-  const transactions = await prisma.remittanceTransaction.findMany({
-    where: CHAT_ELIGIBLE_TX_WHERE,
-    orderBy: { createdAt: 'desc' },
-    select: { customerId: true },
+  const groups = await prisma.remittanceTransaction.groupBy({
+    by: ['customerId'],
+    where: {
+      ...CHAT_ELIGIBLE_TX_WHERE,
+      customerId: { not: null },
+    },
   });
-  const ids = new Set();
-  for (const t of transactions) {
-    if (t.customerId) ids.add(String(t.customerId));
-  }
-  return ids;
+  return new Set(groups.map((g) => String(g.customerId)).filter(Boolean));
 }
 
 /**
@@ -167,25 +182,47 @@ export const getChatEligibleCustomers = async (req, res) => {
     const search = String(req.query.search || '').trim();
     const includeUserId = String(req.query.userId || '').trim();
 
-    const transactions = await prisma.remittanceTransaction.findMany({
-      where: CHAT_ELIGIBLE_TX_WHERE,
-      orderBy: { createdAt: 'desc' },
-      select: { customerId: true, status: true, id: true, createdAt: true },
+    const { parsePaginationQuery } = await import('../utils/pagination.js');
+    const pagination = parsePaginationQuery(req.query, { defaultLimit: 50, maxLimit: 200 });
+
+    const eligibleGroups = await prisma.remittanceTransaction.groupBy({
+      by: ['customerId'],
+      where: {
+        ...CHAT_ELIGIBLE_TX_WHERE,
+        customerId: { not: null },
+      },
+      _max: { createdAt: true },
+      orderBy: { _max: { createdAt: 'desc' } },
+      take: pagination.take,
+      skip: pagination.skip,
     });
 
+    const customerIds = eligibleGroups.map((g) => g.customerId).filter(Boolean);
     const latestByCustomer = new Map();
-    for (const t of transactions) {
-      if (!t.customerId || latestByCustomer.has(t.customerId)) continue;
-      latestByCustomer.set(t.customerId, {
-        transactionId: t.id,
-        status: t.status,
-        createdAt: t.createdAt,
+
+    if (customerIds.length > 0) {
+      const latestTxns = await prisma.remittanceTransaction.findMany({
+        where: {
+          customerId: { in: customerIds },
+          ...CHAT_ELIGIBLE_TX_WHERE,
+        },
+        orderBy: { createdAt: 'desc' },
+        distinct: ['customerId'],
+        select: { customerId: true, status: true, id: true, createdAt: true },
       });
+      for (const t of latestTxns) {
+        if (!t.customerId) continue;
+        latestByCustomer.set(t.customerId, {
+          transactionId: t.id,
+          status: t.status,
+          createdAt: t.createdAt,
+        });
+      }
     }
 
-    let ids = Array.from(latestByCustomer.keys());
+    let ids = customerIds.length > 0 ? customerIds : Array.from(latestByCustomer.keys());
     if (ids.length === 0) {
-      return res.json({ success: true, data: [] });
+      return res.json({ success: true, data: [], total: 0 });
     }
 
     const customerWhere = {

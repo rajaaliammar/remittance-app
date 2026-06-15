@@ -1,5 +1,6 @@
 import prisma from '../utils/prisma.js';
 import { syncBankToCountryServices } from '../utils/syncBankCountryServices.js';
+import { sanitizeLogoField } from '../utils/imageFieldSanitizer.js';
 
 // Get all remittance banks
 export const getAllRemittanceBanks = async (req, res) => {
@@ -231,7 +232,7 @@ export const createRemittanceBank = async (req, res) => {
     const bank = await prisma.remittanceBank.create({
       data: {
         name: name.trim(),
-        logo: logo || null,
+        logo: logo ? await sanitizeLogoField(logo, 'banks') : null,
         website: website.trim(),
         email: email?.trim() || null,
         phoneNumber: phoneNumber?.trim() || null,
@@ -280,7 +281,7 @@ export const updateRemittanceBank = async (req, res) => {
 
     const updateData = {};
     if (name !== undefined) updateData.name = name.trim();
-    if (logo !== undefined) updateData.logo = logo || null;
+    if (logo !== undefined) updateData.logo = logo ? await sanitizeLogoField(logo, 'banks') : null;
     if (website !== undefined) updateData.website = website.trim();
     if (email !== undefined) updateData.email = email?.trim() || null;
     if (phoneNumber !== undefined) updateData.phoneNumber = phoneNumber?.trim() || null;
