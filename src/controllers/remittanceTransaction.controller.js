@@ -1,5 +1,5 @@
 import prisma from '../utils/prisma.js';
-import transporter from '../utils/email.js';
+import transporter, { isSmtpConfigured } from '../utils/email.js';
 import { getReceiptSettingsValues } from './receiptSetting.controller.js';
 import { calculateTransactionFee } from '../utils/chargeUtils.js';
 import {
@@ -699,6 +699,66 @@ export const updateRemittanceTransaction = async (req, res) => {
     const newStatus = status ? String(status).toLowerCase() : oldStatus;
     const statusChanged = oldStatus !== newStatus;
 
+    if (statusChanged && newStatus === 'refunded') {
+      const refundableStatuses = ['processing', 'awaiting', 'hold', 'manual_review', 'completed'];
+      if (!refundableStatuses.includes(oldStatus)) {
+        return res.status(400).json({
+          success: false,
+          message: `Transaction cannot be refunded. Current status: ${transaction.status}.`,
+        });
+      }
+
+      const customerId = transaction.customerId;
+      const sendAmount = Number(transaction.sendAmount ?? 0);
+      const recipientInfo =
+        transaction.recipientInfo && typeof transaction.recipientInfo === 'object'
+          ? transaction.recipientInfo
+          : {};
+      const paymentFieldValues =
+        transaction.paymentFieldValues && typeof transaction.paymentFieldValues === 'object'
+          ? transaction.paymentFieldValues
+          : {};
+      const fee = Number(
+        recipientInfo.fee ?? paymentFieldValues.charge ?? paymentFieldValues.fee ?? 0,
+      );
+      const totalToRefund = sendAmount + fee;
+
+      try {
+        const result = await prisma.$transaction(async (tx) => {
+          await creditCustomerWallet(tx, customerId, totalToRefund);
+          const updatedTx = await tx.remittanceTransaction.update({
+            where: { id },
+            data: { status: 'Refunded', updatedAt: new Date() },
+            include: {
+              customer: { select: senderCustomerSelect },
+            },
+          });
+          return updatedTx;
+        });
+
+        try {
+          await updateAccountingEntriesForTransactionStatus(id, 'Refunded');
+        } catch (accErr) {
+          console.warn('Accounting update on refund skipped:', accErr.message);
+        }
+
+        return res.json({
+          success: true,
+          message: 'Transaction refunded successfully. Customer balance has been credited.',
+          data: result,
+        });
+      } catch (walletErr) {
+        if (walletErr instanceof WalletError) {
+          return res.status(walletErr.statusCode).json({
+            success: false,
+            message: walletErr.message,
+            code: walletErr.code,
+          });
+        }
+        throw walletErr;
+      }
+    }
+
     const updateData = {
       ...otherUpdates,
       ...(statusChanged && { status: String(status) }),
@@ -1119,6 +1179,21 @@ export const sendRemittanceTransactionReceipt = async (req, res) => {
       });
     }
 
+    if (/@remittance\.pending$/i.test(recipientEmail) || /^phone_\d+@/i.test(recipientEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Customer does not have a valid email address on file. Ask them to add an email in the app profile.',
+      });
+    }
+
+    if (!isSmtpConfigured()) {
+      return res.status(503).json({
+        success: false,
+        message:
+          'Email is not configured on the server. Set SMTP_HOST, SMTP_USER, and SMTP_PASS in the backend .env file.',
+      });
+    }
+
     const customerName =
       [transaction.customer?.firstName, transaction.customer?.lastName]
         .filter(Boolean)
@@ -1285,9 +1360,15 @@ export const sendRemittanceTransactionReceipt = async (req, res) => {
     });
   } catch (error) {
     console.error('Error sending transaction receipt email:', error);
+    const isAuthError =
+      error?.code === 'EAUTH' ||
+      String(error?.message || '').includes('535') ||
+      String(error?.message || '').toLowerCase().includes('authentication unsuccessful');
     return res.status(500).json({
       success: false,
-      message: error.message || 'Failed to send transaction receipt',
+      message: isAuthError
+        ? 'SMTP authentication failed. For Outlook/Microsoft 365, use an app password, enable Authenticated SMTP for the mailbox, and set SMTP_HOST=smtp.office365.com with SMTP_PORT=587 in backend .env.'
+        : error.message || 'Failed to send transaction receipt',
     });
   }
 };

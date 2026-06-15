@@ -8,20 +8,45 @@ const hasSmtpCreds = Boolean(
   String(process.env.SMTP_USER || '').trim() && String(process.env.SMTP_PASS || '').trim()
 );
 
+function buildSmtpTransport() {
+  if (smtpDisabled || !hasSmtpCreds) {
+    return nodemailer.createTransport({ jsonTransport: true });
+  }
+
+  const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
+  const smtpPort = parseInt(process.env.SMTP_PORT || '587', 10);
+  const smtpUser = String(process.env.SMTP_USER || '').trim();
+  const isOutlook =
+    /outlook|office365|hotmail|live\.com/i.test(smtpHost) ||
+    /@(outlook|hotmail|live)\./i.test(smtpUser);
+
+  return nodemailer.createTransport({
+    host: smtpHost,
+    port: smtpPort,
+    secure: smtpPort === 465,
+    auth: {
+      user: smtpUser,
+      pass: process.env.SMTP_PASS,
+    },
+    ...(isOutlook && smtpPort === 587
+      ? {
+          requireTLS: true,
+          tls: {
+            minVersion: 'TLSv1.2',
+            ciphers: 'HIGH',
+            rejectUnauthorized: true,
+          },
+        }
+      : {}),
+  });
+}
+
+export function isSmtpConfigured() {
+  return !smtpDisabled && hasSmtpCreds;
+}
+
 // Real SMTP vs. jsonTransport (local dev when SMTP is off or unset). 465 = implicit SSL; 587 = STARTTLS.
-const smtpPort = parseInt(process.env.SMTP_PORT || '587', 10);
-const transporter =
-  smtpDisabled || !hasSmtpCreds
-    ? nodemailer.createTransport({ jsonTransport: true })
-    : nodemailer.createTransport({
-        host: process.env.SMTP_HOST || 'smtp.gmail.com',
-        port: smtpPort,
-        secure: smtpPort === 465,
-        auth: {
-          user: process.env.SMTP_USER,
-          pass: process.env.SMTP_PASS,
-        },
-      });
+const transporter = buildSmtpTransport();
 
 if (smtpDisabled || !hasSmtpCreds) {
   console.warn(
