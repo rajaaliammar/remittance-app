@@ -1,0 +1,57 @@
+# Local infra: PostgreSQL + PgBouncer + Redis
+#   docker compose up -d
+#
+# App connects via PgBouncer (port 6432); migrations use direct Postgres (5432).
+# See .env.example for DATABASE_URL / DIRECT_DATABASE_URL.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: remittance-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: remittance_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d remittance_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  pgbouncer:
+    image: edoburu/pgbouncer:1.22.1-p0
+    container_name: remittance-pgbouncer
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://postgres:password@postgres:5432/remittance_db
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 1000
+      DEFAULT_POOL_SIZE: 25
+      MIN_POOL_SIZE: 5
+      RESERVE_POOL_SIZE: 5
+      SERVER_RESET_QUERY: DISCARD ALL
+      AUTH_TYPE: scram-sha-256
+    ports:
+      - "6432:5432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    container_name: remittance-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+
+volumes:
+  postgres_data:
+  redis_data:
