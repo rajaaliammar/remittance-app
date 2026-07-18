@@ -1,6 +1,6 @@
 /**
  * LiveEx TMS AML provider — all calls go through Remittance_backend (never from frontend).
- * Docs: https://amlhlep.com/UET_TMSSwaggerAPI
+ * Docs: https://amlhlep.com/TMSSwaggerAPI
  */
 
 const AML_TIMEOUT_MS = parseInt(process.env.AML_REQUEST_TIMEOUT_MS || '30000', 10);
@@ -9,8 +9,8 @@ const AML_LOG = process.env.AML_LOG !== 'false';
 /** Read from process.env when used (not at import) so .env changes apply after restart. */
 function amlConfig() {
   return {
-    baseUrl: process.env.AML_BASE_URL || 'https://amlhlep.com/UET_TMSSwaggerAPI',
-    code: parseInt(process.env.AML_CODE || '9001', 10),
+    baseUrl: process.env.AML_BASE_URL || 'https://amlhlep.com/TMSSwaggerAPI',
+    code: parseInt(process.env.AML_CODE || '3004', 10),
     username: process.env.AML_USERNAME || '',
     password: process.env.AML_PASSWORD || '',
   };
@@ -469,10 +469,11 @@ export async function amlFetchDocumentBinary(filepath, fileName = '') {
 
   const { baseUrl } = amlConfig();
   const token = await getAmlToken();
-  const hostRoot = baseUrl.replace(/\/UET_TMSSwaggerAPI\/?$/i, '');
+  const hostRoot = baseUrl.replace(/\/(UET_)?TMSSwaggerAPI\/?$/i, '');
   const candidates = [
     `${baseUrl}/${normalized}`,
     `${hostRoot}/${normalized}`,
+    `${hostRoot}/TMSSwaggerAPI/${normalized}`,
     `${hostRoot}/UET_TMSSwaggerAPI/${normalized}`,
   ];
 

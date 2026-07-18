@@ -6,9 +6,9 @@ The admin portal (`Remittence-portal`) never calls AML directly.
 ## Environment (`.env`)
 
 ```env
-AML_BASE_URL=https://amlhlep.com/UET_TMSSwaggerAPI
-AML_CODE=9001
-AML_USERNAME=admin_Demo
+AML_BASE_URL=https://amlhlep.com/TMSSwaggerAPI
+AML_CODE=3004
+AML_USERNAME=Admin_OneZa_API
 AML_PASSWORD=your_password
 AML_REQUEST_TIMEOUT_MS=30000
 AML_TOKEN_TTL_SECONDS=3300
@@ -20,7 +20,7 @@ AML_LOG=true
 ```bash
 curl -sS -X POST "$AML_BASE_URL/api/Auth/login" \
   -H 'Content-Type: application/json' \
-  -d '{"Code":9001,"User_Name":"admin_Demo","Password":"YOUR_PASSWORD"}'
+  -d '{"Code":3004,"User_Name":"Admin_OneZa_API","Password":"YOUR_PASSWORD"}'
 ```
 
 Expected: JSON with `"token":"eyJ..."`.  
