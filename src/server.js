@@ -22,6 +22,7 @@ import {
   logAmlStartupConfig,
   verifyAmlConnectionAtStartup,
 } from './services/amlProvider.service.js';
+import { logDigitalOnboardingStartup } from './services/liveexDigitalOnboarding.service.js';
 import { getPushConfigStatus } from './utils/push.js';
 import { setSocketIo } from './utils/socketIo.js';
 import { startTransactionWorkers, stopTransactionWorkers } from './workers/transactionWorkers.js';
@@ -294,6 +295,7 @@ async function startServer() {
       console.log('[Socket] Multi-instance mode — Redis pub/sub adapter active');
     }
     logAmlStartupConfig();
+    logDigitalOnboardingStartup();
     const pushStatus = getPushConfigStatus();
     if (pushStatus.configured) {
       console.log(`[PUSH] ✅ Firebase Admin ready (project: ${pushStatus.projectId || 'unknown'})`);

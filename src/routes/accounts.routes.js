@@ -34,7 +34,17 @@ import {
   customerAmlUploadDocuments,
   customerAmlSync,
 } from '../controllers/aml.controller.js';
+import {
+  getLiveexOnboardingStatus,
+  liveexOnboardSendOtp,
+  liveexOnboardVerifyOtp,
+  liveexOnboardAttachRow,
+  liveexOnboardRunRegistration,
+  liveexOnboardDetails,
+  liveexOnboardLookup,
+} from '../controllers/liveexOnboarding.controller.js';
 import { authenticateCustomer } from '../middleware/customerAuth.js';
+import { optionalAuthenticateCustomer } from '../middleware/optionalCustomerAuth.js';
 
 const router = express.Router();
 
@@ -88,6 +98,21 @@ router.post('/aml/documents/upload', authenticateCustomer, customerAmlUploadDocu
 router.post('/aml/documents/upload/', authenticateCustomer, customerAmlUploadDocuments);
 router.post('/aml-sync', authenticateCustomer, customerAmlSync);
 router.post('/aml-sync/', authenticateCustomer, customerAmlSync);
+
+// LiveEx Digital Onboarding — face match / ID OCR / liveness / screening
+router.get('/liveex/status', getLiveexOnboardingStatus);
+router.get('/liveex/status/', getLiveexOnboardingStatus);
+router.get('/liveex/lookups/:type', liveexOnboardLookup);
+router.post('/liveex/otp/send', liveexOnboardSendOtp);
+router.post('/liveex/otp/send/', liveexOnboardSendOtp);
+router.post('/liveex/otp/verify', optionalAuthenticateCustomer, liveexOnboardVerifyOtp);
+router.post('/liveex/otp/verify/', optionalAuthenticateCustomer, liveexOnboardVerifyOtp);
+router.post('/liveex/attach', authenticateCustomer, liveexOnboardAttachRow);
+router.post('/liveex/attach/', authenticateCustomer, liveexOnboardAttachRow);
+router.post('/liveex/details', authenticateCustomer, liveexOnboardDetails);
+router.post('/liveex/details/', authenticateCustomer, liveexOnboardDetails);
+router.post('/liveex/run-registration', authenticateCustomer, liveexOnboardRunRegistration);
+router.post('/liveex/run-registration/', authenticateCustomer, liveexOnboardRunRegistration);
 
 // Set PIN (requires authentication)
 router.post('/set-pin', authenticateCustomer, setPin);

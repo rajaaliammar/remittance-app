@@ -27,18 +27,49 @@ export function findAmlKycEntry(kycData) {
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     if (entries[i].amlClientNumber) return entries[i];
   }
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    if (entries[i].digitalOnboarding) return entries[i];
+  }
+  return null;
+}
+
+/** Find Digital Onboarding rowIdGid from any KYC entry. */
+export function extractDigitalOnboardingRowId(kycData) {
+  for (const entry of flattenKycEntries(kycData)) {
+    const rowId = entry?.digitalOnboarding?.rowIdGid;
+    if (rowId != null && String(rowId).trim()) return String(rowId).trim();
+  }
   return null;
 }
 
 /** Normalized AML cache for portal + GET /aml/cached */
 export function extractAmlCacheFromKycData(kycData) {
+  const digitalRowId = extractDigitalOnboardingRowId(kycData);
   const entry = findAmlKycEntry(kycData);
-  if (!entry?.aml || typeof entry.aml !== 'object') return null;
+
+  if (!entry?.aml || typeof entry.aml !== 'object') {
+    if (!digitalRowId) return null;
+    return {
+      clientNumber: entry?.amlClientNumber || null,
+      mapped: {
+        rowIdGid: digitalRowId,
+        statusLabel: 'LiveEx Digital Onboarding',
+        message: 'Face/ID row id from registration',
+      },
+      syncedAt: entry?.digitalOnboarding?.syncedAt || null,
+      lastSaveResponse: null,
+      lastStatusResponse: null,
+      lastValidateResponse: null,
+      lastDocumentsUploadResponse: null,
+      lastDocumentsUploadAt: null,
+      registrationIp: null,
+    };
+  }
 
   const aml = entry.aml;
   const mapped =
     aml.mapped && typeof aml.mapped === 'object'
-      ? aml.mapped
+      ? { ...aml.mapped }
       : {
           statusId: aml.statusId ?? null,
           statusLabel: aml.statusLabel ?? null,
@@ -57,6 +88,10 @@ export function extractAmlCacheFromKycData(kycData) {
           messageCode: aml.messageCode ?? null,
           messageDetails: aml.messageDetails ?? null,
         };
+
+  if (!mapped.rowIdGid && digitalRowId) {
+    mapped.rowIdGid = digitalRowId;
+  }
 
   return {
     clientNumber: entry.amlClientNumber || aml.clientNumber || mapped.clientNumber || null,
