@@ -16,20 +16,66 @@ function flattenEntries(kycData) {
   return [];
 }
 
+function isUploadUrl(value) {
+  const s = String(value || '').trim();
+  if (!s || s.startsWith('{')) return false;
+  return (
+    s.startsWith('/') ||
+    s.startsWith('http://') ||
+    s.startsWith('https://') ||
+    s.includes('/uploads/')
+  );
+}
+
+/**
+ * Portal forms often use names like "ID Card" / "Driver License" (not id_document_url).
+ * Upload-2 fields store `{ front, back }` JSON in `value` with `fileUrl` = front.
+ */
 function categorizeField(fieldName) {
-  const n = String(fieldName || '').toLowerCase();
-  if (n.includes('selfie')) return 'selfie';
-  if (n.includes('proof') || n.includes('address') || n.includes('poa')) return 'poa';
+  const n = String(fieldName || '').toLowerCase().trim();
+  if (!n) return null;
+  if (n.includes('selfie') || n.includes('liveness') || n === 'photo') {
+    return 'selfie';
+  }
+  if (n.includes('proof') || n.includes('address') || n.includes('poa')) {
+    return 'poa';
+  }
   if (n.includes('back')) return 'id_back';
   if (
     n.includes('front') ||
     n.includes('id_document') ||
     n.includes('passport') ||
-    n.includes('license')
+    n.includes('license') ||
+    n.includes('driver') ||
+    n.includes('id card') ||
+    n.includes('national id') ||
+    n.includes('state id') ||
+    n.includes('cnic') ||
+    n.includes('identity') ||
+    (n.includes('id') && (n.includes('card') || n.includes('document')))
   ) {
     return 'id_front';
   }
   return null;
+}
+
+function parseFrontBackValue(raw) {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (!s.startsWith('{')) return null;
+  try {
+    const parsed = JSON.parse(s);
+    if (!parsed || typeof parsed !== 'object') return null;
+    const front = parsed.front || parsed.id_front || parsed.idFront || null;
+    const back = parsed.back || parsed.id_back || parsed.idBack || null;
+    if (!front && !back) return null;
+    return {
+      front: front && isUploadUrl(front) ? String(front).trim() : null,
+      back: back && isUploadUrl(back) ? String(back).trim() : null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function collectUrlCandidates(customer) {
@@ -55,9 +101,23 @@ function collectUrlCandidates(customer) {
     if (!Array.isArray(fields)) continue;
     for (const field of fields) {
       if (!field || typeof field !== 'object') continue;
+
+      const pair = parseFrontBackValue(field.value);
+      if (pair) {
+        if (pair.front && !urls.id_front) urls.id_front = pair.front;
+        if (pair.back && !urls.id_back) urls.id_back = pair.back;
+        // fileUrl is usually the front copy for Upload-2 fields
+        if (!urls.id_front && isUploadUrl(field.fileUrl)) {
+          urls.id_front = String(field.fileUrl).trim();
+        }
+        continue;
+      }
+
       const slot = categorizeField(field.fieldName || field.name);
       const fileUrl = field.fileUrl || field.value || field.url;
-      if (slot && fileUrl && !urls[slot]) urls[slot] = String(fileUrl);
+      if (slot && isUploadUrl(fileUrl) && !urls[slot]) {
+        urls[slot] = String(fileUrl).trim();
+      }
     }
   }
 
@@ -85,7 +145,7 @@ export async function collectIdentityFilesForOnboarding(customer) {
   const urls = collectUrlCandidates(customer);
   const out = {};
   for (const [slot, url] of Object.entries(urls)) {
-    if (!url) continue;
+    if (!url || !isUploadUrl(url)) continue;
     const file = await readStoredFileAsBase64(url);
     if (file?.base64) out[slot] = { ...file, url };
   }
