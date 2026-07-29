@@ -40,16 +40,19 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
-    "firebase-admin": "^13.0.0",
+    "firebase-admin": "^13.10.0",
     "ioredis": "^5.11.1",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
-    "nodemailer": "^8.0.1",
+    "nodemailer": "^9.0.3",
     "redis": "^6.0.0",
     "socket.io": "^4.8.3"
   },
   "devDependencies": {
     "prisma": "^6.0.0"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
   }
 }

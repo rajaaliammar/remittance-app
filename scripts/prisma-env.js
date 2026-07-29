@@ -10,7 +10,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 await import(path.join(__dirname, '../src/env-bootstrap.js'));
 
 const args = process.argv.slice(2);
-const result = spawnSync('npx', ['prisma', ...args], {
+const result = spawnSync('npx', ['prisma@6', ...args], {
   stdio: 'inherit',
   shell: true,
   env: process.env,
