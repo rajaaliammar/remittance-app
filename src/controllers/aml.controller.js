@@ -23,6 +23,10 @@ import {
   buildClientIpFields,
   resolveLastIpForApi,
 } from '../utils/resolveCustomerLastIp.js';
+import {
+  finalizeRegistrationAmlApproval,
+  maybeAutoApproveCustomerFromAml,
+} from '../utils/amlAutoApprove.js';
 
 function mergeKycAml(customer, amlPayload) {
   const syncedAt = new Date().toISOString();
@@ -186,22 +190,33 @@ export const getCustomerAmlStatus = async (req, res) => {
     const amlRaw = await amlGetCustomerStatus(clientNumber);
     const mapped = mapAmlCustomerStatus(amlRaw);
 
-    const kycData = mergeKycAml(customer, {
+    let kycData = mergeKycAml(customer, {
       clientNumber,
       mapped,
       lastStatusResponse: amlRaw,
     });
 
-    await prisma.customer.update({
-      where: { id: customer.id },
-      data: { kycData },
-    });
+    const autoApprove = await maybeAutoApproveCustomerFromAml(
+      customer,
+      kycData,
+      mapped,
+      req,
+    );
+    kycData = autoApprove.kycData;
+
+    // Persist AML cache when auto-approve path did not already write
+    if (!autoApprove.customerApproved) {
+      await prisma.customer.update({
+        where: { id: customer.id },
+        data: { kycData },
+      });
+    }
 
     console.log(
       `[AML] Customer ${customer.id} status → ${mapped.statusLabel} (client: ${clientNumber})`,
     );
 
-    const customerWithKyc = { ...customer, kycData };
+    const customerWithKyc = { ...customer, kycData, status: autoApprove.customerStatus };
     const amlCache = extractAmlCacheFromKycData(kycData);
     const lastIpAddress = await resolveLastIpForApi(customerWithKyc, prisma, [
       amlRaw,
@@ -210,7 +225,9 @@ export const getCustomerAmlStatus = async (req, res) => {
 
     return res.json({
       success: true,
-      message: 'AML status retrieved',
+      message: autoApprove.newlyApproved
+        ? 'AML status retrieved — customer auto-approved for transactions'
+        : 'AML status retrieved',
       data: {
         customerId: customer.id,
         clientNumber,
@@ -219,6 +236,9 @@ export const getCustomerAmlStatus = async (req, res) => {
         status: mapped,
         mapped,
         cachedAt: amlCache?.syncedAt ?? null,
+        customerApproved: autoApprove.customerApproved,
+        newlyApproved: Boolean(autoApprove.newlyApproved),
+        customerStatus: autoApprove.customerStatus,
         ...buildClientIpFields(lastIpAddress),
       },
     });
@@ -254,17 +274,28 @@ export const runCustomerAmlValidation = async (req, res) => {
     }
     const mapped = mapAmlCustomerStatus(statusRaw);
 
-    const kycData = mergeKycAml(customer, {
+    let kycData = mergeKycAml(customer, {
       clientNumber,
       mapped: mappedValidate.statusId ? mappedValidate : mapped,
       lastValidateResponse: validateRaw,
       lastStatusResponse: statusRaw,
     });
 
-    await prisma.customer.update({
-      where: { id: customer.id },
-      data: { kycData },
-    });
+    const effectiveMapped = mappedValidate.statusId ? mappedValidate : mapped;
+    const autoApprove = await maybeAutoApproveCustomerFromAml(
+      customer,
+      kycData,
+      effectiveMapped,
+      req,
+    );
+    kycData = autoApprove.kycData;
+
+    if (!autoApprove.customerApproved) {
+      await prisma.customer.update({
+        where: { id: customer.id },
+        data: { kycData },
+      });
+    }
 
     console.log(
       `[AML] Validation done — ${mappedValidate.statusLabel || mapped.statusLabel}`,
@@ -279,14 +310,19 @@ export const runCustomerAmlValidation = async (req, res) => {
 
     return res.json({
       success: true,
-      message: 'AML validation completed',
+      message: autoApprove.newlyApproved
+        ? 'AML validation completed — customer auto-approved for transactions'
+        : 'AML validation completed',
       data: {
         customerId: customer.id,
         clientNumber,
         validate: validateRaw,
         status: statusRaw,
-        mapped: mappedValidate.statusId ? mappedValidate : mapped,
+        mapped: effectiveMapped,
         cachedAt: amlCache?.syncedAt ?? null,
+        customerApproved: autoApprove.customerApproved,
+        newlyApproved: Boolean(autoApprove.newlyApproved),
+        customerStatus: autoApprove.customerStatus,
         ...buildClientIpFields(lastIpAddress),
       },
     });
@@ -424,11 +460,20 @@ export const uploadCustomerAmlDocuments = async (req, res) => {
     }
 
     const result = await executeAmlDocumentUpload(customer);
+    const approval = await finalizeRegistrationAmlApproval(customer.id, req);
 
     return res.json({
       success: true,
-      message: result.upload?.message || 'AML documents uploaded',
-      data: result,
+      message: approval.newlyApproved
+        ? 'AML documents uploaded — customer auto-approved for transactions'
+        : result.upload?.message || 'AML documents uploaded',
+      data: {
+        ...result,
+        customerApproved: approval.customerApproved,
+        newlyApproved: approval.newlyApproved,
+        customerStatus: approval.customerStatus,
+        mapped: approval.mapped,
+      },
     });
   } catch (error) {
     console.error('[AML] uploadCustomerAmlDocuments:', error.message);
@@ -447,12 +492,15 @@ export const previewCustomerAmlDocuments = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
     const sources = collectKycFilesForAml(customer);
+    const onDiskCount = sources.filter((s) => s.onDisk).length;
     return res.json({
       success: true,
       data: {
         clientNumber: resolveAmlClientNumber(customer),
         sources,
         count: sources.length,
+        uploadedCount: sources.length,
+        onDiskCount,
       },
     });
   } catch (error) {
@@ -475,13 +523,20 @@ export const customerAmlOnboard = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
     const result = await executeAmlOnboard(customer);
+    // Auto-approve when AML already returns statusId >= 1 after save
+    const approval = await finalizeRegistrationAmlApproval(customerId, req);
     return res.json({
       success: true,
-      message: 'Customer submitted to AML provider',
+      message: approval.newlyApproved
+        ? 'Customer submitted to AML and auto-approved for transactions'
+        : 'Customer submitted to AML provider',
       data: {
         clientNumber: result.clientNumber,
         save: result.saveRaw,
-        mapped: result.mapped,
+        mapped: approval.mapped || result.mapped,
+        customerApproved: approval.customerApproved,
+        newlyApproved: approval.newlyApproved,
+        customerStatus: approval.customerStatus,
       },
     });
   } catch (error) {
@@ -506,10 +561,20 @@ export const customerAmlUploadDocuments = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
     const result = await executeAmlDocumentUpload(customer);
+    // After docs upload (end of registration verifying), auto-approve if statusId >= 1
+    const approval = await finalizeRegistrationAmlApproval(customerId, req);
     return res.json({
       success: true,
-      message: result.upload?.message || 'AML documents uploaded',
-      data: result,
+      message: approval.newlyApproved
+        ? 'AML documents uploaded — customer auto-approved for transactions'
+        : result.upload?.message || 'AML documents uploaded',
+      data: {
+        ...result,
+        customerApproved: approval.customerApproved,
+        newlyApproved: approval.newlyApproved,
+        customerStatus: approval.customerStatus,
+        mapped: approval.mapped,
+      },
     });
   } catch (error) {
     console.error('[AML] customerAmlUploadDocuments:', error.message);
@@ -536,11 +601,21 @@ export const customerAmlSync = async (req, res) => {
     const onboard = await executeAmlOnboard(customer);
     customer = await loadCustomer(customerId);
     const documents = await executeAmlDocumentUpload(customer);
+    const approval = await finalizeRegistrationAmlApproval(customerId, req);
 
     return res.json({
       success: true,
-      message: 'AML sync completed',
-      amlSync: { onboard, documents },
+      message: approval.newlyApproved
+        ? 'AML sync completed — customer auto-approved for transactions'
+        : 'AML sync completed',
+      amlSync: {
+        onboard,
+        documents,
+        customerApproved: approval.customerApproved,
+        newlyApproved: approval.newlyApproved,
+        customerStatus: approval.customerStatus,
+        mapped: approval.mapped,
+      },
     });
   } catch (error) {
     console.error('[AML] customerAmlSync:', error.message);

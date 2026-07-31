@@ -4,14 +4,14 @@ import {
   amlGetCustomerStatus,
   mapAmlCustomerStatus,
 } from '../services/amlProvider.service.js';
+import { AML_BLOCKED_STATUS_IDS } from './amlAutoApprove.js';
 
 const GATE_ENABLED = process.env.AML_TRANSACTION_GATE_ENABLED !== 'false';
 
 /**
  * Live AML check before any customer send transaction.
- * Only statusId 6 ("Onboarded") may proceed.
- * @param {string} customerId
- * @returns {Promise<{ allowed: boolean, message?: string, code?: string, mapped?: object, skipped?: boolean }>}
+ * statusId >= 1 (and not blocked/rejected) may proceed.
+ * statusId 0 / incomplete / error → blocked until compliance clears.
  */
 export async function verifyAmlOnboardedForTransaction(customerId) {
   if (!GATE_ENABLED) {
@@ -64,11 +64,9 @@ export async function verifyAmlOnboardedForTransaction(customerId) {
   }
 
   const mapped = mapAmlCustomerStatus(amlRaw);
-  if (mapped.isOnboarded) {
-    return { allowed: true, mapped, clientNumber };
-  }
+  const statusId = Number(mapped.statusId);
 
-  if (mapped.isBlocked) {
+  if (AML_BLOCKED_STATUS_IDS.has(statusId) || mapped.isBlocked) {
     return {
       allowed: false,
       message:
@@ -78,18 +76,13 @@ export async function verifyAmlOnboardedForTransaction(customerId) {
     };
   }
 
-  if (mapped.isFrozen) {
-    return {
-      allowed: false,
-      message: `Your account is under compliance review (${mapped.statusLabel || 'pending'}). You cannot send money until AML verification is complete.`,
-      code: 'AML_COMPLIANCE_PENDING',
-      mapped,
-    };
+  if (Number.isFinite(statusId) && statusId >= 1) {
+    return { allowed: true, mapped, clientNumber };
   }
 
   return {
     allowed: false,
-    message: `AML verification required. Your status is "${mapped.statusLabel || 'Pending'}". You must be onboarded in AML before sending money.`,
+    message: `AML verification required. Your status is "${mapped.statusLabel || 'Pending'}". You cannot send money until compliance clears.`,
     code: 'AML_NOT_ONBOARDED',
     mapped,
   };

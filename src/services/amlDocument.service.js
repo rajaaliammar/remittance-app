@@ -293,11 +293,14 @@ export function collectKycFilesForAml(customer) {
     if (!url || seen.has(url)) return;
     if (!url.includes('/')) return;
     seen.add(url);
+    const onDisk = Boolean(resolveLocalFilePath(url));
     items.push({
       fieldName,
       fileUrl: url,
       documentType: mapAmlDocumentTypeLabel(fieldName),
       category: categorizeField(fieldName),
+      uploaded: true,
+      onDisk,
     });
   };
 
