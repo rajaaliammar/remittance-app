@@ -23,6 +23,7 @@ import {
   buildSubmitKycPayload,
   extractDigitalOnboarding,
   mergeDigitalOnboarding,
+  resolveDocTypeFromCustomer,
   uploadIdentityTempDocuments,
 } from '../services/liveexOnboarding.builder.js';
 import { maybeAutoApproveCustomerFromLiveex } from '../utils/amlAutoApprove.js';
@@ -191,7 +192,12 @@ async function runFullDigitalOnboarding(customer, options = {}, req = null) {
     dig = extractDigitalOnboarding(customer);
   }
 
-  const savePayload = buildSaveWebsitePayload(customer, { rowIdGid });
+  const resolvedDoc = resolveDocTypeFromCustomer(customer, options);
+
+  const savePayload = buildSaveWebsitePayload(customer, {
+    rowIdGid,
+    sendUrl: options.sendUrl,
+  });
   const saveRaw = await liveexSaveWebsite(savePayload);
   customer = await prisma.customer.update({
     where: { id: customer.id },
@@ -199,8 +205,14 @@ async function runFullDigitalOnboarding(customer, options = {}, req = null) {
       kycData: mergeDigitalOnboarding(customer, {
         rowIdGid,
         email,
+        idType: resolvedDoc.docTypeId,
+        docTypeName: resolvedDoc.docTypeName,
         profileSavedAt: new Date().toISOString(),
         lastSaveWebsiteResponse: saveRaw,
+        lastSaveWebsitePayload: {
+          sendUrl: savePayload.sendUrl,
+          rowId: savePayload.rowId,
+        },
       }),
     },
   });
@@ -212,8 +224,9 @@ async function runFullDigitalOnboarding(customer, options = {}, req = null) {
       rowIdGid,
       email,
       retakeCount: Number(options.retakeCount || 0),
-      idType: Number(options.idType || dig?.idType || 1),
-      docTypeName: options.docTypeName || 'Passport',
+      idType: resolvedDoc.docTypeId,
+      docTypeName: resolvedDoc.docTypeName,
+      requireBack: resolvedDoc.requiresBack,
       liveexTempDocument,
     });
   } catch (err) {
@@ -262,6 +275,8 @@ async function runFullDigitalOnboarding(customer, options = {}, req = null) {
       kycData: mergeDigitalOnboarding(customer, {
         rowIdGid,
         email,
+        idType: uploaded.docTypeId,
+        docTypeName: uploaded.docTypeName,
         paths: uploaded.paths,
         lastTempDocumentResponses: uploaded.responses,
         identityUploadedAt: new Date().toISOString(),
@@ -275,6 +290,7 @@ async function runFullDigitalOnboarding(customer, options = {}, req = null) {
   const submitPayload = await buildSubmitKycPayload(customer, {
     rowIdGid,
     paths: uploaded.paths,
+    idType: uploaded.docTypeId,
   });
   const submitRaw = await liveexSubmitKyc(submitPayload);
 

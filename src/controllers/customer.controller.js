@@ -2036,6 +2036,7 @@ export const getProfile = async (req, res) => {
       email: customer.email || null,
       username: customer.username || null,
       first_name: customer.firstName || null,
+      middle_name: customer.middleName || null,
       last_name: customer.lastName || null,
       phone_number,
       country_code: country_code || null,

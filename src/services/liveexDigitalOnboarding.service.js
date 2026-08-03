@@ -334,20 +334,55 @@ export async function liveexCustomerDetails({ rowIdGid, email } = {}) {
 
 export async function liveexSubmitKyc(payload) {
   return withAuth(async (token) => {
-    const row =
-      payload?.rowIdGid || payload?.rowId || payload?.ROW_ID_GID || '';
+    const row = String(
+      payload?.roW_ID_GID ||
+        payload?.rowIdGid ||
+        payload?.rowId ||
+        payload?.ROW_ID_GID ||
+        '',
+    ).trim();
     if (!row) {
       const err = new Error(
-        'LiveEx submit-kyc blocked: rowIdGid / ROW_ID_GID is missing',
+        'LiveEx submit-kyc blocked: roW_ID_GID is missing',
       );
       err.status = 400;
       err.code = 'LIVEEX_ROW_ID_REQUIRED';
       throw err;
     }
-    // Ensure aliases so LiveEx SP @ROW_ID_GID / @confirm / @confirm_2 are populated.
+
+    const nameFront = String(
+      payload?.namE_Front || payload?.nameFront || '',
+    ).trim();
+    const nameSelfie = String(
+      payload?.namE_Selfie || payload?.nameSelfie || '',
+    ).trim();
+    const nameBack = String(
+      payload?.namE_Back || payload?.nameBack || '',
+    ).trim();
+    const fullName = String(
+      payload?.full_Name || payload?.fullName || 'Unknown',
+    ).trim();
+    const email = String(payload?.email || '').trim();
+    const idType = Number(
+      payload?.iD_TYPE ?? payload?.idType ?? 5,
+    );
+
+    if (!nameFront || !nameSelfie) {
+      const err = new Error(
+        'LiveEx submit-kyc blocked: namE_Front and namE_Selfie are required',
+      );
+      err.status = 400;
+      err.code = 'LIVEEX_PATHS_REQUIRED';
+      throw err;
+    }
+
     // confirm fields must be strings — bool true fails ASP.NET System.String binding.
     const confirmRaw =
-      payload?.confirm != null ? payload.confirm : payload?.Confirm != null ? payload.Confirm : 'true';
+      payload?.confirm != null
+        ? payload.confirm
+        : payload?.Confirm != null
+          ? payload.Confirm
+          : 'true';
     const confirm =
       typeof confirmRaw === 'string' ? confirmRaw : String(Boolean(confirmRaw));
     const confirm2Raw =
@@ -358,8 +393,19 @@ export async function liveexSubmitKyc(payload) {
           : confirm;
     const confirm_2 =
       typeof confirm2Raw === 'string' ? confirm2Raw : String(Boolean(confirm2Raw));
+
+    // LiveEx docs: exact mixed-case keys — clean camelCase silently fails to bind.
     const body = {
-      ...payload,
+      roW_ID_GID: row,
+      full_Name: fullName,
+      email,
+      iD_TYPE: idType,
+      namE_Selfie: nameSelfie,
+      namE_Front: nameFront,
+      namE_Back: nameBack,
+      qrCodeDetail:
+        payload?.qrCodeDetail != null ? String(payload.qrCodeDetail) : '',
+      // Aliases for builds that still read camelCase / alternate SP params
       rowIdGid: row,
       rowId: row,
       ROW_ID_GID: row,
@@ -367,16 +413,14 @@ export async function liveexSubmitKyc(payload) {
       confirm_2,
       confirm2: confirm_2,
     };
-    delete body.Confirm;
+
     log(
-      'submit-kyc payload keys:',
-      Object.keys(body),
-      'rowId=',
-      row,
-      'confirm=',
-      body.confirm,
-      'confirm_2=',
-      body.confirm_2,
+      'submit-kyc legacy keys:',
+      `roW_ID_GID=${row}`,
+      `iD_TYPE=${idType}`,
+      `namE_Front=${nameFront}`,
+      `namE_Back=${nameBack || '(empty)'}`,
+      `namE_Selfie=${nameSelfie}`,
     );
     const data = await liveexFetch('/api/customer/submit-kyc', {
       method: 'POST',

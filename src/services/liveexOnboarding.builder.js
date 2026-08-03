@@ -1,5 +1,9 @@
 /**
  * Map local Customer + KYC files → LiveEx Digital Onboarding payloads.
+ *
+ * LiveEx submit-kyc uses a legacy ASP.NET binder — field names must match
+ * exactly: roW_ID_GID, full_Name, iD_TYPE, namE_Front, namE_Back, namE_Selfie.
+ * Clean camelCase names silently bind as empty (no HTTP error).
  */
 
 import path from 'path';
@@ -16,10 +20,6 @@ function digitsOnly(value) {
   return asString(value).replace(/\D/g, '');
 }
 
-function lookupId(value, fallback = '') {
-  return asString(value, fallback);
-}
-
 /** When app stores country name/ISO instead of LiveEx lookup id. */
 const COUNTRY_NAME_TO_ID = {
   ethiopia: '346',
@@ -31,7 +31,96 @@ const COUNTRY_NAME_TO_ID = {
   'united states of america': '308',
   usa: '308',
   us: '308',
+  pakistan: '364',
+  pk: '364',
 };
+
+/** LiveEx temp-document / submit-kyc docTypeId values (docs). */
+export const LIVEEX_DOC_TYPE = {
+  CITIZENSHIP_CARD: 4,
+  PASSPORT: 5,
+  DRIVERS_LICENCE: 7,
+};
+
+/**
+ * Map app / KYC id labels → LiveEx docTypeId + display name.
+ * Invalid ids (e.g. 1) break portal document slots and OCR.
+ */
+export function resolveLiveexDocType(rawIdType, rawDocTypeName) {
+  const nameHint = asString(rawDocTypeName).toLowerCase();
+  const idHint = asString(rawIdType).toLowerCase();
+  const combined = `${idHint} ${nameHint}`.trim();
+
+  const asNum = Number(rawIdType);
+  if (
+    asNum === LIVEEX_DOC_TYPE.CITIZENSHIP_CARD ||
+    asNum === LIVEEX_DOC_TYPE.PASSPORT ||
+    asNum === LIVEEX_DOC_TYPE.DRIVERS_LICENCE
+  ) {
+    const byId = {
+      [LIVEEX_DOC_TYPE.CITIZENSHIP_CARD]: {
+        docTypeId: LIVEEX_DOC_TYPE.CITIZENSHIP_CARD,
+        docTypeName: 'Citizenship Card',
+        requiresBack: true,
+      },
+      [LIVEEX_DOC_TYPE.PASSPORT]: {
+        docTypeId: LIVEEX_DOC_TYPE.PASSPORT,
+        docTypeName: 'Passport',
+        requiresBack: false,
+      },
+      [LIVEEX_DOC_TYPE.DRIVERS_LICENCE]: {
+        docTypeId: LIVEEX_DOC_TYPE.DRIVERS_LICENCE,
+        docTypeName: 'Drivers Licence',
+        requiresBack: true,
+      },
+    };
+    return byId[asNum];
+  }
+
+  if (
+    /driver|licence|license/.test(combined) ||
+    idHint === 'license' ||
+    idHint === 'licence'
+  ) {
+    return {
+      docTypeId: LIVEEX_DOC_TYPE.DRIVERS_LICENCE,
+      docTypeName: 'Drivers Licence',
+      requiresBack: true,
+    };
+  }
+
+  if (
+    /passport/.test(combined) ||
+    idHint === 'passport'
+  ) {
+    return {
+      docTypeId: LIVEEX_DOC_TYPE.PASSPORT,
+      docTypeName: 'Passport',
+      requiresBack: false,
+    };
+  }
+
+  if (
+    /citizen|national|state|cnic|identity|id card|national_id|state_id/.test(
+      combined,
+    ) ||
+    idHint === 'state' ||
+    idHint === 'national_id'
+  ) {
+    return {
+      docTypeId: LIVEEX_DOC_TYPE.CITIZENSHIP_CARD,
+      docTypeName: 'Citizenship Card',
+      requiresBack: true,
+    };
+  }
+
+  // Safe default — Passport (never use 1)
+  return {
+    docTypeId: LIVEEX_DOC_TYPE.PASSPORT,
+    docTypeName: asString(rawDocTypeName, 'Passport'),
+    requiresBack: false,
+  };
+}
 
 function resolveCountryLookupId(value, fallback = '346') {
   const raw = asString(value);
@@ -39,7 +128,6 @@ function resolveCountryLookupId(value, fallback = '346') {
   if (/^\d+$/.test(raw)) return raw;
   const key = raw.toLowerCase();
   if (COUNTRY_NAME_TO_ID[key]) return COUNTRY_NAME_TO_ID[key];
-  // ISO-2 / ISO-3 style leftovers
   if (COUNTRY_NAME_TO_ID[key.slice(0, 2)]) return COUNTRY_NAME_TO_ID[key.slice(0, 2)];
   return fallback;
 }
@@ -48,6 +136,16 @@ function resolveNumericLookup(value, fallback) {
   const raw = asString(value);
   if (/^\d+$/.test(raw)) return raw;
   return String(fallback);
+}
+
+function buildSendUrl(rowId) {
+  const base = (
+    process.env.LIVEEX_SEND_URL_BASE ||
+    process.env.MOBILE_APP_URL ||
+    process.env.FRONTEND_URL ||
+    'http://localhost:5173'
+  ).replace(/\/$/, '');
+  return `${base}/register?resumeStep=9&rowId=${encodeURIComponent(rowId)}`;
 }
 
 export function extractDigitalOnboarding(customer) {
@@ -118,11 +216,10 @@ export function mergeDigitalOnboarding(customer, patch) {
 
   const kyc =
     raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...raw } : {};
-  const merged = withAmlRowMirror(kyc);
-  return merged;
+  return withAmlRowMirror(kyc);
 }
 
-export function buildSaveWebsitePayload(customer, { rowIdGid } = {}) {
+export function buildSaveWebsitePayload(customer, { rowIdGid, sendUrl } = {}) {
   const rowId =
     asString(rowIdGid) || asString(extractDigitalOnboarding(customer)?.rowIdGid);
   if (!rowId) {
@@ -202,16 +299,19 @@ export function buildSaveWebsitePayload(customer, { rowIdGid } = {}) {
     middleName: asString(customer.middleName),
     gender: asString(customer.gender),
     residentCountry: asString(country, '346'),
+    // Required by LiveEx for "Re-request" emails after unreadable / mismatched ID
+    sendUrl: asString(sendUrl, buildSendUrl(rowId)),
   };
 }
 
+/** LiveEx only allows .jpg / .jpeg / .png (checked via name extension). */
 function fileNameForSlot(slot, sourceName) {
-  const ext = path.extname(sourceName || '') || '.jpg';
+  const rawExt = path.extname(sourceName || '').toLowerCase();
+  const ext = ['.jpg', '.jpeg', '.png'].includes(rawExt) ? rawExt : '.jpg';
   const map = {
     selfie: `selfie${ext}`,
     id_front: `id-front${ext}`,
     id_back: `id-back${ext}`,
-    poa: `id-proof${ext}`,
   };
   return map[slot] || `doc${ext}`;
 }
@@ -220,21 +320,57 @@ const SLOT_TYPE = {
   id_front: 2,
   id_back: 3,
   selfie: 1,
-  poa: 4,
 };
 
+function assertSavedPath(response, slot) {
+  const saved = asString(response?.savedFilePath);
+  if (!saved) {
+    const err = new Error(
+      `LiveEx temp-document did not return savedFilePath for ${slot}`,
+    );
+    err.status = 502;
+    err.code = 'LIVEEX_TEMP_PATH_MISSING';
+    err.data = response;
+    throw err;
+  }
+  return saved;
+}
+
 /**
- * Upload identity images: ID front → ID back → selfie (with livenessPath = front).
+ * Resolve LiveEx doc type from request options + customer KYC.
+ */
+export function resolveDocTypeFromCustomer(customer, options = {}) {
+  const dig = extractDigitalOnboarding(customer) || {};
+  const fromKyc =
+    pickKycFieldFromCustomer(customer, 'id_type', 'idType', 'document_type') ||
+    null;
+  return resolveLiveexDocType(
+    options.idType ?? dig.idType ?? fromKyc,
+    options.docTypeName ?? dig.docTypeName ?? fromKyc,
+  );
+}
+
+/**
+ * Upload identity images via /api/customer/temp-document only:
+ * ID front → ID back (when required/present) → selfie (livenessPath = front path).
+ * Do NOT use this for proof-of-address — that belongs on /api/customer/documents.
  */
 export async function uploadIdentityTempDocuments({
   customer,
   rowIdGid,
   email,
   retakeCount = 0,
-  idType = 1,
-  docTypeName = 'Passport',
+  idType,
+  docTypeName,
+  requireBack,
   liveexTempDocument,
 }) {
+  const resolved = resolveLiveexDocType(idType, docTypeName);
+  const docTypeId = resolved.docTypeId;
+  const label = resolved.docTypeName;
+  const backRequired =
+    requireBack != null ? Boolean(requireBack) : resolved.requiresBack;
+
   const files = await collectIdentityFilesForOnboarding(customer);
   if (!files.id_front?.base64) {
     const err = new Error(
@@ -250,6 +386,14 @@ export async function uploadIdentityTempDocuments({
     err.code = 'LIVEEX_SELFIE_REQUIRED';
     throw err;
   }
+  if (backRequired && !files.id_back?.base64) {
+    const err = new Error(
+      `ID back image is required for ${label}. Upload front and back, then retry.`,
+    );
+    err.status = 400;
+    err.code = 'LIVEEX_ID_BACK_REQUIRED';
+    throw err;
+  }
 
   const paths = {};
   const responses = {};
@@ -258,13 +402,13 @@ export async function uploadIdentityTempDocuments({
     rowIdGid,
     email,
     typeId: SLOT_TYPE.id_front,
-    docTypeId: idType,
-    docTypeName,
+    docTypeId,
+    docTypeName: label,
     name: fileNameForSlot('id_front', files.id_front.name),
     base64: files.id_front.base64,
     retakeCount,
   });
-  paths.nameFront = front.savedFilePath;
+  paths.nameFront = assertSavedPath(front, 'id_front');
   responses.id_front = front;
 
   if (files.id_back?.base64) {
@@ -272,13 +416,13 @@ export async function uploadIdentityTempDocuments({
       rowIdGid,
       email,
       typeId: SLOT_TYPE.id_back,
-      docTypeId: idType,
-      docTypeName,
+      docTypeId,
+      docTypeName: label,
       name: fileNameForSlot('id_back', files.id_back.name),
       base64: files.id_back.base64,
       retakeCount,
     });
-    paths.nameBack = back.savedFilePath;
+    paths.nameBack = assertSavedPath(back, 'id_back');
     responses.id_back = back;
   }
 
@@ -286,35 +430,31 @@ export async function uploadIdentityTempDocuments({
     rowIdGid,
     email,
     typeId: SLOT_TYPE.selfie,
-    docTypeId: idType,
-    docTypeName,
+    docTypeId,
+    docTypeName: label,
     name: fileNameForSlot('selfie', files.selfie.name),
     base64: files.selfie.base64,
+    // Opaque path from ID-front response — required for face match / liveness
     livenessPath: paths.nameFront,
     retakeCount,
   });
-  paths.nameSelfie = selfie.savedFilePath;
+  paths.nameSelfie = assertSavedPath(selfie, 'selfie');
   responses.selfie = selfie;
 
-  if (files.poa?.base64) {
-    const proof = await liveexTempDocument({
-      rowIdGid,
-      email,
-      typeId: SLOT_TYPE.poa,
-      docTypeId: idType,
-      docTypeName: 'Proof of ID',
-      name: fileNameForSlot('poa', files.poa.name),
-      base64: files.poa.base64,
-      retakeCount,
-    });
-    paths.nameProof = proof.savedFilePath;
-    responses.poa = proof;
-  }
-
-  return { paths, responses, filesPresent: Object.keys(files) };
+  return {
+    paths,
+    responses,
+    filesPresent: Object.keys(files),
+    docTypeId,
+    docTypeName: label,
+  };
 }
 
-export async function buildSubmitKycPayload(customer, { rowIdGid, paths } = {}) {
+/**
+ * Build submit-kyc body with LiveEx legacy binder keys.
+ * Also includes a few aliases for older builds that still read camelCase.
+ */
+export async function buildSubmitKycPayload(customer, { rowIdGid, paths, idType } = {}) {
   const dig = extractDigitalOnboarding(customer) || {};
   const email = asString(customer.email);
   const fullName =
@@ -342,22 +482,27 @@ export async function buildSubmitKycPayload(customer, { rowIdGid, paths } = {}) 
     throw err;
   }
 
-  // LiveEx docs use rowIdGid; their SQL SP binds @ROW_ID_GID — some builds
-  // only map `rowId` (same as save-website). Send all aliases.
-  // Their SP also requires @confirm / @confirm_2 as strings (bool JSON fails binding).
+  const resolved = resolveLiveexDocType(
+    idType ?? dig.idType,
+    dig.docTypeName,
+  );
+
+  // Exact casing from LiveEx Digital Onboarding API docs (silent-fail binder).
   return {
+    roW_ID_GID: resolvedRowId,
+    full_Name: fullName,
+    email,
+    iD_TYPE: resolved.docTypeId,
+    namE_Selfie: nameSelfie,
+    namE_Front: nameFront,
+    namE_Back: nameBack,
+    qrCodeDetail: '',
+    // Aliases for older / alternate binders (harmless extras)
     rowIdGid: resolvedRowId,
     rowId: resolvedRowId,
     ROW_ID_GID: resolvedRowId,
     confirm: 'true',
     confirm_2: 'true',
     confirm2: 'true',
-    fullName,
-    email,
-    idType: dig.idType || 1,
-    nameSelfie,
-    nameFront,
-    nameBack,
-    qrCodeDetail: '',
   };
 }

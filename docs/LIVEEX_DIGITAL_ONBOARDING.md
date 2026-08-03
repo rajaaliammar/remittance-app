@@ -15,11 +15,21 @@ Implements LiveExShield CIP across **backend**, **mobile app**, and **portal**.
 2. Phone OTP, profile, KYC ID front/back, selfie (stored locally)
 3. Attach `rowIdGid` to customer
 4. `/verifying` → `POST /api/accounts/liveex/run-registration`:
-   - `save-website`
-   - `temp-document` (front → back → selfie with `livenessPath`)
-   - `submit-kyc`
+   - `save-website` (includes `sendUrl` for re-request emails)
+   - `temp-document` (front → back → selfie with `livenessPath` = front `savedFilePath`)
+   - `submit-kyc` with **legacy binder keys**: `roW_ID_GID`, `full_Name`, `iD_TYPE`, `namE_Front`, `namE_Back`, `namE_Selfie`
 5. Soft TMS onboard + docs for remittance gate
 6. Portal **AML / Face & ID** tab shows decision, match %, OCR ID #
+
+### Identity doc types (LiveEx)
+
+| `docTypeId` / `iD_TYPE` | Name |
+|-------------------------|------|
+| 4 | Citizenship Card |
+| 5 | Passport |
+| 7 | Drivers Licence |
+
+Do **not** send `1`. Selfie / ID front / ID back must use `/api/customer/temp-document` only — not `/api/customer/documents`.
 
 ## Env
 
@@ -30,6 +40,8 @@ LIVEEX_ONBOARD_BASE_URL=https://amlhlep.com/TMSDigitalOnboardingWeb
 LIVEEX_ONBOARD_COMPANY_CODE=
 LIVEEX_ONBOARD_USERNAME=
 LIVEEX_ONBOARD_PASSWORD=
+# Base used to build save-website sendUrl (re-request email deep link)
+# LIVEEX_SEND_URL_BASE=https://your-app.example.com
 ```
 
 Use **Shield** partner credentials from LiveEx (TMS login may not work on Shield).
@@ -40,7 +52,7 @@ Use **Shield** partner credentials from LiveEx (TMS login may not work on Shield
 - `GET /api/accounts/liveex/status`
 - `POST /api/accounts/liveex/otp/send|verify`
 - `POST /api/accounts/liveex/attach`
-- `POST /api/accounts/liveex/run-registration`
+- `POST /api/accounts/liveex/run-registration` body may include `idType` (4|5|7) and `docTypeName`
 
 **Portal**
 - `GET /api/customers/:id/liveex/cached`
