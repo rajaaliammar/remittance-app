@@ -17,9 +17,10 @@ import {
  */
 export function buildNaturalCustomerSavePayload(customer) {
   const clientNumber = resolveAmlClientNumber(customer);
-  const dob = customer.dateOfBirth
-    ? new Date(customer.dateOfBirth)
-    : new Date('1990-01-01');
+  // Pass DOB string through toAmlDate — do not use new Date("YYYY-MM-DD") (UTC shift)
+  const dobAml = customer.dateOfBirth
+    ? toAmlDate(customer.dateOfBirth)
+    : toAmlDate('1990-01-01');
   const todayDate = new Date();
   const issueDate = new Date(todayDate);
   issueDate.setFullYear(issueDate.getFullYear() - 1);
@@ -77,7 +78,7 @@ export function buildNaturalCustomerSavePayload(customer) {
     csGivenName: customer.firstName || 'Unknown',
     csSurname: customer.lastName || 'Unknown',
     csOtherOrInitial: customer.middleName?.[0] || 'N',
-    csDateOfBirth: toAmlDate(dob),
+    csDateOfBirth: dobAml,
     csCountryOfCitizenship: citizenship,
     csCountryOfBirth: citizenship,
     csCountryOfDualNationality: citizenship,

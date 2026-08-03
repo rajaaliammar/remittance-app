@@ -218,3 +218,89 @@ export async function finalizeRegistrationAmlApproval(customerId, req) {
     aml: amlRaw,
   };
 }
+
+/**
+ * LiveEx Digital Onboarding auto-approve (same pipeline ids as TMS):
+ * - statusId >= 1 and not blocked 7/8/9 → approve
+ * - onBoardStatusId 3 (Completed) or statusId 6 (Onboard Success) → approve
+ * - onBoardStatusId 4 (Rejected) or blocked → leave pending
+ */
+export function shouldAutoApproveFromLiveex(digitalOnboarding) {
+  if (!digitalOnboarding || typeof digitalOnboarding !== 'object') return false;
+
+  const onBoardStatusId = Number(digitalOnboarding.onBoardStatusId);
+  const statusId = Number(digitalOnboarding.statusId);
+  const hasOnBoard = Number.isFinite(onBoardStatusId);
+  const hasStatus = Number.isFinite(statusId);
+
+  if (hasOnBoard && onBoardStatusId === 4) return false;
+  if (hasStatus && AML_BLOCKED_STATUS_IDS.has(statusId)) return false;
+
+  const label = String(
+    digitalOnboarding.onBoardStatus || digitalOnboarding.statusLabel || '',
+  ).toLowerCase();
+  if (/\b(blocked|disabled|reject(ed)?)\b/.test(label)) return false;
+
+  if (hasOnBoard && onBoardStatusId === 3) return true;
+  if (hasStatus && statusId === 6) return true;
+  if (
+    /\b(completed|onboard success|onboarded|cleared|approved|confirmed)\b/.test(label)
+  ) {
+    return true;
+  }
+
+  // Align with TMS: pipeline in progress (incl. ISTR Pending=5) means CIP submitted
+  if (hasStatus && statusId >= 1) return true;
+
+  return false;
+}
+
+/**
+ * If LiveEx CIP status qualifies, set customer.status=approved.
+ */
+export async function maybeAutoApproveCustomerFromLiveex(
+  customer,
+  kycData,
+  digitalOnboarding,
+  req,
+  approvedBy = 'liveex-auto',
+) {
+  if (!shouldAutoApproveFromLiveex(digitalOnboarding)) {
+    return {
+      customerApproved: false,
+      customerStatus: customer.status,
+      kycData,
+      newlyApproved: false,
+    };
+  }
+
+  const nextKyc = approveKycDocumentsInData(kycData);
+  const alreadyApproved = String(customer.status || '').toLowerCase() === 'approved';
+  const updated = await prisma.customer.update({
+    where: { id: customer.id },
+    data: {
+      kycData: nextKyc,
+      ...(alreadyApproved
+        ? {}
+        : {
+            status: 'approved',
+            approvedAt: customer.approvedAt || new Date(),
+            approvedBy: customer.approvedBy || approvedBy,
+          }),
+    },
+  });
+
+  if (!alreadyApproved) {
+    console.log(
+      `[LiveEx] Auto-approved customer ${customer.id} (onBoardStatusId=${digitalOnboarding?.onBoardStatusId}, statusId=${digitalOnboarding?.statusId}, by=${approvedBy})`,
+    );
+    emitCustomersUpdated(req);
+  }
+
+  return {
+    customerApproved: true,
+    customerStatus: updated.status,
+    kycData: nextKyc,
+    newlyApproved: !alreadyApproved,
+  };
+}

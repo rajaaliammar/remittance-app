@@ -25,6 +25,7 @@ import {
   mergeDigitalOnboarding,
   uploadIdentityTempDocuments,
 } from '../services/liveexOnboarding.builder.js';
+import { maybeAutoApproveCustomerFromLiveex } from '../utils/amlAutoApprove.js';
 
 function sendError(res, err) {
   const status = err.status || 500;
@@ -160,7 +161,7 @@ export const liveexOnboardAttachRow = async (req, res) => {
   }
 };
 
-async function runFullDigitalOnboarding(customer, options = {}) {
+async function runFullDigitalOnboarding(customer, options = {}, req = null) {
   let dig = extractDigitalOnboarding(customer);
   let rowIdGid = String(options.rowIdGid || dig?.rowIdGid || '').trim();
   if (!rowIdGid) {
@@ -307,6 +308,42 @@ async function runFullDigitalOnboarding(customer, options = {}) {
     },
   });
 
+  // Pull pipeline status (ISTR Pending / Onboard Success) when available
+  let detailsRaw = null;
+  try {
+    detailsRaw = await liveexCustomerDetails({ rowIdGid, email });
+    customer = await prisma.customer.update({
+      where: { id: customer.id },
+      data: {
+        kycData: mergeDigitalOnboarding(customer, {
+          rowIdGid,
+          email,
+          statusId: detailsRaw?.statusId ?? null,
+          statusLabel: detailsRaw?.status || null,
+          matchConfidence: detailsRaw?.matchConfidence ?? bestMatch,
+          lastDetailsResponse: detailsRaw,
+        }),
+      },
+    });
+  } catch (detailsErr) {
+    console.warn(
+      `[LiveEx-Onboard] post-submit details fetch failed for ${customer.id}:`,
+      detailsErr.message,
+    );
+  }
+
+  dig = extractDigitalOnboarding(customer);
+  const approval = await maybeAutoApproveCustomerFromLiveex(
+    customer,
+    customer.kycData,
+    dig,
+    req,
+    'liveex-registration-auto',
+  );
+  if (approval.newlyApproved) {
+    customer = await prisma.customer.findUnique({ where: { id: customer.id } });
+  }
+
   return {
     rowIdGid,
     onBoardStatus: submitRaw?.onBoardStatus,
@@ -320,6 +357,9 @@ async function runFullDigitalOnboarding(customer, options = {}) {
     paths: uploaded.paths,
     digitalOnboarding: extractDigitalOnboarding(customer),
     submitRaw,
+    detailsRaw,
+    customerApproved: approval.customerApproved,
+    customerStatus: approval.customerStatus,
   };
 }
 
@@ -336,7 +376,7 @@ export const liveexOnboardRunRegistration = async (req, res) => {
     if (!customer) {
       return res.status(401).json({ success: false, message: 'Unauthorized' });
     }
-    const result = await runFullDigitalOnboarding(customer, req.body || {});
+    const result = await runFullDigitalOnboarding(customer, req.body || {}, req);
     return res.json({
       success: true,
       faceMatchFailed: false,
@@ -388,10 +428,20 @@ export const liveexOnboardDetails = async (req, res) => {
       lastDetailsResponse: raw,
     });
     await prisma.customer.update({ where: { id: customer.id }, data: { kycData } });
+    const digCached = extractDigitalOnboarding({ kycData });
+    const approval = await maybeAutoApproveCustomerFromLiveex(
+      { ...customer, kycData },
+      kycData,
+      digCached,
+      req,
+      'liveex-details-auto',
+    );
     return res.json({
       success: true,
       data: raw,
-      cached: extractDigitalOnboarding({ kycData }),
+      cached: digCached,
+      customerApproved: approval.customerApproved,
+      customerStatus: approval.customerStatus,
     });
   } catch (err) {
     return sendError(res, err);
@@ -464,10 +514,20 @@ export const refreshCustomerLiveexDetails = async (req, res) => {
       lastDetailsResponse: raw,
     });
     await prisma.customer.update({ where: { id: customer.id }, data: { kycData } });
+    const digCached = extractDigitalOnboarding({ kycData });
+    const approval = await maybeAutoApproveCustomerFromLiveex(
+      { ...customer, kycData },
+      kycData,
+      digCached,
+      req,
+      'liveex-refresh-auto',
+    );
     return res.json({
       success: true,
       data: raw,
-      digitalOnboarding: extractDigitalOnboarding({ kycData }),
+      digitalOnboarding: digCached,
+      customerApproved: approval.customerApproved,
+      customerStatus: approval.customerStatus,
     });
   } catch (err) {
     return sendError(res, err);
@@ -488,7 +548,7 @@ export const runCustomerLiveexOnboarding = async (req, res) => {
     if (!customer) {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
-    const result = await runFullDigitalOnboarding(customer, req.body || {});
+    const result = await runFullDigitalOnboarding(customer, req.body || {}, req);
     return res.json({
       success: true,
       message: 'Digital onboarding complete',

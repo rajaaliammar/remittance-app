@@ -784,9 +784,11 @@ export const checkLoginInfo = async (req, res) => {
     const emailTrimmed = email != null ? String(email).trim() : '';
 
     if (emailTrimmed !== '') {
-      // Lookup by email
+      // Lookup by email (case-insensitive)
       const customer = await prisma.customer.findFirst({
-        where: { email: emailTrimmed.toLowerCase() },
+        where: {
+          email: { equals: emailTrimmed.toLowerCase(), mode: 'insensitive' },
+        },
         select: { id: true, hasPin: true }
       });
       if (!customer) {
@@ -1052,7 +1054,8 @@ export const completeProfile = async (req, res) => {
     if (address !== undefined && address !== '') updateData.address = String(address);
     if ((date_of_birth !== undefined && date_of_birth !== '') || (dateOfBirth !== undefined && dateOfBirth !== '')) {
       const dob = date_of_birth ?? dateOfBirth;
-      updateData.dateOfBirth = typeof dob === 'string' ? dob : (dob != null ? String(dob) : null);
+      const raw = typeof dob === 'string' ? dob : (dob != null ? String(dob) : '');
+      updateData.dateOfBirth = raw ? raw.trim().slice(0, 10) : null;
     }
     if (gender !== undefined && gender !== '') updateData.gender = String(gender);
     if (nationality !== undefined && nationality !== '') updateData.nationality = String(nationality);

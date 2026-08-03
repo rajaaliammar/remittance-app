@@ -54,8 +54,16 @@ function logError(message, ...args) {
   console.error(`[AML] ${message}`, ...args);
 }
 
-/** Format date as dd/MM/yyyy for AML API */
+/** Format date as dd/MM/yyyy for AML API (date-only; no timezone shift). */
 export function toAmlDate(input) {
+  if (input == null || input === '') return '';
+  if (typeof input === 'string') {
+    const raw = input.trim();
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(raw)) return raw;
+    // YYYY-MM-DD or ISO datetime — use calendar date parts only
+    const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`;
+  }
   const d = input instanceof Date ? input : new Date(input);
   if (Number.isNaN(d.getTime())) return '';
   const day = String(d.getDate()).padStart(2, '0');
