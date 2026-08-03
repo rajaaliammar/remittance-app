@@ -222,7 +222,8 @@ export async function finalizeRegistrationAmlApproval(customerId, req) {
 /**
  * LiveEx Digital Onboarding auto-approve (same pipeline ids as TMS):
  * - statusId >= 1 and not blocked 7/8/9 → approve
- * - onBoardStatusId 3 (Completed) or statusId 6 (Onboard Success) → approve
+ * - onBoardStatusId >= 1 and not 4 (Rejected) → approve
+ * - Face/ID already submitted (submittedAt / clientNumber) → approve
  * - onBoardStatusId 4 (Rejected) or blocked → leave pending
  */
 export function shouldAutoApproveFromLiveex(digitalOnboarding) {
@@ -241,16 +242,24 @@ export function shouldAutoApproveFromLiveex(digitalOnboarding) {
   ).toLowerCase();
   if (/\b(blocked|disabled|reject(ed)?)\b/.test(label)) return false;
 
-  if (hasOnBoard && onBoardStatusId === 3) return true;
-  if (hasStatus && statusId === 6) return true;
   if (
     /\b(completed|onboard success|onboarded|cleared|approved|confirmed)\b/.test(label)
   ) {
     return true;
   }
 
-  // Align with TMS: pipeline in progress (incl. ISTR Pending=5) means CIP submitted
+  // Same rule as TMS customer status: id >= 1 means CIP is in the system
   if (hasStatus && statusId >= 1) return true;
+  if (hasOnBoard && onBoardStatusId >= 1) return true;
+
+  // Face/ID submit succeeded even if LiveEx omitted numeric status ids
+  if (
+    digitalOnboarding.submittedAt ||
+    digitalOnboarding.clientNumber ||
+    digitalOnboarding.lastSubmitKycResponse
+  ) {
+    return true;
+  }
 
   return false;
 }
