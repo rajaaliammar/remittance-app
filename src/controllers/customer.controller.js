@@ -29,6 +29,7 @@ import {
   buildClientIpFields,
   resolveLastIpForApi,
 } from '../utils/resolveCustomerLastIp.js';
+import { tryApprovePendingCustomerFromCachedStatus } from '../utils/amlAutoApprove.js';
 
 // Static OTP for development/testing
 const STATIC_OTP = '123456';
@@ -2686,7 +2687,10 @@ export const getAllCustomers = async (req, res) => {
     const [customers, total, statusGroups] = await Promise.all([
       prisma.customer.findMany({
         where,
-        select,
+        select: {
+          ...select,
+          kycData: true,
+        },
         orderBy,
         take: pagination.take,
         skip: pagination.skip,
@@ -2699,16 +2703,50 @@ export const getAllCustomers = async (req, res) => {
       }),
     ]);
 
-    const stats = { pending: 0, approved: 0, rejected: 0, blocked: 0, other: 0 };
-    for (const row of statusGroups) {
-      const key = String(row.status || '').toLowerCase();
-      const count = row._count?._all ?? 0;
-      if (key in stats) stats[key] += count;
-      else stats.other += count;
+    // Backfill: auto-approve pending customers that already have LiveEx/AML statusId >= 1
+    await Promise.all(
+      customers
+        .filter((c) => String(c.status || '').toLowerCase() === 'pending')
+        .map(async (c) => {
+          try {
+            const result = await tryApprovePendingCustomerFromCachedStatus(c, req);
+            if (result.newlyApproved) {
+              c.status = result.customerStatus || 'approved';
+              c.approvedAt = c.approvedAt || new Date();
+            }
+          } catch (err) {
+            console.warn('[Customer] cache auto-approve skipped:', c.id, err.message);
+          }
+        }),
+    );
+
+    const publicCustomers = customers.map(({ kycData, ...rest }) => rest);
+
+    // Recompute stats after possible approvals on this page
+    let stats = { pending: 0, approved: 0, rejected: 0, blocked: 0, other: 0 };
+    if (customers.some((c) => String(c.status).toLowerCase() === 'approved')) {
+      const freshGroups = await prisma.customer.groupBy({
+        by: ['status'],
+        where,
+        _count: { _all: true },
+      });
+      for (const row of freshGroups) {
+        const key = String(row.status || '').toLowerCase();
+        const count = row._count?._all ?? 0;
+        if (key in stats) stats[key] += count;
+        else stats.other += count;
+      }
+    } else {
+      for (const row of statusGroups) {
+        const key = String(row.status || '').toLowerCase();
+        const count = row._count?._all ?? 0;
+        if (key in stats) stats[key] += count;
+        else stats.other += count;
+      }
     }
 
     sendPaginatedJson(res, {
-      data: customers,
+      data: publicCustomers,
       total,
       pagination,
       extra: { stats },
@@ -2783,6 +2821,20 @@ export const getCustomerById = async (req, res) => {
       customer.lastIpAddress = resolvedIp;
     }
     Object.assign(customer, buildClientIpFields(resolvedIp || customer.lastIpAddress));
+
+    if (String(customer.status || '').toLowerCase() === 'pending') {
+      try {
+        const result = await tryApprovePendingCustomerFromCachedStatus(customer, req);
+        if (result.newlyApproved) {
+          customer.status = result.customerStatus || 'approved';
+          customer.approvedAt = customer.approvedAt || new Date();
+          customer.approvedBy = customer.approvedBy || 'cache-auto';
+          if (result.kycData) customer.kycData = result.kycData;
+        }
+      } catch (err) {
+        console.warn('[Customer] detail cache auto-approve skipped:', err.message);
+      }
+    }
 
     res.json({ success: true, data: customer });
   } catch (error) {

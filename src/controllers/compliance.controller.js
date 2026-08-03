@@ -7,6 +7,7 @@
 
 import prisma from '../utils/prisma.js';
 import { WalletError, creditCustomerWallet } from '../utils/walletLock.js';
+import { maybeAutoApproveRemittanceFromAml } from '../utils/amlTransactionAutoApprove.js';
 
 const txInclude = {
   customer: {
@@ -168,19 +169,50 @@ export const approveHeldTransaction = async (req, res) => {
       }),
     ]);
 
+    // After compliance release, auto-complete if AML already has statusId >= 1
+    let finalRow = updated;
+    try {
+      const pfv =
+        updated.paymentFieldValues && typeof updated.paymentFieldValues === 'object'
+          ? updated.paymentFieldValues
+          : {};
+      const aml = pfv.aml || {};
+      const mapped = {
+        statusId: aml.statusId ?? aml.mapped?.statusId ?? null,
+        statusLabel: aml.status || aml.statusLabel || aml.mapped?.statusLabel || '',
+      };
+      const auto = await maybeAutoApproveRemittanceFromAml(id, mapped, {
+        actorId: adminId || 'compliance-release-auto',
+      });
+      if (auto.applied) {
+        finalRow = await prisma.remittanceTransaction.findUnique({
+          where: { id },
+          include: txInclude,
+        });
+      }
+    } catch (err) {
+      console.warn('[Compliance] post-approve AML auto-complete skipped:', err.message);
+    }
+
     const io = req.app?.get?.('io');
     if (io) {
       io.to(`user:${transaction.customerId}`).emit('transaction-status', {
         transactionId: id,
-        status: 'Processing',
-        message: 'Your transaction has been approved and is now being processed.',
+        status: finalRow?.status || 'Processing',
+        message:
+          String(finalRow?.status || '').toLowerCase() === 'completed'
+            ? 'Your money transfer has been completed successfully.'
+            : 'Your transaction has been approved and is now being processed.',
       });
     }
 
     res.json({
       success: true,
-      message: 'Transaction approved and moved to Processing.',
-      data: updated,
+      message:
+        String(finalRow?.status || '').toLowerCase() === 'completed'
+          ? 'Transaction approved and auto-completed from AML status.'
+          : 'Transaction approved and moved to Processing.',
+      data: finalRow,
     });
   } catch (error) {
     console.error('Error approving held transaction:', error);

@@ -12,6 +12,7 @@ import {
   extractAmlSaveResult,
 } from './amlTransaction.builder.js';
 import { resolveAmlClientNumber } from './amlProvider.service.js';
+import { maybeAutoApproveRemittanceFromAml } from '../utils/amlTransactionAutoApprove.js';
 
 const AML_TX_SYNC_ENABLED = process.env.AML_TRANSACTION_SYNC_ENABLED !== 'false';
 
@@ -135,13 +136,27 @@ export async function syncRemittanceTransactionToAml({
       extracted.status,
     );
 
+    const mapped = mapAmlTransactionStatus(saveRaw);
+    // Prefer extracted statusId when map misses fields
+    if (mapped.statusId == null && extracted.statusId != null) {
+      mapped.statusId = extracted.statusId;
+    }
+    if (!mapped.statusLabel && extracted.status) {
+      mapped.statusLabel = extracted.status;
+    }
+
+    const auto = await maybeAutoApproveRemittanceFromAml(transaction.id, mapped, {
+      actorId: 'aml-tx-sync-auto',
+    });
+
     return {
       success: true,
       trIdDisplay,
       internalRef: amlBlock.internalRef,
       status: extracted.status,
-      statusId: extracted.statusId,
-      mapped: mapAmlTransactionStatus(saveRaw),
+      statusId: extracted.statusId ?? mapped.statusId,
+      mapped,
+      autoApprove: auto,
       provider: saveRaw,
     };
   } catch (error) {

@@ -304,3 +304,87 @@ export async function maybeAutoApproveCustomerFromLiveex(
     newlyApproved: !alreadyApproved,
   };
 }
+
+/**
+ * Approve a still-pending customer from cached LiveEx / AML status in kycData
+ * (no remote call). Used when portal loads customers that already qualify.
+ */
+export async function tryApprovePendingCustomerFromCachedStatus(customer, req = null) {
+  if (!customer?.id) {
+    return { customerApproved: false, newlyApproved: false };
+  }
+  if (String(customer.status || '').toLowerCase() === 'approved') {
+    return {
+      customerApproved: true,
+      newlyApproved: false,
+      customerStatus: customer.status,
+    };
+  }
+  if (String(customer.status || '').toLowerCase() === 'rejected') {
+    return {
+      customerApproved: false,
+      newlyApproved: false,
+      customerStatus: customer.status,
+    };
+  }
+
+  const dig = (() => {
+    const raw = customer.kycData;
+    const entries = Array.isArray(raw)
+      ? raw
+      : raw && typeof raw === 'object'
+        ? [raw]
+        : [];
+    for (let i = entries.length - 1; i >= 0; i -= 1) {
+      if (entries[i]?.digitalOnboarding) return entries[i].digitalOnboarding;
+    }
+    return null;
+  })();
+
+  if (shouldAutoApproveFromLiveex(dig)) {
+    return maybeAutoApproveCustomerFromLiveex(
+      customer,
+      customer.kycData,
+      dig,
+      req,
+      'liveex-cache-auto',
+    );
+  }
+
+  const amlMapped = (() => {
+    const raw = customer.kycData;
+    const entries = Array.isArray(raw)
+      ? raw
+      : raw && typeof raw === 'object'
+        ? [raw]
+        : [];
+    for (let i = entries.length - 1; i >= 0; i -= 1) {
+      const aml = entries[i]?.aml;
+      if (aml?.mapped) return aml.mapped;
+      if (aml && (aml.statusId != null || aml.statusLabel)) {
+        return {
+          statusId: aml.statusId,
+          statusLabel: aml.statusLabel || aml.customerStatus,
+          isBlocked: aml.isBlocked,
+        };
+      }
+    }
+    return null;
+  })();
+
+  if (shouldAutoApproveFromAmlStatus(amlMapped)) {
+    return maybeAutoApproveCustomerFromAml(
+      customer,
+      customer.kycData,
+      amlMapped,
+      req,
+      'aml-cache-auto',
+    );
+  }
+
+  return {
+    customerApproved: false,
+    newlyApproved: false,
+    customerStatus: customer.status,
+  };
+}
