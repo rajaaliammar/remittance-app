@@ -46,13 +46,12 @@ jobs:
           port: ${{ secrets.PORT }}
           script: |
             cd /var/www/html/Remittance_backend
-            git remote set-url origin https://habex99:${{ secrets.GH_PAT }}@github.com/Appliedline-Dev/Remittance_backend.git
 
             if git ls-files --error-unmatch package-lock.json >/dev/null 2>&1; then
               git restore package-lock.json || true
             fi
             
-            git pull origin main
+            git pull https://habex99:${{ secrets.GH_PAT }}@github.com/Appliedline-Dev/Remittance_backend.git main
 
             npm install
 
