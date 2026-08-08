@@ -321,5 +321,57 @@ export const sendAgentInvitationEmail = async (email, inviteToken, adminDetails 
   }
 };
 
+/**
+ * Send a one-time verification code (signup phone step / forgot PIN when LiveEx is off).
+ */
+export const sendVerificationOtpEmail = async (
+  email,
+  otp,
+  {
+    subject = 'Your verification code',
+    title = 'Verification code',
+    purpose = 'verify your account',
+  } = {}
+) => {
+  const to = String(email || '').trim().toLowerCase();
+  if (!to || !to.includes('@')) {
+    throw new Error('Valid email is required to send OTP');
+  }
+  if (!isSmtpConfigured()) {
+    const err = new Error(
+      'Email delivery is not configured. Set SMTP_USER and SMTP_PASS (and SMTP_DISABLED=false).'
+    );
+    err.code = 'SMTP_NOT_CONFIGURED';
+    throw err;
+  }
+
+  const emailHtml = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>${title}</title>
+    </head>
+    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 560px; margin: 0 auto; padding: 24px;">
+      <h2 style="margin: 0 0 12px;">${title}</h2>
+      <p style="margin: 0 0 16px;">Use this code to ${purpose}. It expires in 5 minutes.</p>
+      <p style="font-size: 28px; font-weight: bold; letter-spacing: 6px; margin: 24px 0;">${otp}</p>
+      <p style="color: #8c8c8c; font-size: 12px;">If you did not request this, you can ignore this email.</p>
+    </body>
+    </html>
+  `;
+
+  const info = await transporter.sendMail({
+    from: `"BrandPay" <${process.env.SMTP_USER}>`,
+    to,
+    subject,
+    html: emailHtml,
+    text: `Your verification code is ${otp}. It expires in 5 minutes.`,
+  });
+  console.log(`[OTP] Verification email sent to ${to}:`, info.messageId);
+  return { success: true, messageId: info.messageId };
+};
+
 export default transporter;
 

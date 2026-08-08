@@ -30,9 +30,90 @@ import {
   resolveLastIpForApi,
 } from '../utils/resolveCustomerLastIp.js';
 import { tryApprovePendingCustomerFromCachedStatus } from '../utils/amlAutoApprove.js';
+import {
+  isDigitalOnboardingEnabled,
+  liveexSendOtp,
+  liveexVerifyOtp,
+} from '../services/liveexDigitalOnboarding.service.js';
+import { generateOtpCode, saveOtp, consumeOtp, hasOtp } from '../utils/otpStore.js';
+import { isSmtpConfigured, sendVerificationOtpEmail } from '../utils/email.js';
 
-// Static OTP for development/testing
-const STATIC_OTP = '123456';
+function signCustomerAccessToken(customer) {
+  return jwt.sign(
+    {
+      id: customer.id,
+      email: customer.email,
+      username: customer.username,
+      phone: customer.phone,
+      type: 'customer',
+    },
+    process.env.JWT_SECRET || 'your-secret-key-change-in-production',
+    { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+  );
+}
+
+function customerAuthPayload(customer, extra = {}) {
+  return {
+    access_token: signCustomerAccessToken(customer),
+    user: {
+      id: customer.id,
+      email: customer.email || null,
+      username: customer.username || null,
+      first_name: customer.firstName || null,
+      middle_name: customer.middleName || null,
+      last_name: customer.lastName || null,
+      phone: customer.phone,
+      status: customer.status,
+      has_pin: !!customer.hasPin,
+      type: 'customer',
+      ...extra,
+    },
+  };
+}
+
+/**
+ * Forgot password / Forgot PIN only — our SMTP (never LiveEx).
+ * LiveEx OTP remains on its own signup/onboarding endpoints.
+ */
+async function deliverRecoveryEmailOtp({ email, purpose, title, subject }) {
+  const emailTrimmed = String(email || '').trim().toLowerCase();
+
+  if (!isSmtpConfigured()) {
+    const err = new Error(
+      'OTP email delivery is not configured. Set SMTP_USER and SMTP_PASS (and SMTP_DISABLED=false).'
+    );
+    err.status = 503;
+    err.code = 'OTP_DELIVERY_UNAVAILABLE';
+    throw err;
+  }
+
+  const code = generateOtpCode(6);
+  saveOtp('email', emailTrimmed, code);
+  await sendVerificationOtpEmail(emailTrimmed, code, {
+    purpose: purpose || 'reset your account access',
+    title: title || 'Account verification',
+    subject: subject || 'Your account verification code',
+  });
+  return { channel: 'smtp', email: emailTrimmed };
+}
+
+async function verifyRecoveryEmailOtp(email, otp) {
+  const emailTrimmed = String(email || '').trim().toLowerCase();
+  const code = String(otp || '').trim();
+
+  if (!hasOtp('email', emailTrimmed)) {
+    const err = new Error('Invalid or expired OTP. Please request a new code.');
+    err.status = 400;
+    throw err;
+  }
+
+  if (!consumeOtp('email', emailTrimmed, code)) {
+    const err = new Error('Invalid OTP. Please enter the correct OTP.');
+    err.status = 400;
+    throw err;
+  }
+  return true;
+}
 
 /**
  * Normalize phone to canonical form for lookup.
@@ -405,129 +486,258 @@ export const signup = async (req, res) => {
   }
 };
 
-// Send OTP - Static OTP for development
+// Send OTP
+// - email body  → Forgot password / Forgot PIN only (our SMTP, never LiveEx)
+// - phone body  → Signup phone verify (LiveEx when enabled, else SMTP fallback)
 export const sendOTP = async (req, res) => {
   try {
-    const { country_code, phone_number } = req.body;
+    const { country_code, phone_number, email } = req.body;
+    const emailTrimmed = email != null ? String(email).trim().toLowerCase() : '';
+
+    // ——— Forgot password / Forgot PIN (SMTP only) ———
+    if (emailTrimmed) {
+      const customer = await prisma.customer.findFirst({
+        where: { email: { equals: emailTrimmed, mode: 'insensitive' } },
+      });
+      if (!customer) {
+        return res.status(404).json({
+          success: false,
+          message: 'No account found for this email. Please sign up first.',
+        });
+      }
+      try {
+        await deliverRecoveryEmailOtp({
+          email: emailTrimmed,
+          purpose: 'reset your account access',
+          title: 'Account verification',
+          subject: 'Your account verification code',
+        });
+      } catch (err) {
+        console.error('[OTP] Failed to send recovery email OTP:', err);
+        return res.status(err.status || 502).json({
+          success: false,
+          message:
+            err.message ||
+            'Failed to send verification email. Please try again.',
+          code: err.code,
+        });
+      }
+      return res.status(200).json({
+        success: true,
+        message: 'OTP sent successfully',
+        data: {
+          email: emailTrimmed,
+          expiresIn: 300,
+          channel: 'smtp',
+          purpose: 'recovery',
+        },
+      });
+    }
 
     if (!country_code || !phone_number) {
       return res.status(400).json({
         success: false,
-        message: 'Country code and phone number are required'
+        message: 'Country code and phone number, or email, are required',
       });
     }
 
-    // Normalize phone number - MUST match signup/login format exactly
-    const normalizedCountryCode = String(country_code || '').replace(/^\+/, '').trim();
-    // Remove all non-digit characters to match signup/login format
-    const normalizedPhoneNumber = String(phone_number || '').trim().replace(/\D/g, '');
-    
+    const normalizedCountryCode = String(country_code || '')
+      .replace(/^\+/, '')
+      .trim();
+    const normalizedPhoneNumber = String(phone_number || '')
+      .trim()
+      .replace(/\D/g, '');
+
     if (!normalizedCountryCode || !normalizedPhoneNumber) {
       return res.status(400).json({
         success: false,
-        message: 'Country code and phone number are required'
+        message: 'Country code and phone number are required',
       });
     }
-    
+
     const fullPhone = `${normalizedCountryCode}${normalizedPhoneNumber}`;
 
-    // Check if customer exists
     const customer = await prisma.customer.findFirst({
-      where: { phone: fullPhone }
+      where: { phone: fullPhone },
     });
 
     if (!customer) {
       return res.status(404).json({
         success: false,
-        message: 'Phone number not registered. Please sign up first.'
+        message: 'Phone number not registered. Please sign up first.',
       });
     }
 
-    // In development, return static OTP
-    // In production, you would send actual OTP via SMS/WhatsApp
-    console.log(`[OTP] Static OTP for ${fullPhone}: ${STATIC_OTP}`);
+    const deliveryEmail = String(customer.email || '').trim().toLowerCase();
+    if (!deliveryEmail || !deliveryEmail.includes('@') || deliveryEmail.endsWith('@remittance.pending')) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'No email on this account to send a verification code. Add an email and try again.',
+      });
+    }
+
+    try {
+      // Signup phone OTP — LiveEx when enabled (separate from forgot-password SMTP)
+      if (isDigitalOnboardingEnabled()) {
+        await liveexSendOtp({
+          email: deliveryEmail,
+          title: 'Verify your phone',
+          subject: 'Your remittance phone verification code',
+        });
+      } else {
+        if (!isSmtpConfigured()) {
+          return res.status(503).json({
+            success: false,
+            message:
+              'OTP email delivery is not configured. Enable LiveEx or set SMTP credentials.',
+            code: 'OTP_DELIVERY_UNAVAILABLE',
+          });
+        }
+        const code = generateOtpCode(6);
+        saveOtp('phone', fullPhone, code);
+        await sendVerificationOtpEmail(deliveryEmail, code, {
+          purpose: 'verify your phone number',
+          title: 'Phone verification code',
+          subject: 'Your phone verification code',
+        });
+      }
+    } catch (err) {
+      console.error(`[OTP] Failed to send phone OTP for ${fullPhone}:`, err);
+      return res.status(err.status || 502).json({
+        success: false,
+        message:
+          err.message || 'Failed to send verification code. Please try again.',
+        code: err.code,
+      });
+    }
+
+    console.log(
+      `[OTP] Sent phone verification code for ${fullPhone} via ${
+        isDigitalOnboardingEnabled() ? 'LiveEx' : 'SMTP'
+      } to ${deliveryEmail}`
+    );
 
     return res.status(200).json({
       success: true,
       message: 'OTP sent successfully',
       data: {
-        otp: STATIC_OTP, // Only in development - remove in production
         phone: fullPhone,
-        expiresIn: 300 // 5 minutes
-      }
+        emailHint: deliveryEmail.replace(/(.{2}).+(@.+)/, '$1***$2'),
+        expiresIn: 300,
+        channel: isDigitalOnboardingEnabled() ? 'liveex' : 'smtp',
+      },
     });
   } catch (error) {
     console.error('Error sending OTP:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to send OTP. Please try again.',
-      error: error.message
+      error: error.message,
     });
   }
 };
 
 // Verify OTP
+// - email → Forgot password / Forgot PIN (SMTP store)
+// - phone → Signup (LiveEx when enabled, else SMTP store)
 export const verifyOTP = async (req, res) => {
   try {
-    const { country_code, phone_number, otp } = req.body;
+    const { country_code, phone_number, otp, email } = req.body;
+    const emailTrimmed = email != null ? String(email).trim().toLowerCase() : '';
+
+    // ——— Forgot password / Forgot PIN ———
+    if (emailTrimmed) {
+      if (!otp) {
+        return res.status(400).json({
+          success: false,
+          message: 'Email and OTP are required',
+        });
+      }
+      const customer = await prisma.customer.findFirst({
+        where: { email: { equals: emailTrimmed, mode: 'insensitive' } },
+      });
+      if (!customer) {
+        return res.status(404).json({
+          success: false,
+          message: 'User not found. Please sign up first.',
+        });
+      }
+      try {
+        await verifyRecoveryEmailOtp(emailTrimmed, otp);
+      } catch (err) {
+        return res.status(err.status || 400).json({
+          success: false,
+          message: err.message || 'Invalid OTP. Please enter the correct OTP.',
+        });
+      }
+      return res.status(200).json({
+        success: true,
+        message: 'OTP verified successfully',
+        data: customerAuthPayload(customer),
+      });
+    }
 
     if (!country_code || !phone_number || !otp) {
       return res.status(400).json({
         success: false,
-        message: 'Country code, phone number, and OTP are required'
+        message: 'Country code, phone number, and OTP are required',
       });
     }
 
-    // Normalize phone number - MUST match signup/login format exactly
-    const normalizedCountryCode = String(country_code || '').replace(/^\+/, '').trim();
-    // Remove all non-digit characters to match signup/login format
-    const normalizedPhoneNumber = String(phone_number || '').trim().replace(/\D/g, '');
-    
+    const normalizedCountryCode = String(country_code || '')
+      .replace(/^\+/, '')
+      .trim();
+    const normalizedPhoneNumber = String(phone_number || '')
+      .trim()
+      .replace(/\D/g, '');
+
     if (!normalizedCountryCode || !normalizedPhoneNumber) {
       return res.status(400).json({
         success: false,
-        message: 'Country code, phone number, and OTP are required'
+        message: 'Country code, phone number, and OTP are required',
       });
     }
-    
+
     const fullPhone = `${normalizedCountryCode}${normalizedPhoneNumber}`;
 
-    // Find customer
     const customer = await prisma.customer.findFirst({
-      where: { phone: fullPhone }
+      where: { phone: fullPhone },
     });
 
     if (!customer) {
       return res.status(404).json({
         success: false,
-        message: 'User not found. Please sign up first.'
+        message: 'User not found. Please sign up first.',
       });
     }
 
-    // Verify OTP (static OTP for development)
-    if (otp !== STATIC_OTP) {
-      return res.status(400).json({
+    const deliveryEmail = String(customer.email || '').trim().toLowerCase();
+    try {
+      if (isDigitalOnboardingEnabled()) {
+        if (!deliveryEmail || deliveryEmail.endsWith('@remittance.pending')) {
+          return res.status(400).json({
+            success: false,
+            message: 'No email on this account to verify the code.',
+          });
+        }
+        await liveexVerifyOtp({
+          email: deliveryEmail,
+          otp: String(otp).trim(),
+        });
+      } else if (!consumeOtp('phone', fullPhone, otp)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid OTP. Please enter the correct OTP.',
+        });
+      }
+    } catch (err) {
+      return res.status(err.status || 400).json({
         success: false,
-        message: 'Invalid OTP. Please enter the correct OTP.'
+        message: err.message || 'Invalid OTP. Please enter the correct OTP.',
       });
     }
 
-    // Generate JWT token
-    const token = jwt.sign(
-      {
-        id: customer.id,
-        email: customer.email,
-        username: customer.username,
-        phone: customer.phone,
-        type: 'customer'
-      },
-      process.env.JWT_SECRET || 'your-secret-key-change-in-production',
-      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
-    );
-
-    // Split the stored full phone (e.g. +251912345678) into country_code +
-    // phone_number so the mobile app's Redux/AsyncStorage layer (which
-    // expects snake_case + separated parts) always receives complete data.
     let derivedCountryCode = '';
     let derivedPhoneNumber = customer.phone || '';
     if (customer.phone && customer.phone.startsWith('+')) {
@@ -537,7 +747,6 @@ export const verifyOTP = async (req, res) => {
         derivedPhoneNumber = match[2].replace(/\D/g, '').trim() || match[2];
       }
     } else {
-      // fallback: rebuild from the request inputs we already validated
       derivedCountryCode = `+${normalizedCountryCode}`;
       derivedPhoneNumber = normalizedPhoneNumber;
     }
@@ -550,7 +759,10 @@ export const verifyOTP = async (req, res) => {
         body: customer.hasPin
           ? 'You are signed in to OneZaPay.'
           : 'Continue registration to finish setting up your account.',
-        data: { type: 'security', screen: customer.hasPin ? 'home' : 'register' },
+        data: {
+          type: 'security',
+          screen: customer.hasPin ? 'home' : 'register',
+        },
       },
       io
     );
@@ -559,7 +771,7 @@ export const verifyOTP = async (req, res) => {
       success: true,
       message: 'OTP verified successfully',
       data: {
-        access_token: token,
+        access_token: signCustomerAccessToken(customer),
         user: {
           id: customer.id,
           email: customer.email || null,
@@ -573,19 +785,23 @@ export const verifyOTP = async (req, res) => {
           is_verified: customer.status === 'approved',
           has_pin: !!customer.hasPin,
           profile_image: null,
-          registration_complete: !!(customer.firstName && customer.lastName && customer.hasPin),
+          registration_complete: !!(
+            customer.firstName &&
+            customer.lastName &&
+            customer.hasPin
+          ),
           created_at: customer.createdAt,
           updated_at: customer.updatedAt,
-          type: 'customer'
-        }
-      }
+          type: 'customer',
+        },
+      },
     });
   } catch (error) {
     console.error('Error verifying OTP:', error);
     res.status(500).json({
       success: false,
       message: 'OTP verification failed. Please try again.',
-      error: error.message
+      error: error.message,
     });
   }
 };
@@ -1998,6 +2214,14 @@ export const getProfile = async (req, res) => {
         unitApt: true,
         zipCode: true,
         address: true,
+        city: true,
+        region: true,
+        subRegion: true,
+        country: true,
+        dateOfBirth: true,
+        occupation: true,
+        sourceOfFund: true,
+        nationality: true,
         status: true,
         hasPin: true,
         password: true,
@@ -2044,6 +2268,17 @@ export const getProfile = async (req, res) => {
       has_pin: !!customer.hasPin,
       has_password: !!(customer.password && String(customer.password).trim()),
       profile_image: profileImageFromDb,
+      address: customer.address || null,
+      unit_apt: customer.unitApt || null,
+      city: customer.city || null,
+      region: customer.region || null,
+      sub_region: customer.subRegion || null,
+      zip_code: customer.zipCode || null,
+      country: customer.country || null,
+      date_of_birth: customer.dateOfBirth || null,
+      occupation: customer.occupation || null,
+      source_of_fund: customer.sourceOfFund || null,
+      nationality: customer.nationality || null,
       created_at: customer.createdAt,
       updated_at: customer.updatedAt,
       type: 'customer',

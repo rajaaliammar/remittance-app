@@ -88,6 +88,7 @@ function mapNominatimToSuggestion(row) {
     city,
     state,
     zipcode,
+    county: addr.county || '',
     entries: 0,
     source: 'nominatim',
   };
@@ -109,9 +110,10 @@ function mapPhotonToSuggestion(feature) {
   const item = {
     street_line,
     secondary: '',
-    city: p.city || p.county || '',
+    city: p.city || '',
     state: normalizeState(p.state || ''),
     zipcode: p.postcode || '',
+    county: p.county || '',
     entries: 0,
     source: 'nominatim',
   };
@@ -163,6 +165,7 @@ export function validatedFromSuggestion(suggestion) {
   const city = String(suggestion.city || '').trim();
   const state = normalizeState(suggestion.state || '');
   const zipcode = String(suggestion.zipcode || '').trim();
+  const county = String(suggestion.county || '').trim();
   const delivery_line_1 = [street, secondary].filter(Boolean).join(' ').trim() || street;
   const last_line = [city, state, zipcode].filter(Boolean).join(', ');
   return {
@@ -174,6 +177,7 @@ export function validatedFromSuggestion(suggestion) {
     city,
     state,
     zipcode,
+    county,
     plus4_code: '',
     formatted: [delivery_line_1, last_line].filter(Boolean).join(', '),
     source: suggestion.source || 'nominatim',

@@ -354,6 +354,7 @@ export const validate = async (req, res) => {
     }
     const first = candidates[0];
     const components = first.components || {};
+    const metadata = first.metadata || {};
     const validated = {
       delivery_line_1: first.delivery_line_1 || '',
       delivery_line_2: first.delivery_line_2 || '',
@@ -363,6 +364,7 @@ export const validate = async (req, res) => {
       city: components.city_name || cityStr,
       state: components.state_abbreviation || stateStr,
       zipcode: components.zipcode || zipStr,
+      county: metadata.county_name || components.county_name || '',
       plus4_code: components.plus4_code || '',
       formatted: [
         first.delivery_line_1,
