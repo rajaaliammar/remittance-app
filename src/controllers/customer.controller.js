@@ -30,13 +30,15 @@ import {
   resolveLastIpForApi,
 } from '../utils/resolveCustomerLastIp.js';
 import { tryApprovePendingCustomerFromCachedStatus } from '../utils/amlAutoApprove.js';
-import {
-  isDigitalOnboardingEnabled,
-  liveexSendOtp,
-  liveexVerifyOtp,
-} from '../services/liveexDigitalOnboarding.service.js';
 import { generateOtpCode, saveOtp, consumeOtp, hasOtp } from '../utils/otpStore.js';
 import { isSmtpConfigured, sendVerificationOtpEmail } from '../utils/email.js';
+
+/** Phone signup OTP is fixed (email OTP still uses LiveEx / SMTP). */
+const STATIC_PHONE_OTP = String(process.env.PHONE_OTP_STATIC_CODE || '1234').trim();
+
+function isStaticPhoneOtp(otp) {
+  return String(otp || '').trim() === STATIC_PHONE_OTP;
+}
 
 function signCustomerAccessToken(customer) {
   return jwt.sign(
@@ -577,45 +579,9 @@ export const sendOTP = async (req, res) => {
       });
     }
 
-    try {
-      // Signup phone OTP — LiveEx when enabled (separate from forgot-password SMTP)
-      if (isDigitalOnboardingEnabled()) {
-        await liveexSendOtp({
-          email: deliveryEmail,
-          title: 'Verify your phone',
-          subject: 'Your remittance phone verification code',
-        });
-      } else {
-        if (!isSmtpConfigured()) {
-          return res.status(503).json({
-            success: false,
-            message:
-              'OTP email delivery is not configured. Enable LiveEx or set SMTP credentials.',
-            code: 'OTP_DELIVERY_UNAVAILABLE',
-          });
-        }
-        const code = generateOtpCode(6);
-        saveOtp('phone', fullPhone, code);
-        await sendVerificationOtpEmail(deliveryEmail, code, {
-          purpose: 'verify your phone number',
-          title: 'Phone verification code',
-          subject: 'Your phone verification code',
-        });
-      }
-    } catch (err) {
-      console.error(`[OTP] Failed to send phone OTP for ${fullPhone}:`, err);
-      return res.status(err.status || 502).json({
-        success: false,
-        message:
-          err.message || 'Failed to send verification code. Please try again.',
-        code: err.code,
-      });
-    }
-
+    // Phone verify uses a static code (email OTP remains LiveEx / SMTP).
     console.log(
-      `[OTP] Sent phone verification code for ${fullPhone} via ${
-        isDigitalOnboardingEnabled() ? 'LiveEx' : 'SMTP'
-      } to ${deliveryEmail}`
+      `[OTP] Phone verification ready for ${fullPhone} (static code) email=${deliveryEmail}`
     );
 
     return res.status(200).json({
@@ -625,7 +591,7 @@ export const sendOTP = async (req, res) => {
         phone: fullPhone,
         emailHint: deliveryEmail.replace(/(.{2}).+(@.+)/, '$1***$2'),
         expiresIn: 300,
-        channel: isDigitalOnboardingEnabled() ? 'liveex' : 'smtp',
+        channel: 'static',
       },
     });
   } catch (error) {
@@ -712,29 +678,11 @@ export const verifyOTP = async (req, res) => {
       });
     }
 
-    const deliveryEmail = String(customer.email || '').trim().toLowerCase();
-    try {
-      if (isDigitalOnboardingEnabled()) {
-        if (!deliveryEmail || deliveryEmail.endsWith('@remittance.pending')) {
-          return res.status(400).json({
-            success: false,
-            message: 'No email on this account to verify the code.',
-          });
-        }
-        await liveexVerifyOtp({
-          email: deliveryEmail,
-          otp: String(otp).trim(),
-        });
-      } else if (!consumeOtp('phone', fullPhone, otp)) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid OTP. Please enter the correct OTP.',
-        });
-      }
-    } catch (err) {
-      return res.status(err.status || 400).json({
+    // Phone OTP is static (email recovery / LiveEx email OTP unchanged).
+    if (!isStaticPhoneOtp(otp)) {
+      return res.status(400).json({
         success: false,
-        message: err.message || 'Invalid OTP. Please enter the correct OTP.',
+        message: 'Invalid OTP. Please enter the correct OTP.',
       });
     }
 
@@ -2730,12 +2678,21 @@ export const saveKycDetails = async (req, res) => {
       const fields = [];
       Object.entries(body.enhancedKYC).forEach(([key, value]) => {
         if (value != null && value !== '') {
+          const strVal =
+            typeof value === 'string' ? value : JSON.stringify(value);
+          const looksLikeUpload =
+            typeof strVal === 'string' &&
+            (strVal.startsWith('http://') ||
+              strVal.startsWith('https://') ||
+              strVal.startsWith('/') ||
+              strVal.includes('/uploads/'));
           fields.push({
             id: `field_${key}_${Date.now()}`,
             fieldName: key,
             inputType: 'text',
-            value: typeof value === 'string' ? value : JSON.stringify(value),
-            fileUrl: typeof value === 'string' && value.startsWith('http') ? value : null,
+            value: strVal,
+            // Relative /uploads paths (Capacitor / local API) must keep fileUrl too
+            fileUrl: looksLikeUpload ? strVal : null,
             status: 'pending',
             verifiedAt: null,
             verifiedBy: null,

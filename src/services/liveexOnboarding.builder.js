@@ -78,9 +78,10 @@ export function resolveLiveexDocType(rawIdType, rawDocTypeName) {
   }
 
   if (
-    /driver|licence|license/.test(combined) ||
+    /driver|licence|license|lisence/.test(combined) ||
     idHint === 'license' ||
-    idHint === 'licence'
+    idHint === 'licence' ||
+    idHint === 'lisence'
   ) {
     return {
       docTypeId: LIVEEX_DOC_TYPE.DRIVERS_LICENCE,
@@ -487,6 +488,16 @@ export async function buildSubmitKycPayload(customer, { rowIdGid, paths, idType 
     dig.docTypeName,
   );
 
+  // Drivers Licence (7) + Citizenship Card (4) need namE_Back — same as state ID path.
+  if (resolved.requiresBack && !nameBack) {
+    const err = new Error(
+      `LiveEx submit-kyc blocked: namE_Back is required for ${resolved.docTypeName}`,
+    );
+    err.status = 400;
+    err.code = 'LIVEEX_ID_BACK_REQUIRED';
+    throw err;
+  }
+
   // Exact casing from LiveEx Digital Onboarding API docs (silent-fail binder).
   return {
     roW_ID_GID: resolvedRowId,
@@ -495,6 +506,7 @@ export async function buildSubmitKycPayload(customer, { rowIdGid, paths, idType 
     iD_TYPE: resolved.docTypeId,
     namE_Selfie: nameSelfie,
     namE_Front: nameFront,
+    // Always send the key (passport may be ""); DL / state ID must be real savedFilePath
     namE_Back: nameBack,
     qrCodeDetail: '',
     // Aliases for older / alternate binders (harmless extras)
