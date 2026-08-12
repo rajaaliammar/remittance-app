@@ -10,30 +10,48 @@ import path from 'path';
 import { toAmlDate } from './amlProvider.service.js';
 import { pickKycFieldFromCustomer } from '../utils/amlKycData.js';
 import { collectIdentityFilesForOnboarding } from './liveexOnboarding.files.js';
+import {
+  ISO2_TO_LIVEEX_COUNTRY_ID,
+  normalizeCountryCode,
+  resolveJurisdictionIssueCountry,
+  resolveJurisdictionIssueState,
+  splitPhoneForLiveex,
+} from './amlFieldCodes.js';
 
 function asString(value, fallback = '') {
   if (value == null) return fallback;
   return String(value).trim() || fallback;
 }
 
-function digitsOnly(value) {
-  return asString(value).replace(/\D/g, '');
-}
-
-/** When app stores country name/ISO instead of LiveEx lookup id. */
+/**
+ * LiveEx Digital Onboarding /api/lookups/countries ids.
+ * CRITICAL: 308 = Cape Verde (NOT United States). United States = 251.
+ */
 const COUNTRY_NAME_TO_ID = {
   ethiopia: '346',
   et: '346',
   eth: '346',
   canada: '307',
   ca: '307',
-  'united states': '308',
-  'united states of america': '308',
-  usa: '308',
-  us: '308',
-  pakistan: '364',
-  pk: '364',
+  'united states': '251',
+  'united states of america': '251',
+  america: '251',
+  usa: '251',
+  us: '251',
+  pakistan: '253',
+  pk: '253',
+  'cape verde': '308',
+  'cabo verde': '308',
+  cv: '308',
+  'united kingdom': '252',
+  uk: '252',
+  gb: '252',
+  mexico: '503',
+  mx: '503',
 };
+
+/** Default to United States — app collects U.S. residential addresses. */
+const DEFAULT_LIVEEX_COUNTRY_ID = '251';
 
 /** LiveEx temp-document / submit-kyc docTypeId values (docs). */
 export const LIVEEX_DOC_TYPE = {
@@ -123,13 +141,32 @@ export function resolveLiveexDocType(rawIdType, rawDocTypeName) {
   };
 }
 
-function resolveCountryLookupId(value, fallback = '346') {
+function resolveCountryLookupId(value, fallback = DEFAULT_LIVEEX_COUNTRY_ID) {
   const raw = asString(value);
   if (!raw) return fallback;
-  if (/^\d+$/.test(raw)) return raw;
-  const key = raw.toLowerCase();
+
+  if (/^\d+$/.test(raw)) {
+    // Legacy bug wrote United States as 308 (Cape Verde). When resolving with the
+    // US default fallback, treat stale 308 as United States (251). Explicit CV
+    // callers should pass name "Cape Verde" / ISO CV (mapped before digits).
+    if (raw === '308' && String(fallback) === DEFAULT_LIVEEX_COUNTRY_ID) {
+      return DEFAULT_LIVEEX_COUNTRY_ID;
+    }
+    return raw;
+  }
+
+  const key = raw.toLowerCase().replace(/\s+/g, ' ').trim();
   if (COUNTRY_NAME_TO_ID[key]) return COUNTRY_NAME_TO_ID[key];
-  if (COUNTRY_NAME_TO_ID[key.slice(0, 2)]) return COUNTRY_NAME_TO_ID[key.slice(0, 2)];
+
+  const iso = normalizeCountryCode(raw, 'US');
+  if (iso && ISO2_TO_LIVEEX_COUNTRY_ID[iso]) {
+    return ISO2_TO_LIVEEX_COUNTRY_ID[iso];
+  }
+
+  if (key.length === 2 && COUNTRY_NAME_TO_ID[key]) {
+    return COUNTRY_NAME_TO_ID[key];
+  }
+
   return fallback;
 }
 
@@ -231,7 +268,6 @@ export function buildSaveWebsitePayload(customer, { rowIdGid, sendUrl } = {}) {
   }
 
   const email = asString(customer.email);
-  const phone = digitsOnly(customer.phone || customer.telephone).slice(-15);
   const dobRaw = customer.dateOfBirth;
   const dateOfBirth = dobRaw
     ? /^\d{2}\/\d{2}\/\d{4}$/.test(String(dobRaw))
@@ -239,18 +275,68 @@ export function buildSaveWebsitePayload(customer, { rowIdGid, sendUrl } = {}) {
       : toAmlDate(dobRaw)
     : '';
 
+  // Prefer address country over stale liveex_country_id (legacy US→308 bug).
   const country = resolveCountryLookupId(
-    pickKycFieldFromCustomer(customer, 'liveex_country_id', 'country_id') ||
-      customer.country ||
+    customer.country ||
+      pickKycFieldFromCustomer(customer, 'liveex_country_id', 'country_id') ||
       customer.residentCountry ||
       customer.nationality,
-    '346',
+    DEFAULT_LIVEEX_COUNTRY_ID,
   );
   const nationality = resolveCountryLookupId(
-    pickKycFieldFromCustomer(customer, 'liveex_nationality_id', 'nationality_id') ||
-      customer.nationality ||
+    customer.nationality ||
+      pickKycFieldFromCustomer(customer, 'liveex_nationality_id', 'nationality_id') ||
       country,
     country,
+  );
+
+  const residentialIso = normalizeCountryCode(
+    customer.country || customer.residentCountry || 'US',
+    'US',
+  );
+  const citizenshipIso = normalizeCountryCode(
+    customer.nationality || residentialIso,
+    residentialIso,
+  );
+
+  const idTypeHint =
+    pickKycFieldFromCustomer(
+      customer,
+      'id_type',
+      'idType',
+      'document_type',
+      'docTypeName',
+    ) || '';
+  const docTypeNameHint =
+    pickKycFieldFromCustomer(customer, 'docTypeName', 'document_type_name') ||
+    idTypeHint;
+
+  const issueIso = resolveJurisdictionIssueCountry({
+    idType: idTypeHint,
+    docTypeName: docTypeNameHint,
+    residentialCountry: residentialIso,
+    citizenship: citizenshipIso,
+    explicitIssueCountry:
+      pickKycFieldFromCustomer(
+        customer,
+        'jurisdiction_country',
+        'issue_country',
+        'id_issue_country',
+      ) || null,
+  });
+  const region =
+    asString(customer.region) ||
+    asString(pickKycFieldFromCustomer(customer, 'region', 'state')) ||
+    '';
+  const jurisdictionState = resolveJurisdictionIssueState(issueIso, region);
+  // LiveEx countries lookup id (same list as nationality / residence / jurisdiction)
+  const jurisdictionCountryId =
+    ISO2_TO_LIVEEX_COUNTRY_ID[issueIso] ||
+    resolveCountryLookupId(issueIso, country);
+
+  const { mobileNumberCode, nationalNumber } = splitPhoneForLiveex(
+    customer.phone || customer.telephone,
+    residentialIso,
   );
 
   const jobTitle = resolveNumericLookup(
@@ -279,19 +365,23 @@ export function buildSaveWebsitePayload(customer, { rowIdGid, sendUrl } = {}) {
     customer.occupation ||
     'Self Employed';
 
+  const homeAddress = asString(customer.address, 'Not Provided');
+
   return {
     rowId,
     firstName: asString(customer.firstName, 'Unknown'),
     lastName: asString(customer.lastName, 'Unknown'),
     dateOfBirth,
     email,
-    phone: phone || '0000000000',
-    homeAddress: asString(customer.address, 'Not Provided'),
+    // National number only — dial code goes in mobileNumberCode (swagger CustomerSaveWebRequest)
+    phone: nationalNumber,
+    mobileNumberCode,
+    homeAddress,
     city: asString(customer.city, 'Unknown'),
-    province: asString(customer.region, 'NA'),
+    province: asString(region, 'NA'),
     postalCode: asString(customer.zipCode, '00000'),
-    country: asString(country, '346'),
-    nationality: asString(nationality, '346'),
+    country: asString(country, DEFAULT_LIVEEX_COUNTRY_ID),
+    nationality: asString(nationality, DEFAULT_LIVEEX_COUNTRY_ID),
     jobTitle: asString(jobTitle, '454'),
     employerName: asString(employerName, 'Self Employed'),
     sourceOfIncome: asString(sourceOfIncome, '1'),
@@ -299,7 +389,14 @@ export function buildSaveWebsitePayload(customer, { rowIdGid, sendUrl } = {}) {
     unitApt: asString(customer.unitApt),
     middleName: asString(customer.middleName),
     gender: asString(customer.gender),
-    residentCountry: asString(country, '346'),
+    residentialAddress: homeAddress,
+    residentialCountry: asString(country, DEFAULT_LIVEEX_COUNTRY_ID),
+    // Required: same /api/lookups/countries ids as nationality / residence
+    jurisdictionOfIssueCountry: asString(jurisdictionCountryId, country),
+    jurisdictionOfState: asString(jurisdictionState, region || 'NA'),
+    pepDeclaration: '2', // NO
+    thirdPartyTransaction: '2', // NO
+    userIp: asString(customer.lastIpAddress),
     // Required by LiveEx for "Re-request" emails after unreadable / mismatched ID
     sendUrl: asString(sendUrl, buildSendUrl(rowId)),
   };

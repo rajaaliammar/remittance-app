@@ -8,6 +8,8 @@ import {
   resolveOccupationCode,
   resolveProfessionId,
   resolveSourceOfFund,
+  resolveJurisdictionIssueCountry,
+  resolveJurisdictionIssueState,
   formatAmlPhone,
 } from './amlFieldCodes.js';
 
@@ -30,14 +32,52 @@ export function buildNaturalCustomerSavePayload(customer) {
     new Date(todayDate.getFullYear() + 10, todayDate.getMonth(), todayDate.getDate()),
   );
 
+  const idTypeHint =
+    pickKycFieldFromCustomer(
+      customer,
+      'id_type',
+      'idType',
+      'document_type',
+      'docTypeName',
+    ) || '';
+  const docTypeNameHint =
+    pickKycFieldFromCustomer(customer, 'docTypeName', 'document_type_name') ||
+    idTypeHint;
+
+  // Residential country: address country first. Ignore residentCountry when it is
+  // a status word like "Resident" (registration historically mis-stored that).
   const countryCode = normalizeCountryCode(
-    customer.country || customer.nationality || customer.residentCountry || 'US',
+    customer.country ||
+      pickKycFieldFromCustomer(customer, 'country', 'liveex_country_id', 'country_id') ||
+      customer.residentCountry ||
+      'US',
+    'US',
   );
+
   const citizenship = normalizeCountryCode(
     customer.nationality ||
-      pickKycFieldFromCustomer(customer, 'citizenship', 'nationality') ||
+      pickKycFieldFromCustomer(customer, 'citizenship', 'nationality', 'liveex_nationality_id') ||
       countryCode,
+    countryCode,
   );
+
+  const issueCountry = resolveJurisdictionIssueCountry({
+    idType: idTypeHint,
+    docTypeName: docTypeNameHint,
+    residentialCountry: countryCode,
+    citizenship,
+    explicitIssueCountry:
+      pickKycFieldFromCustomer(
+        customer,
+        'jurisdiction_country',
+        'issue_country',
+        'id_issue_country',
+      ) || null,
+  });
+
+  const region =
+    customer.region || pickKycFieldFromCustomer(customer, 'region', 'state') || '';
+  const jurisdictionState = resolveJurisdictionIssueState(issueCountry, region);
 
   const identifier =
     pickKycFieldFromCustomer(
@@ -48,6 +88,8 @@ export function buildNaturalCustomerSavePayload(customer) {
       'passportNumber',
       'passport',
       'documentNumber',
+      'id_number',
+      'identifier_number',
     ) || clientNumber;
 
   const streetAddress =
@@ -59,13 +101,13 @@ export function buildNaturalCustomerSavePayload(customer) {
     pickKycFieldFromCustomer(customer, 'zipCode', 'zip_code') ||
     '00000';
   const city = customer.city || pickKycFieldFromCustomer(customer, 'city') || 'Unknown';
-  const region =
-    customer.region || pickKycFieldFromCustomer(customer, 'region', 'state') || 'NA';
   const profession =
     customer.occupation ||
     pickKycFieldFromCustomer(customer, 'occupation', 'profession') ||
     'Other';
   const phoneRaw = customer.phone || customer.telephone || '0000000000';
+  // AML TMS requires CountryCode-Number (e.g. 1-4654564564). Digital Onboarding uses
+  // mobileNumberCode + national phone separately — do not mix those formats here.
   const phone = formatAmlPhone(phoneRaw, countryCode);
   const ssn =
     pickKycFieldFromCustomer(customer, 'ssn') ||
@@ -84,8 +126,16 @@ export function buildNaturalCustomerSavePayload(customer) {
     csCountryOfDualNationality: citizenship,
     csCountry: countryCode,
     csNIdentifier: resolveIdentifierType(
-      { id_type: pickKycFieldFromCustomer(customer, 'id_type') },
+      {
+        id_type: idTypeHint,
+        docTypeName: docTypeNameHint,
+        ssn: pickKycFieldFromCustomer(customer, 'ssn'),
+        government_id: pickKycFieldFromCustomer(customer, 'government_id'),
+        passportNumber: pickKycFieldFromCustomer(customer, 'passportNumber', 'passport'),
+        cnic: pickKycFieldFromCustomer(customer, 'cnic'),
+      },
       countryCode,
+      issueCountry,
     ),
     csIdentifierNumber: String(identifier).replace(/-/g, ''),
     csIdentifierOtherDescription: 'N/A',
@@ -98,19 +148,24 @@ export function buildNaturalCustomerSavePayload(customer) {
     csResidentialAddress: streetAddress,
     csResidentialCountry: countryCode,
     csCity: city,
-    csProvinceOrState: region,
+    csProvinceOrState: region || 'NA',
     csPostalOrZipCode: postalCode,
     csMailingAddress: streetAddress,
     csMailingCity: city,
-    csMailingState: region,
+    csMailingState: region || 'NA',
     csMailingPoBox: postalCode,
     csClientLocation: resolveClientLocation(countryCode),
     csIssueDate: issue,
     csExpiryDate: expiry,
-    csJurisdictionIssueCountry: citizenship,
-    csJurisdictionIssueState: region,
+    // AML expects ISO country code (US/CA/…), NOT Digital Onboarding lookup ids (251/307)
+    csJurisdictionIssueCountry: issueCountry,
+    csJurisdictionIssueState: jurisdictionState || region || 'NA',
     csOccupation: resolveOccupationCode(profession),
-    csProfession: resolveProfessionId(profession, customer.sourceOfFund),
+    csProfession: resolveProfessionId(
+      profession,
+      customer.sourceOfFund ||
+        pickKycFieldFromCustomer(customer, 'source_of_fund', 'sourceOfFund'),
+    ),
     csIndustryType: AML_DEFAULTS.industryType,
     csBusinessPurpose: AML_DEFAULTS.businessPurpose,
     csBusinessPurposeOther: 'International remittance',
@@ -125,7 +180,7 @@ export function buildNaturalCustomerSavePayload(customer) {
     csEmployerLegalName: employerName,
     csEmployerAddress: streetAddress,
     csEmployerCity: city,
-    csEmployerProvinceOrState: region,
+    csEmployerProvinceOrState: region || 'NA',
     csEmployerPostalOrZipCode: postalCode,
     csEmployerCountry: countryCode,
     csEmployerBusinessTelephoneNumber: phone,

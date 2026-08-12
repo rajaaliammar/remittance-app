@@ -31,6 +31,34 @@ Implements LiveExShield CIP across **backend**, **mobile app**, and **portal**.
 
 Do **not** send `1`. Selfie / ID front / ID back must use `/api/customer/temp-document` only — not `/api/customer/documents`.
 
+### Country lookup ids (Digital Onboarding)
+
+From `GET /api/lookups/countries` — do **not** invent ids:
+
+| Country | id |
+|---------|-----|
+| United States | **251** |
+| Canada | 307 |
+| Cape Verde | 308 |
+| Pakistan | 253 |
+| Ethiopia | 346 |
+
+A previous bug mapped United States → `308` (Cape Verde). Residential defaults must use **251**.
+
+### save-website fields that were missing
+
+Swagger `CustomerSaveWebRequest` requires these for the TMS form to fill:
+
+| Field | Purpose |
+|-------|---------|
+| `jurisdictionOfIssueCountry` | LiveEx countries lookup id (same as nationality/residence) |
+| `jurisdictionOfState` | Issue state/province (e.g. `CO`) |
+| `mobileNumberCode` | Dial code only (`1`) — **not** glued into `phone` |
+| `phone` | National number only (`4654564564`) |
+| `residentialCountry` | (not `residentCountry`) |
+
+**AML `/api/Customers/save` is a different contract:** phone must be `CountryCode-Number` (e.g. `1-4654564564`), and `csJurisdictionIssueCountry` must be an ISO code (`US`), not a Digital Onboarding lookup id (`251`).
+
 ## Env
 
 ```env
