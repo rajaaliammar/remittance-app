@@ -26,7 +26,7 @@ import {
   resolveDocTypeFromCustomer,
   uploadIdentityTempDocuments,
 } from '../services/liveexOnboarding.builder.js';
-import { maybeAutoApproveCustomerFromLiveex } from '../utils/amlAutoApprove.js';
+import { maybeAutoApproveCustomerFromLiveex, tryApprovePendingCustomerFromCachedStatus } from '../utils/amlAutoApprove.js';
 
 function sendError(res, err) {
   const status = err.status || 500;
@@ -547,14 +547,25 @@ export const liveexOnboardLookup = async (req, res) => {
 /** Portal: cached Digital Onboarding snapshot from kycData */
 export const getCustomerLiveexCached = async (req, res) => {
   try {
-    const customer = await loadCustomerById(req.params.id);
+    let customer = await loadCustomerById(req.params.id);
     if (!customer) {
       return res.status(404).json({ success: false, message: 'Customer not found' });
+    }
+    // statusLabel "Completed" / docs+face match → approve so app stops showing incomplete
+    try {
+      const approval = await tryApprovePendingCustomerFromCachedStatus(customer, req);
+      if (approval?.kycData != null || approval?.newlyApproved) {
+        customer = await loadCustomerById(req.params.id);
+      }
+    } catch (err) {
+      console.warn('[LiveEx-Cached] auto-approve skipped:', err.message);
     }
     return res.json({
       success: true,
       digitalOnboarding: extractDigitalOnboarding(customer),
       status: getDigitalOnboardingPublicStatus(),
+      customerStatus: customer?.status ?? null,
+      customerApproved: String(customer?.status || '').toLowerCase() === 'approved',
     });
   } catch (err) {
     return sendError(res, err);

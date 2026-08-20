@@ -219,12 +219,135 @@ export async function finalizeRegistrationAmlApproval(customerId, req) {
   };
 }
 
+/** Normalize LiveEx face score (0–1 or 0–100) to percent. */
+export function toFaceMatchPercent(value) {
+  if (value == null) return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return n <= 1 ? n * 100 : n;
+}
+
+/** Collect status strings LiveEx may put on different fields. */
+function collectLiveexStatusLabels(digitalOnboarding) {
+  const dig = digitalOnboarding || {};
+  return [
+    dig.statusLabel,
+    dig.onBoardStatus,
+    dig.status,
+    dig.lastDetailsResponse?.status,
+    dig.lastDetailsResponse?.onBoardStatus,
+    dig.lastSubmitKycResponse?.status,
+    dig.lastSubmitKycResponse?.onBoardStatus,
+  ]
+    .map((v) => String(v || '').toLowerCase().trim())
+    .filter(Boolean);
+}
+
 /**
- * LiveEx Digital Onboarding auto-approve (same pipeline ids as TMS):
- * - statusId >= 1 and not blocked 7/8/9 → approve
- * - onBoardStatusId >= 1 and not 4 (Rejected) → approve
- * - Face/ID already submitted (submittedAt / clientNumber) → approve
- * - onBoardStatusId 4 (Rejected) or blocked → leave pending
+ * Docs uploaded + face matched (not failed) → treat as approved.
+ * Covers payloads like /liveex/cached with nameFront/nameSelfie + faceMatchScore.
+ */
+export function hasSuccessfulFaceMatchAndDocs(digitalOnboarding) {
+  if (!digitalOnboarding || typeof digitalOnboarding !== 'object') return false;
+  if (digitalOnboarding.faceMatchFailed === true) return false;
+
+  const onBoardStatusId = Number(digitalOnboarding.onBoardStatusId);
+  if (Number.isFinite(onBoardStatusId) && onBoardStatusId === 4) return false;
+
+  const labels = collectLiveexStatusLabels(digitalOnboarding);
+  if (labels.some((l) => /\b(blocked|disabled|reject(ed)?)\b/.test(l))) {
+    return false;
+  }
+
+  const paths =
+    digitalOnboarding.paths && typeof digitalOnboarding.paths === 'object'
+      ? digitalOnboarding.paths
+      : {};
+  const hasFront = !!(
+    paths.nameFront ||
+    paths.idFront ||
+    paths.front ||
+    paths['id-front']
+  );
+  const hasSelfie = !!(
+    paths.nameSelfie ||
+    paths.selfie ||
+    paths['id-selfie']
+  );
+  const temp = digitalOnboarding.lastTempDocumentResponses || {};
+  const hasTempDocs = !!(temp.id_front || temp.selfie || temp.id_back);
+  const hasDocs =
+    (hasFront && hasSelfie) ||
+    hasTempDocs ||
+    !!digitalOnboarding.identityUploadedAt ||
+    !!digitalOnboarding.submittedAt ||
+    !!digitalOnboarding.lastSubmitKycResponse;
+
+  if (!hasDocs) return false;
+
+  const scores = [
+    digitalOnboarding.faceMatchScore,
+    digitalOnboarding.faceMatchConfidence,
+    digitalOnboarding.matchConfidence,
+    temp.selfie?.score,
+    temp.selfie?.confidence,
+  ];
+  for (const s of scores) {
+    const pct = toFaceMatchPercent(s);
+    if (pct != null && pct > 0) return true;
+  }
+
+  // LiveEx pipeline marked Completed / submitted without faceMatchFailed
+  if (labels.some((l) => /\bcompleted\b/.test(l))) return true;
+  return !!(
+    digitalOnboarding.submittedAt ||
+    digitalOnboarding.lastSubmitKycResponse
+  );
+}
+
+/** True when any KYC entry is approved or has LiveEx docs + face match / Completed. */
+export function kycDataSatisfiesVerification(kycData) {
+  let raw = kycData;
+  if (typeof raw === 'string') {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return false;
+    }
+  }
+  const docs = raw ? (Array.isArray(raw) ? raw : [raw]) : [];
+  return docs.some((doc) => {
+    if (!doc || typeof doc !== 'object') return false;
+    const status = String(doc.status || '').toLowerCase();
+    if (status === 'approved') return true;
+    if (status === 'rejected') return false;
+    const dig = doc.digitalOnboarding || (doc.paths ? doc : null);
+    return shouldAutoApproveFromLiveex(dig);
+  });
+}
+
+function kycDocsNeedExplicitApprovedStatus(kycData) {
+  let raw = kycData;
+  if (typeof raw === 'string') {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return true;
+    }
+  }
+  const docs = raw ? (Array.isArray(raw) ? raw : [raw]) : [];
+  return !docs.some(
+    (doc) => doc && String(doc.status || '').toLowerCase() === 'approved',
+  );
+}
+
+/**
+ * LiveEx Digital Onboarding auto-approve:
+ * - statusLabel / details status "Completed" → approve (even if onBoardStatus is still "Profile in Review")
+ * - statusId >= 1 and not blocked → approve
+ * - onBoardStatusId >= 1 and not 4 → approve
+ * - Docs uploaded + face matched → approve
+ * - Face/ID submitted → approve
  */
 export function shouldAutoApproveFromLiveex(digitalOnboarding) {
   if (!digitalOnboarding || typeof digitalOnboarding !== 'object') return false;
@@ -237,22 +360,24 @@ export function shouldAutoApproveFromLiveex(digitalOnboarding) {
   if (hasOnBoard && onBoardStatusId === 4) return false;
   if (hasStatus && AML_BLOCKED_STATUS_IDS.has(statusId)) return false;
 
-  const label = String(
-    digitalOnboarding.onBoardStatus || digitalOnboarding.statusLabel || '',
-  ).toLowerCase();
-  if (/\b(blocked|disabled|reject(ed)?)\b/.test(label)) return false;
+  const labels = collectLiveexStatusLabels(digitalOnboarding);
+  if (labels.some((l) => /\b(blocked|disabled|reject(ed)?)\b/.test(l))) {
+    return false;
+  }
 
+  // IMPORTANT: check statusLabel / nested status "Completed", not only onBoardStatus
+  // (onBoardStatus can stay "Profile in Review" while pipeline status is Completed)
   if (
-    /\b(completed|onboard success|onboarded|cleared|approved|confirmed)\b/.test(label)
+    labels.some((l) =>
+      /\b(completed|onboard success|onboarded|cleared|approved|confirmed)\b/.test(l),
+    )
   ) {
     return true;
   }
 
-  // Same rule as TMS customer status: id >= 1 means CIP is in the system
   if (hasStatus && statusId >= 1) return true;
   if (hasOnBoard && onBoardStatusId >= 1) return true;
 
-  // Face/ID submit succeeded even if LiveEx omitted numeric status ids
   if (
     digitalOnboarding.submittedAt ||
     digitalOnboarding.clientNumber ||
@@ -260,6 +385,8 @@ export function shouldAutoApproveFromLiveex(digitalOnboarding) {
   ) {
     return true;
   }
+
+  if (hasSuccessfulFaceMatchAndDocs(digitalOnboarding)) return true;
 
   return false;
 }
@@ -301,9 +428,13 @@ export async function maybeAutoApproveCustomerFromLiveex(
 
   if (!alreadyApproved) {
     console.log(
-      `[LiveEx] Auto-approved customer ${customer.id} (onBoardStatusId=${digitalOnboarding?.onBoardStatusId}, statusId=${digitalOnboarding?.statusId}, by=${approvedBy})`,
+      `[LiveEx] Auto-approved customer ${customer.id} (onBoardStatusId=${digitalOnboarding?.onBoardStatusId}, statusId=${digitalOnboarding?.statusId}, statusLabel=${digitalOnboarding?.statusLabel}, by=${approvedBy})`,
     );
     emitCustomersUpdated(req);
+  } else if (kycDocsNeedExplicitApprovedStatus(kycData)) {
+    console.log(
+      `[LiveEx] Backfilled KYC approved docs for customer ${customer.id} (by=${approvedBy})`,
+    );
   }
 
   return {
@@ -315,19 +446,13 @@ export async function maybeAutoApproveCustomerFromLiveex(
 }
 
 /**
- * Approve a still-pending customer from cached LiveEx / AML status in kycData
- * (no remote call). Used when portal loads customers that already qualify.
+ * Approve from cached LiveEx / AML status in kycData (no remote call).
+ * Also backfills KYC doc status when docs+face match / Completed qualify,
+ * even if customer.status is already approved.
  */
 export async function tryApprovePendingCustomerFromCachedStatus(customer, req = null) {
   if (!customer?.id) {
     return { customerApproved: false, newlyApproved: false };
-  }
-  if (String(customer.status || '').toLowerCase() === 'approved') {
-    return {
-      customerApproved: true,
-      newlyApproved: false,
-      customerStatus: customer.status,
-    };
   }
   if (String(customer.status || '').toLowerCase() === 'rejected') {
     return {
@@ -347,10 +472,17 @@ export async function tryApprovePendingCustomerFromCachedStatus(customer, req = 
     for (let i = entries.length - 1; i >= 0; i -= 1) {
       if (entries[i]?.digitalOnboarding) return entries[i].digitalOnboarding;
     }
+    // cached liveex payload sometimes stored as the root object
+    if (raw && typeof raw === 'object' && !Array.isArray(raw) && raw.paths) {
+      return raw;
+    }
     return null;
   })();
 
-  if (shouldAutoApproveFromLiveex(dig)) {
+  const alreadyApproved = String(customer.status || '').toLowerCase() === 'approved';
+  const needsDocFix = kycDocsNeedExplicitApprovedStatus(customer.kycData);
+
+  if (shouldAutoApproveFromLiveex(dig) && (!alreadyApproved || needsDocFix)) {
     return maybeAutoApproveCustomerFromLiveex(
       customer,
       customer.kycData,
@@ -381,7 +513,7 @@ export async function tryApprovePendingCustomerFromCachedStatus(customer, req = 
     return null;
   })();
 
-  if (shouldAutoApproveFromAmlStatus(amlMapped)) {
+  if (shouldAutoApproveFromAmlStatus(amlMapped) && (!alreadyApproved || needsDocFix)) {
     return maybeAutoApproveCustomerFromAml(
       customer,
       customer.kycData,
@@ -389,6 +521,14 @@ export async function tryApprovePendingCustomerFromCachedStatus(customer, req = 
       req,
       'aml-cache-auto',
     );
+  }
+
+  if (alreadyApproved) {
+    return {
+      customerApproved: true,
+      newlyApproved: false,
+      customerStatus: customer.status,
+    };
   }
 
   return {

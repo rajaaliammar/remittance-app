@@ -28,6 +28,10 @@ import {
   creditCustomerWallet,
   lockCustomerWallet,
 } from '../utils/walletLock.js';
+import {
+  kycDataSatisfiesVerification,
+  tryApprovePendingCustomerFromCachedStatus,
+} from '../utils/amlAutoApprove.js';
 
 const US_STATE_NAME_TO_CODE = {
   ALABAMA: 'AL',
@@ -156,24 +160,35 @@ export const createRemittanceTransaction = async (req, res) => {
       });
     }
 
-    // Allow transaction when at least one KYC document is approved; block only when none is approved
-    const customer = await prisma.customer.findUnique({
+    // Allow when KYC approved OR LiveEx Completed / docs+face match
+    let customer = await prisma.customer.findUnique({
       where: { id: customerId },
-      select: { kycData: true },
+      select: {
+        id: true,
+        status: true,
+        approvedAt: true,
+        approvedBy: true,
+        kycData: true,
+      },
     });
-    let hasApprovedKYC = false;
-    if (customer?.kycData) {
-      let raw = customer.kycData;
-      if (typeof raw === 'string') {
-        try {
-          raw = JSON.parse(raw);
-        } catch {
-          raw = null;
-        }
+    try {
+      const approval = await tryApprovePendingCustomerFromCachedStatus(customer, req);
+      if (approval?.kycData != null || approval?.newlyApproved) {
+        customer = await prisma.customer.findUnique({
+          where: { id: customerId },
+          select: {
+            id: true,
+            status: true,
+            approvedAt: true,
+            approvedBy: true,
+            kycData: true,
+          },
+        });
       }
-      const docs = raw ? (Array.isArray(raw) ? raw : [raw]) : [];
-      hasApprovedKYC = docs.some((doc) => (doc.status || '').toLowerCase() === 'approved');
+    } catch (err) {
+      console.warn('[Remittance] cache auto-approve skipped:', err.message);
     }
+    const hasApprovedKYC = kycDataSatisfiesVerification(customer?.kycData);
     if (!hasApprovedKYC) {
       return res.status(403).json({
         success: false,

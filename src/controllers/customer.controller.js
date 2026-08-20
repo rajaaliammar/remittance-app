@@ -2268,7 +2268,7 @@ export const getVerifications = async (req, res) => {
       });
     }
 
-    const customer = await prisma.customer.findUnique({
+    let customer = await prisma.customer.findUnique({
       where: { id: customerId },
       select: {
         id: true,
@@ -2276,6 +2276,9 @@ export const getVerifications = async (req, res) => {
         lastName: true,
         phone: true,
         email: true,
+        status: true,
+        approvedAt: true,
+        approvedBy: true,
         kycData: true,
         kycRequestedAt: true,
         kycRequestedBy: true,
@@ -2305,6 +2308,36 @@ export const getVerifications = async (req, res) => {
         success: false,
         message: 'Customer not found',
       });
+    }
+
+    // Backfill: LiveEx Completed / docs+face match → mark customer + KYC approved
+    try {
+      const approval = await tryApprovePendingCustomerFromCachedStatus(customer, req);
+      if (approval?.kycData != null || approval?.newlyApproved || approval?.customerApproved) {
+        const refreshed = await prisma.customer.findUnique({
+          where: { id: customerId },
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+            email: true,
+            status: true,
+            approvedAt: true,
+            approvedBy: true,
+            kycData: true,
+            kycRequestedAt: true,
+            kycRequestedBy: true,
+            kycRequestedFormId: true,
+            kycRequestedFormName: true,
+            kycRequestedMessage: true,
+            kycRequestedFields: true,
+          },
+        });
+        if (refreshed) customer = refreshed;
+      }
+    } catch (err) {
+      console.warn('[getVerifications] cache auto-approve skipped:', err.message);
     }
 
     let raw = customer.kycData;
