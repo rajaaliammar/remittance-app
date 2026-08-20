@@ -1,6 +1,8 @@
 import prisma from '../utils/prisma.js';
+import { fetchDistinctRegions } from '../utils/countriesExternalApi.js';
+import { continentLabelFromCountriesDev } from '../utils/countryMeta.js';
 
-// Standard list of continents as fallback
+// Standard list of continents as fallback (matches admin continent names)
 const STANDARD_CONTINENTS = [
   'Africa',
   'Antarctica',
@@ -9,27 +11,24 @@ const STANDARD_CONTINENTS = [
   'North America',
   'South America',
   'Oceania',
-  'Australia'
+  'Australia',
 ];
 
-// Fetch continents from REST Countries API
+// Fetch continent-style labels from countries.dev (maps region/subregion → admin names)
 const fetchContinentsFromAPI = async () => {
   try {
-    const response = await fetch('https://restcountries.com/v3.1/all?fields=continents');
-    const countries = await response.json();
-    
-    // Extract unique continents
-    const continentSet = new Set();
-    countries.forEach(country => {
-      if (country.continents && Array.isArray(country.continents)) {
-        country.continents.forEach(continent => continentSet.add(continent));
-      }
-    });
-    
+    const regions = await fetchDistinctRegions();
+    if (!regions.length) return STANDARD_CONTINENTS;
+
+    const continentSet = new Set(STANDARD_CONTINENTS);
+    for (const region of regions) {
+      const label = continentLabelFromCountriesDev({ region });
+      if (label) continentSet.add(label);
+    }
+
     return Array.from(continentSet).sort();
   } catch (error) {
     console.error('Error fetching continents from API:', error);
-    // Return standard list as fallback
     return STANDARD_CONTINENTS;
   }
 };

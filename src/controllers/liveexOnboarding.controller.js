@@ -162,21 +162,78 @@ export const liveexOnboardAttachRow = async (req, res) => {
   }
 };
 
+function pickLiveexRowId(raw) {
+  if (!raw || typeof raw !== 'object') return '';
+  const nested = raw.data && typeof raw.data === 'object' ? raw.data : {};
+  const result = raw.result && typeof raw.result === 'object' ? raw.result : {};
+  return String(
+    raw.rowIdGid ||
+      raw.rowId ||
+      raw.ROW_ID_GID ||
+      raw.roW_ID_GID ||
+      nested.rowIdGid ||
+      nested.rowId ||
+      result.rowIdGid ||
+      result.rowId ||
+      '',
+  ).trim();
+}
+
+/**
+ * LiveEx applicant id must come from /api/otp/verify (rowIdGid).
+ * Do not invent UUIDs or treat OTP send as creating an applicant.
+ */
+async function ensureLiveexApplicant(customer, email, preferredRowId) {
+  let rowIdGid = String(
+    preferredRowId || extractDigitalOnboarding(customer)?.rowIdGid || '',
+  ).trim();
+  if (rowIdGid) {
+    const dig = extractDigitalOnboarding(customer);
+    if (dig?.rowIdGid !== rowIdGid || dig?.email !== email) {
+      customer = await prisma.customer.update({
+        where: { id: customer.id },
+        data: {
+          kycData: mergeDigitalOnboarding(customer, {
+            rowIdGid,
+            email,
+            attachedAt: new Date().toISOString(),
+          }),
+        },
+      });
+    }
+    return { customer, rowIdGid };
+  }
+
+  const err = new Error(
+    'Verify your email with the LiveEx OTP before continuing profile completion.',
+  );
+  err.status = 400;
+  err.code = 'LIVEEX_OTP_REQUIRED';
+  throw err;
+}
+
 async function runFullDigitalOnboarding(customer, options = {}, req = null) {
-  let dig = extractDigitalOnboarding(customer);
-  let rowIdGid = String(options.rowIdGid || dig?.rowIdGid || '').trim();
-  if (!rowIdGid) {
+  const email = String(options.email || extractDigitalOnboarding(customer)?.email || customer.email || '')
+    .trim()
+    .toLowerCase();
+
+  if (!email || !email.includes('@') || email.endsWith('@remittance.pending')) {
     const err = new Error(
-      'LiveEx email verification is required before face/ID checks. Complete email OTP during registration.',
+      'A real email is required to create the LiveEx customer profile.',
     );
     err.status = 400;
-    err.code = 'LIVEEX_ROW_ID_REQUIRED';
+    err.code = 'LIVEEX_EMAIL_REQUIRED';
     throw err;
   }
 
-  const email = String(options.email || dig?.email || customer.email || '')
-    .trim()
-    .toLowerCase();
+  let ensured = await ensureLiveexApplicant(
+    customer,
+    email,
+    options.rowIdGid || options.rowId,
+  );
+  customer = ensured.customer;
+  let rowIdGid = ensured.rowIdGid;
+  let dig = extractDigitalOnboarding(customer);
 
   if (!dig?.rowIdGid) {
     customer = await prisma.customer.update({
@@ -199,6 +256,8 @@ async function runFullDigitalOnboarding(customer, options = {}, req = null) {
     sendUrl: options.sendUrl,
   });
   const saveRaw = await liveexSaveWebsite(savePayload);
+  const savedRow = pickLiveexRowId(saveRaw);
+  if (savedRow) rowIdGid = savedRow;
   customer = await prisma.customer.update({
     where: { id: customer.id },
     data: {

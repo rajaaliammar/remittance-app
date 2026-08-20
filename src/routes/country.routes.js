@@ -14,7 +14,7 @@ import { authenticateToken } from '../middleware/auth.js';
 const router = express.Router();
 
 // Public routes for suggestions and country details (for better UX)
-// Country details: https://restcountries.com (free). Use ?iso2=US for correct dial codes (e.g. +1 for US).
+// Country details: https://countries.dev (free, no key). Use ?iso2=US for correct dial codes (e.g. +1 for US).
 router.get('/suggestions', getCountrySuggestions);
 router.get('/details', getCountryDetails);
 router.get('/all', getAllCountriesFromAPI); // Get all countries from third-party API

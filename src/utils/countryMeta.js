@@ -54,13 +54,76 @@ export function dialCodeFromRestCountriesIdd(idd) {
   return normalizePlusPrefix(root);
 }
 
-/** Map REST Countries v3.1 country object → normalized API payload */
 /** Normalize user/admin-entered phone codes (fix "++1", "++44", etc.) */
 export function normalizeStoredPhoneCode(input) {
   if (input == null || input === '') return '';
   return normalizePlusPrefix(String(input).trim().replace(/\s+/g, ''));
 }
 
+/** Dial code from countries.dev `callingCodes` (e.g. ["92"] → "+92"). */
+export function dialCodeFromCallingCodes(callingCodes) {
+  const first = Array.isArray(callingCodes) ? callingCodes[0] : '';
+  if (first == null || first === '') return '';
+  return normalizePlusPrefix(String(first));
+}
+
+/**
+ * Map countries.dev region/subregion → admin continent labels used in this app
+ * (Asia, Europe, Africa, North America, South America, Oceania, Antarctica, Australia).
+ */
+export function continentLabelFromCountriesDev(country) {
+  const region = String(country?.region || '').trim();
+  const subregion = String(country?.subregion || '').trim();
+
+  if (region === 'Americas') {
+    return subregion === 'South America' ? 'South America' : 'North America';
+  }
+  if (region === 'Oceania') return 'Oceania';
+  if (region === 'Antarctic' || region === 'Antarctic Ocean' || region === 'Polar') {
+    return 'Antarctica';
+  }
+  return region;
+}
+
+/** Whether a countries.dev record belongs to the selected admin continent. */
+export function countryMatchesContinent(country, continentName) {
+  if (!continentName) return true;
+
+  const want = String(continentName).trim().toLowerCase();
+  if (!want) return true;
+
+  const label = continentLabelFromCountriesDev(country).toLowerCase();
+  if (label === want) return true;
+
+  // Admin DB may use "Australia" while the API uses region "Oceania"
+  if (want === 'australia' && String(country?.region || '').toLowerCase() === 'oceania') {
+    return true;
+  }
+
+  return false;
+}
+
+/** Map countries.dev country object → normalized API payload */
+export function shapeCountryFromCountriesDev(country, fallbackName = '') {
+  const currencies = Array.isArray(country?.currencies) ? country.currencies : [];
+  const currency = currencies[0] || {};
+  const phoneCode = dialCodeFromCallingCodes(country?.callingCodes);
+
+  return {
+    name: country?.name || fallbackName,
+    iso2: country?.alpha2Code || '',
+    iso3: country?.alpha3Code || '',
+    phoneCode,
+    currencyName: currency.name || '',
+    currencyCode: currency.code || '',
+    currencySymbol: currency.symbol || '',
+    currencyNativeSymbol: currency.symbol || '',
+    flag: country?.flags?.png || country?.flags?.svg || '',
+    continent: continentLabelFromCountriesDev(country),
+  };
+}
+
+/** @deprecated REST Countries v3.1 is deprecated; kept for any legacy callers */
 export function shapeCountryFromRestCountry(country, fallbackName = '') {
   const currencies = country.currencies || {};
   const currencyCode = Object.keys(currencies)[0] || '';

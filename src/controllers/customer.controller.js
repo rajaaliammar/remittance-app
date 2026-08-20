@@ -33,7 +33,7 @@ import { tryApprovePendingCustomerFromCachedStatus } from '../utils/amlAutoAppro
 import { generateOtpCode, saveOtp, consumeOtp, hasOtp } from '../utils/otpStore.js';
 import { isSmtpConfigured, sendVerificationOtpEmail } from '../utils/email.js';
 
-/** Phone signup OTP is fixed (email OTP still uses LiveEx / SMTP). */
+/** Phone signup OTP is a fixed code. Email recovery OTP uses SMTP only (not LiveEx). */
 const STATIC_PHONE_OTP = String(process.env.PHONE_OTP_STATIC_CODE || '1234').trim();
 
 function isStaticPhoneOtp(otp) {
@@ -75,7 +75,7 @@ function customerAuthPayload(customer, extra = {}) {
 
 /**
  * Forgot password / Forgot PIN only — our SMTP (never LiveEx).
- * LiveEx OTP remains on its own signup/onboarding endpoints.
+ * Signup uses phone + static OTP; identity (name/DOB/email) is saved via complete-profile.
  */
 async function deliverRecoveryEmailOtp({ email, purpose, title, subject }) {
   const emailTrimmed = String(email || '').trim().toLowerCase();
@@ -224,8 +224,8 @@ const applyExtendedProfileRawUpdate = async (customerId, extendedData = {}) => {
   await prisma.$executeRawUnsafe(query, ...values);
 };
 
-// Signup - Customer registration (phone number + password)
-// Creates a pending customer record; password is required for new signups.
+// Signup step 1: phone only (email/name come later on complete-profile).
+// Creates a pending customer with a placeholder email until identity is submitted.
 export const signup = async (req, res) => {
   try {
     await ensureCustomerExtendedProfileColumns();
@@ -357,7 +357,9 @@ export const signup = async (req, res) => {
           id: existingByPhone.id,
           phone: existingByPhone.phone,
           status: existingByPhone.status,
-          alreadyRegistered: true
+          alreadyRegistered: true,
+          next_step: 'verify_otp',
+          signup_flow: 'phone_otp_identity',
         }
       });
     }
@@ -399,7 +401,9 @@ export const signup = async (req, res) => {
           id: existingByEmail.id,
           phone: existingByEmail.phone,
           status: existingByEmail.status,
-          alreadyRegistered: true
+          alreadyRegistered: true,
+          next_step: 'verify_otp',
+          signup_flow: 'phone_otp_identity',
         }
       });
     }
@@ -472,10 +476,12 @@ export const signup = async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      message: 'Registration started. Please verify your phone number with OTP.',
+      message: 'Registration started. Verify your phone with OTP, then add your name, date of birth, and email.',
       data: {
         ...customer,
-        alreadyRegistered: false
+        alreadyRegistered: false,
+        next_step: 'verify_otp',
+        signup_flow: 'phone_otp_identity',
       }
     });
   } catch (error) {
@@ -489,8 +495,8 @@ export const signup = async (req, res) => {
 };
 
 // Send OTP
-// - email body  → Forgot password / Forgot PIN only (our SMTP, never LiveEx)
-// - phone body  → Signup phone verify (LiveEx when enabled, else SMTP fallback)
+// - email body  → Forgot password / Forgot PIN only (SMTP, never LiveEx)
+// - phone body  → Signup step 2 (static code; no LiveEx, email not required)
 export const sendOTP = async (req, res) => {
   try {
     const { country_code, phone_number, email } = req.body;
@@ -571,27 +577,24 @@ export const sendOTP = async (req, res) => {
     }
 
     const deliveryEmail = String(customer.email || '').trim().toLowerCase();
-    if (!deliveryEmail || !deliveryEmail.includes('@') || deliveryEmail.endsWith('@remittance.pending')) {
-      return res.status(400).json({
-        success: false,
-        message:
-          'No email on this account to send a verification code. Add an email and try again.',
-      });
-    }
+    const hasRealEmail =
+      deliveryEmail.includes('@') && !deliveryEmail.endsWith('@remittance.pending');
 
-    // Phone verify uses a static code (email OTP remains LiveEx / SMTP).
-    console.log(
-      `[OTP] Phone verification ready for ${fullPhone} (static code) email=${deliveryEmail}`
-    );
+    // Phone signup OTP is static — do not require email and do not call LiveEx.
+    console.log(`[OTP] Phone verification ready for ${fullPhone} (static code)`);
 
     return res.status(200).json({
       success: true,
       message: 'OTP sent successfully',
       data: {
         phone: fullPhone,
-        emailHint: deliveryEmail.replace(/(.{2}).+(@.+)/, '$1***$2'),
+        ...(hasRealEmail
+          ? { emailHint: deliveryEmail.replace(/(.{2}).+(@.+)/, '$1***$2') }
+          : {}),
         expiresIn: 300,
         channel: 'static',
+        next_step: 'verify_otp',
+        signup_flow: 'phone_otp_identity',
       },
     });
   } catch (error) {
@@ -606,7 +609,7 @@ export const sendOTP = async (req, res) => {
 
 // Verify OTP
 // - email → Forgot password / Forgot PIN (SMTP store)
-// - phone → Signup (LiveEx when enabled, else SMTP store)
+// - phone → Signup step 2 (static code; next app screen is name / DOB / email)
 export const verifyOTP = async (req, res) => {
   try {
     const { country_code, phone_number, otp, email } = req.body;
@@ -678,7 +681,7 @@ export const verifyOTP = async (req, res) => {
       });
     }
 
-    // Phone OTP is static (email recovery / LiveEx email OTP unchanged).
+    // Phone OTP is static. Identity (name, DOB, email) is collected after this.
     if (!isStaticPhoneOtp(otp)) {
       return res.status(400).json({
         success: false,
@@ -742,6 +745,8 @@ export const verifyOTP = async (req, res) => {
           updated_at: customer.updatedAt,
           type: 'customer',
         },
+        next_step: 'identity',
+        signup_flow: 'phone_otp_identity',
       },
     });
   } catch (error) {
@@ -1208,7 +1213,9 @@ export const completeProfile = async (req, res) => {
     if ((last_name !== undefined && last_name !== '') || (lastName !== undefined && lastName !== '')) {
       updateData.lastName = String(last_name ?? lastName ?? '');
     }
-    if (email !== undefined && email !== '') updateData.email = String(email);
+    if (email !== undefined && email !== '') {
+      updateData.email = String(email).trim().toLowerCase();
+    }
     if (telephone !== undefined && telephone !== '') updateData.telephone = String(telephone);
     if ((unit_apt !== undefined && unit_apt !== '') || (unitApt !== undefined && unitApt !== '')) {
       updateData.unitApt = String(unit_apt ?? unitApt ?? '');
