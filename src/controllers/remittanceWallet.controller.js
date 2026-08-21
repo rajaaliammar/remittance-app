@@ -469,14 +469,21 @@ export const verifyWalletAccount = async (req, res) => {
         'Hassan Raza',
         'Ayesha Malik',
         'Usman Sheikh',
+        'Abdiwahab',
       ];
-      const idx =
-        parseInt(normalized.slice(-4) || '0', 10) % demoNames.length;
+      const demoOverrides = {
+        '45645645': 'Ahmed Khan',
+        '11223344': 'Abdiwahab',
+      };
+      const digits = String(normalized || '').replace(/\D/g, '');
+      const mockName =
+        demoOverrides[digits] ||
+        demoNames[parseInt(digits.slice(-4) || '0', 10) % demoNames.length];
       return res.json({
         success: true,
         verified: true,
         source: 'mock',
-        accountHolderName: demoNames[idx],
+        accountHolderName: mockName,
         accountNumber: normalized,
         walletId: wallet.id,
         walletName: wallet.name,

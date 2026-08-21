@@ -500,13 +500,21 @@ export const verifyBankAccount = async (req, res) => {
         'Hassan Raza',
         'Ayesha Malik',
         'Usman Sheikh',
+        'Abdiwahab',
       ];
-      const idx = parseInt(normalized.replace(/\D/g, '').slice(-4) || '0', 10) % demoNames.length;
+      const demoOverrides = {
+        '45645645': 'Ahmed Khan',
+        '11223344': 'Abdiwahab',
+      };
+      const digits = normalized.replace(/\D/g, '');
+      const mockName =
+        demoOverrides[digits] ||
+        demoNames[parseInt(digits.slice(-4) || '0', 10) % demoNames.length];
       return res.json({
         success: true,
         verified: true,
         source: 'mock',
-        accountHolderName: demoNames[idx],
+        accountHolderName: mockName,
         accountNumber: normalized,
         bankId: bank.id,
         bankName: bank.name,
