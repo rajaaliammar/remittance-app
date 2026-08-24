@@ -81,4 +81,11 @@ AML client number defaults to `CS_{customerId}` (stored in `kycData.amlClientNum
 
 ## Transaction gate (mobile app)
 
-Every `POST /api/remittance-transactions` runs **live AML status** in orchestration before debiting balance. Only customers with AML status **Onboarded** (statusId `6`) can send money. Others receive HTTP `403` with codes such as `AML_NOT_ONBOARDED`, `AML_COMPLIANCE_PENDING`, or `AML_CUSTOMER_BLOCKED`. Disable with `AML_TRANSACTION_GATE_ENABLED=false` (not recommended in production).
+Every `POST /api/remittance-transactions` runs the AML gate in orchestration before debiting balance (`src/utils/amlCustomerGate.js`):
+
+1. **Live AML** — if statusId `>= 1` and not blocked (`7`/`8`/`9`) → allow.
+2. **Blocked** — statusId `7`/`8`/`9` → always deny (`AML_CUSTOMER_BLOCKED`).
+3. **Fallback** — if the provider is unreachable, returns an error, or is still pending (e.g. iSTR Pending), allow when the customer is already **locally cleared**: `customer.status=approved` and/or KYC/LiveEx verification (same rule as the app “Verified · full limits” badge). Cached AML status in `kycData` is also accepted when statusId `>= 1`.
+4. Otherwise → deny with `AML_NOT_ONBOARDED` / `AML_VERIFICATION_UNAVAILABLE`.
+
+Disable the gate with `AML_TRANSACTION_GATE_ENABLED=false` (not recommended in production).
