@@ -30,6 +30,11 @@ import {
 } from '../controllers/customer.controller.js';
 import { calculateCharge } from '../controllers/charge.controller.js';
 import {
+  listSavedRecipients,
+  createSavedRecipient,
+  deleteSavedRecipient,
+} from '../controllers/savedRecipient.controller.js';
+import {
   customerAmlOnboard,
   customerAmlUploadDocuments,
   customerAmlSync,
@@ -152,6 +157,14 @@ router.get('/limits/consumed', authenticateCustomer, getConsumedLimits);
 // Recent recipients from completed sends (Send Again on home)
 router.get('/frequently-paid', authenticateCustomer, getFrequentlyPaid);
 router.get('/frequently-paid/', authenticateCustomer, getFrequentlyPaid);
+
+// Saved recipients (explicit save + list for Recipients screen)
+router.get('/recipients', authenticateCustomer, listSavedRecipients);
+router.get('/recipients/', authenticateCustomer, listSavedRecipients);
+router.post('/recipients', authenticateCustomer, createSavedRecipient);
+router.post('/recipients/', authenticateCustomer, createSavedRecipient);
+router.delete('/recipients/:id', authenticateCustomer, deleteSavedRecipient);
+router.delete('/recipients/:id/', authenticateCustomer, deleteSavedRecipient);
 
 // Profile screen stats (sent count, recipients, savings)
 router.get('/profile-stats', authenticateCustomer, getProfileStats);

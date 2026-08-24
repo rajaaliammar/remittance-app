@@ -32,6 +32,7 @@ import {
   kycDataSatisfiesVerification,
   tryApprovePendingCustomerFromCachedStatus,
 } from '../utils/amlAutoApprove.js';
+import { upsertSavedRecipientFromSend } from './savedRecipient.controller.js';
 
 const US_STATE_NAME_TO_CODE = {
   ALABAMA: 'AL',
@@ -531,6 +532,16 @@ export const createRemittanceTransaction = async (req, res) => {
       '| background=',
       queueResult.mode,
     );
+
+    // Persist recipient for Recipients list / Send again
+    void upsertSavedRecipientFromSend(customerId, {
+      ...(enrichedRecipientInfo && typeof enrichedRecipientInfo === 'object'
+        ? enrichedRecipientInfo
+        : {}),
+      transferType: transaction.transferType || enrichedRecipientInfo?.transferType,
+      bankId: enrichedRecipientInfo?.bankId,
+      walletId: enrichedRecipientInfo?.walletId,
+    });
 
     res.status(201).json({
       success: true,

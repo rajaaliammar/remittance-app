@@ -363,6 +363,7 @@ model Customer {
   remittanceTransactions RemittanceTransaction[]
   notifications   CustomerNotification[]
   paymentMethods  PaymentMethod[]
+  savedRecipients SavedRecipient[]
 
   @@index([status])
   @@index([createdAt])
@@ -370,6 +371,29 @@ model Customer {
   @@index([phone])
   @@index([telephone])
   @@map("customers")
+}
+
+model SavedRecipient {
+  id               String   @id @default(cuid())
+  customerId       String
+  customer         Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  name             String
+  accountNumber    String
+  phone            String?
+  countryId        String?
+  countryCode      String?
+  countryName      String?
+  bankId           String?
+  walletId         String?
+  serviceProvider  String?
+  transferType     String   @default("bank") // bank | wallet | cash
+  lastSentAt       DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([customerId])
+  @@index([customerId, updatedAt])
+  @@map("saved_recipients")
 }
 
 model PaymentMethod {
