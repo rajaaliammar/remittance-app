@@ -5,6 +5,12 @@ import {
   amlGetCustomerStatus,
   mapAmlCustomerStatus,
 } from '../services/amlProvider.service.js';
+import {
+  parseOnBoardStatusId,
+  shouldAutoApproveFromLiveex,
+  shouldRejectFromLiveex,
+  isOnboardPendingReview,
+} from './liveexOnboardStatus.js';
 
 /** Blocked / rejected AML statuses — never auto-approve. */
 export const AML_BLOCKED_STATUS_IDS = new Set([7, 8, 9]);
@@ -39,6 +45,38 @@ export function shouldAutoApproveFromAmlStatus(mapped) {
 
   // statusId 0 / missing / error-only responses stay pending
   return false;
+}
+
+/** Mark KYC document entries rejected when LiveEx onboard decision is Rejected. */
+export function rejectKycDocumentsInData(kycData) {
+  const now = new Date().toISOString();
+  const markDoc = (doc) => {
+    if (!doc || typeof doc !== 'object') return doc;
+    return {
+      ...doc,
+      status: 'rejected',
+      rejectedAt: doc.rejectedAt || now,
+      rejectedBy: doc.rejectedBy || 'liveex-auto',
+    };
+  };
+
+  if (Array.isArray(kycData)) return kycData.map(markDoc);
+  if (kycData && typeof kycData === 'object') return markDoc(kycData);
+  return kycData;
+}
+
+/** Reset KYC docs to pending when LiveEx onboard is Pending / In Review. */
+export function setKycDocumentsPendingInData(kycData) {
+  const markDoc = (doc) => {
+    if (!doc || typeof doc !== 'object') return doc;
+    const status = String(doc.status || '').toLowerCase();
+    if (status === 'rejected') return doc;
+    return { ...doc, status: 'pending' };
+  };
+
+  if (Array.isArray(kycData)) return kycData.map(markDoc);
+  if (kycData && typeof kycData === 'object') return markDoc(kycData);
+  return kycData;
 }
 
 /** Mark KYC document entries approved so remittance KYC checks pass. */
@@ -243,69 +281,7 @@ function collectLiveexStatusLabels(digitalOnboarding) {
     .filter(Boolean);
 }
 
-/**
- * Docs uploaded + face matched (not failed) → treat as approved.
- * Covers payloads like /liveex/cached with nameFront/nameSelfie + faceMatchScore.
- */
-export function hasSuccessfulFaceMatchAndDocs(digitalOnboarding) {
-  if (!digitalOnboarding || typeof digitalOnboarding !== 'object') return false;
-  if (digitalOnboarding.faceMatchFailed === true) return false;
-
-  const onBoardStatusId = Number(digitalOnboarding.onBoardStatusId);
-  if (Number.isFinite(onBoardStatusId) && onBoardStatusId === 4) return false;
-
-  const labels = collectLiveexStatusLabels(digitalOnboarding);
-  if (labels.some((l) => /\b(blocked|disabled|reject(ed)?)\b/.test(l))) {
-    return false;
-  }
-
-  const paths =
-    digitalOnboarding.paths && typeof digitalOnboarding.paths === 'object'
-      ? digitalOnboarding.paths
-      : {};
-  const hasFront = !!(
-    paths.nameFront ||
-    paths.idFront ||
-    paths.front ||
-    paths['id-front']
-  );
-  const hasSelfie = !!(
-    paths.nameSelfie ||
-    paths.selfie ||
-    paths['id-selfie']
-  );
-  const temp = digitalOnboarding.lastTempDocumentResponses || {};
-  const hasTempDocs = !!(temp.id_front || temp.selfie || temp.id_back);
-  const hasDocs =
-    (hasFront && hasSelfie) ||
-    hasTempDocs ||
-    !!digitalOnboarding.identityUploadedAt ||
-    !!digitalOnboarding.submittedAt ||
-    !!digitalOnboarding.lastSubmitKycResponse;
-
-  if (!hasDocs) return false;
-
-  const scores = [
-    digitalOnboarding.faceMatchScore,
-    digitalOnboarding.faceMatchConfidence,
-    digitalOnboarding.matchConfidence,
-    temp.selfie?.score,
-    temp.selfie?.confidence,
-  ];
-  for (const s of scores) {
-    const pct = toFaceMatchPercent(s);
-    if (pct != null && pct > 0) return true;
-  }
-
-  // LiveEx pipeline marked Completed / submitted without faceMatchFailed
-  if (labels.some((l) => /\bcompleted\b/.test(l))) return true;
-  return !!(
-    digitalOnboarding.submittedAt ||
-    digitalOnboarding.lastSubmitKycResponse
-  );
-}
-
-/** True when any KYC entry is approved or has LiveEx docs + face match / Completed. */
+/** True when any KYC entry is LiveEx Completed (onBoardStatusId = 3). */
 export function kycDataSatisfiesVerification(kycData) {
   let raw = kycData;
   if (typeof raw === 'string') {
@@ -318,11 +294,13 @@ export function kycDataSatisfiesVerification(kycData) {
   const docs = raw ? (Array.isArray(raw) ? raw : [raw]) : [];
   return docs.some((doc) => {
     if (!doc || typeof doc !== 'object') return false;
-    const status = String(doc.status || '').toLowerCase();
-    if (status === 'approved') return true;
-    if (status === 'rejected') return false;
     const dig = doc.digitalOnboarding || (doc.paths ? doc : null);
-    return shouldAutoApproveFromLiveex(dig);
+    const onboardId = parseOnBoardStatusId(dig);
+    if (onboardId != null) {
+      return onboardId === 3;
+    }
+    const status = String(doc.status || '').toLowerCase();
+    return status === 'approved';
   });
 }
 
@@ -342,53 +320,165 @@ function kycDocsNeedExplicitApprovedStatus(kycData) {
 }
 
 /**
- * LiveEx Digital Onboarding auto-approve:
- * - statusLabel / details status "Completed" → approve (even if onBoardStatus is still "Profile in Review")
- * - statusId >= 1 and not blocked → approve
- * - onBoardStatusId >= 1 and not 4 → approve
- * - Docs uploaded + face matched → approve
- * - Face/ID submitted → approve
+ * If LiveEx onboard decision is Rejected (4), set customer.status=rejected.
  */
-export function shouldAutoApproveFromLiveex(digitalOnboarding) {
-  if (!digitalOnboarding || typeof digitalOnboarding !== 'object') return false;
-
-  const onBoardStatusId = Number(digitalOnboarding.onBoardStatusId);
-  const statusId = Number(digitalOnboarding.statusId);
-  const hasOnBoard = Number.isFinite(onBoardStatusId);
-  const hasStatus = Number.isFinite(statusId);
-
-  if (hasOnBoard && onBoardStatusId === 4) return false;
-  if (hasStatus && AML_BLOCKED_STATUS_IDS.has(statusId)) return false;
-
-  const labels = collectLiveexStatusLabels(digitalOnboarding);
-  if (labels.some((l) => /\b(blocked|disabled|reject(ed)?)\b/.test(l))) {
-    return false;
+export async function maybeRejectCustomerFromLiveex(
+  customer,
+  kycData,
+  digitalOnboarding,
+  req,
+  rejectedBy = 'liveex-auto',
+) {
+  if (!shouldRejectFromLiveex(digitalOnboarding)) {
+    return {
+      customerApproved: false,
+      customerRejected: false,
+      customerStatus: customer.status,
+      kycData,
+      newlyRejected: false,
+    };
   }
 
-  // IMPORTANT: check statusLabel / nested status "Completed", not only onBoardStatus
-  // (onBoardStatus can stay "Profile in Review" while pipeline status is Completed)
-  if (
-    labels.some((l) =>
-      /\b(completed|onboard success|onboarded|cleared|approved|confirmed)\b/.test(l),
-    )
-  ) {
-    return true;
+  const nextKyc = rejectKycDocumentsInData(kycData);
+  const alreadyRejected = String(customer.status || '').toLowerCase() === 'rejected';
+  const updated = await prisma.customer.update({
+    where: { id: customer.id },
+    data: {
+      kycData: nextKyc,
+      status: 'rejected',
+    },
+  });
+
+  if (!alreadyRejected) {
+    console.log(
+      `[LiveEx] Rejected customer ${customer.id} (onBoardStatusId=${digitalOnboarding?.onBoardStatusId}, by=${rejectedBy})`,
+    );
+    emitCustomersUpdated(req);
   }
 
-  if (hasStatus && statusId >= 1) return true;
-  if (hasOnBoard && onBoardStatusId >= 1) return true;
+  return {
+    customerApproved: false,
+    customerRejected: true,
+    customerStatus: updated.status,
+    kycData: nextKyc,
+    newlyRejected: !alreadyRejected,
+  };
+}
 
-  if (
-    digitalOnboarding.submittedAt ||
-    digitalOnboarding.clientNumber ||
-    digitalOnboarding.lastSubmitKycResponse
-  ) {
-    return true;
+/**
+ * If LiveEx onboard is Pending / In Review (1–2), keep customer pending.
+ */
+export async function maybeSetCustomerPendingFromLiveex(
+  customer,
+  kycData,
+  digitalOnboarding,
+  req,
+  source = 'liveex-auto',
+) {
+  if (!isOnboardPendingReview(digitalOnboarding)) {
+    return {
+      customerApproved: false,
+      customerRejected: false,
+      customerStatus: customer.status,
+      kycData,
+      newlyPending: false,
+    };
   }
 
-  if (hasSuccessfulFaceMatchAndDocs(digitalOnboarding)) return true;
+  const nextKyc = setKycDocumentsPendingInData(kycData);
+  const currentStatus = String(customer.status || '').toLowerCase();
+  const needsStatusDowngrade = currentStatus === 'approved';
+  const updated = await prisma.customer.update({
+    where: { id: customer.id },
+    data: {
+      kycData: nextKyc,
+      ...(needsStatusDowngrade ? { status: 'pending' } : {}),
+    },
+  });
 
-  return false;
+  if (needsStatusDowngrade) {
+    console.log(
+      `[LiveEx] Set customer ${customer.id} pending (onBoardStatusId=${digitalOnboarding?.onBoardStatusId}, by=${source})`,
+    );
+    emitCustomersUpdated(req);
+  }
+
+  return {
+    customerApproved: false,
+    customerRejected: false,
+    customerStatus: updated.status,
+    kycData: nextKyc,
+    newlyPending: needsStatusDowngrade,
+  };
+}
+
+/**
+ * Sync customer.status + KYC docs from LiveEx onBoardStatusId (1–4).
+ */
+export async function syncCustomerStatusFromLiveexOnboard(
+  customer,
+  kycData,
+  digitalOnboarding,
+  req,
+  source = 'liveex-sync',
+) {
+  const onboardId = parseOnBoardStatusId(digitalOnboarding);
+  if (onboardId == null) {
+    return {
+      customerApproved: false,
+      customerRejected: false,
+      customerStatus: customer.status,
+      kycData,
+      onboardStatusId: null,
+      newlyApproved: false,
+      newlyRejected: false,
+      newlyPending: false,
+    };
+  }
+
+  if (onboardId === 3) {
+    const result = await maybeAutoApproveCustomerFromLiveex(
+      customer,
+      kycData,
+      digitalOnboarding,
+      req,
+      source,
+    );
+    return { ...result, customerRejected: false, onboardStatusId: onboardId, newlyPending: false };
+  }
+
+  if (onboardId === 4) {
+    const result = await maybeRejectCustomerFromLiveex(
+      customer,
+      kycData,
+      digitalOnboarding,
+      req,
+      source,
+    );
+    return {
+      ...result,
+      customerApproved: false,
+      onboardStatusId: onboardId,
+      newlyApproved: false,
+      newlyPending: false,
+    };
+  }
+
+  const result = await maybeSetCustomerPendingFromLiveex(
+    customer,
+    kycData,
+    digitalOnboarding,
+    req,
+    source,
+  );
+  return {
+    ...result,
+    customerApproved: false,
+    customerRejected: false,
+    onboardStatusId: onboardId,
+    newlyApproved: false,
+    newlyRejected: false,
+  };
 }
 
 /**
@@ -481,6 +571,16 @@ export async function tryApprovePendingCustomerFromCachedStatus(customer, req = 
 
   const alreadyApproved = String(customer.status || '').toLowerCase() === 'approved';
   const needsDocFix = kycDocsNeedExplicitApprovedStatus(customer.kycData);
+
+  if (dig && parseOnBoardStatusId(dig) != null) {
+    return syncCustomerStatusFromLiveexOnboard(
+      customer,
+      customer.kycData,
+      dig,
+      req,
+      'liveex-cache-auto',
+    );
+  }
 
   if (shouldAutoApproveFromLiveex(dig) && (!alreadyApproved || needsDocFix)) {
     return maybeAutoApproveCustomerFromLiveex(

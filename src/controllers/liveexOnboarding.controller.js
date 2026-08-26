@@ -26,7 +26,7 @@ import {
   resolveDocTypeFromCustomer,
   uploadIdentityTempDocuments,
 } from '../services/liveexOnboarding.builder.js';
-import { maybeAutoApproveCustomerFromLiveex, tryApprovePendingCustomerFromCachedStatus } from '../utils/amlAutoApprove.js';
+import { syncCustomerStatusFromLiveexOnboard, tryApprovePendingCustomerFromCachedStatus } from '../utils/amlAutoApprove.js';
 
 function sendError(res, err) {
   const status = err.status || 500;
@@ -408,7 +408,7 @@ async function runFullDigitalOnboarding(customer, options = {}, req = null) {
   }
 
   dig = extractDigitalOnboarding(customer);
-  const approval = await maybeAutoApproveCustomerFromLiveex(
+  const approval = await syncCustomerStatusFromLiveexOnboard(
     customer,
     customer.kycData,
     dig,
@@ -495,16 +495,19 @@ export const liveexOnboardDetails = async (req, res) => {
       });
     }
     const raw = await liveexCustomerDetails({ rowIdGid, email });
+    const digExisting = extractDigitalOnboarding(customer);
     const kycData = mergeDigitalOnboarding(customer, {
       rowIdGid,
       email,
       statusId: raw?.statusId ?? null,
       statusLabel: raw?.status || null,
+      onBoardStatusId: raw?.onBoardStatusId ?? digExisting?.onBoardStatusId ?? null,
+      onBoardStatus: raw?.onBoardStatus ?? digExisting?.onBoardStatus ?? null,
       lastDetailsResponse: raw,
     });
     await prisma.customer.update({ where: { id: customer.id }, data: { kycData } });
     const digCached = extractDigitalOnboarding({ kycData });
-    const approval = await maybeAutoApproveCustomerFromLiveex(
+    const approval = await syncCustomerStatusFromLiveexOnboard(
       { ...customer, kycData },
       kycData,
       digCached,
@@ -596,12 +599,14 @@ export const refreshCustomerLiveexDetails = async (req, res) => {
       email,
       statusId: raw?.statusId ?? null,
       statusLabel: raw?.status || null,
+      onBoardStatusId: raw?.onBoardStatusId ?? dig?.onBoardStatusId ?? null,
+      onBoardStatus: raw?.onBoardStatus ?? dig?.onBoardStatus ?? null,
       matchConfidence: raw?.matchConfidence ?? dig?.matchConfidence ?? null,
       lastDetailsResponse: raw,
     });
     await prisma.customer.update({ where: { id: customer.id }, data: { kycData } });
     const digCached = extractDigitalOnboarding({ kycData });
-    const approval = await maybeAutoApproveCustomerFromLiveex(
+    const approval = await syncCustomerStatusFromLiveexOnboard(
       { ...customer, kycData },
       kycData,
       digCached,
