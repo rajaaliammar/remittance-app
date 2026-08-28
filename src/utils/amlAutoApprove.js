@@ -10,16 +10,40 @@ import {
   shouldAutoApproveFromLiveex,
   shouldRejectFromLiveex,
   isOnboardPendingReview,
+  LIVEEX_ONBOARD_STATUS,
 } from './liveexOnboardStatus.js';
+
+function extractDigitalOnboardingFromKyc(kycData) {
+  const entries = Array.isArray(kycData)
+    ? kycData
+    : kycData && typeof kycData === 'object'
+      ? [kycData]
+      : [];
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    if (entries[i]?.digitalOnboarding) return entries[i].digitalOnboarding;
+  }
+  if (kycData && typeof kycData === 'object' && !Array.isArray(kycData) && kycData.paths) {
+    return kycData;
+  }
+  return null;
+}
+
+/** LiveEx CIP started but not Completed — blocks AML auto-approve. */
+export function isLiveexCipBlockingAmlApprove(digitalOnboarding) {
+  if (!digitalOnboarding?.rowIdGid) return false;
+  const id = parseOnBoardStatusId(digitalOnboarding);
+  if (id === LIVEEX_ONBOARD_STATUS.COMPLETED) return false;
+  return true;
+}
 
 /** Blocked / rejected AML statuses — never auto-approve. */
 export const AML_BLOCKED_STATUS_IDS = new Set([7, 8, 9]);
 
 /**
- * Portal/registration rule:
- * - statusId >= 1 (and not blocked 7/8/9) → approve
- * - status label confirmed / onboarded / cleared → approve
- * - statusId 0 / null / incomplete / blocked → leave pending
+ * Portal/registration rule for TMS AML customer status:
+ * - Only Onboarded (6) / confirmed labels → approve
+ * - Pending compliance / case / frozen / blocked → stay pending
+ * LiveEx Digital Onboarding Completed is still required when CIP was started.
  */
 export function shouldAutoApproveFromAmlStatus(mapped) {
   if (!mapped) return false;
@@ -28,22 +52,22 @@ export function shouldAutoApproveFromAmlStatus(mapped) {
   const hasStatusId = Number.isFinite(statusId);
   const label = String(mapped.statusLabel || mapped.customerStatus || '').toLowerCase();
 
-  // Blocked / rejected never auto-approve
   if (mapped.isBlocked) return false;
+  if (mapped.isFrozen) return false;
   if (hasStatusId && AML_BLOCKED_STATUS_IDS.has(statusId)) return false;
   if (/\b(blocked|disabled|reject(ed)?)\b/.test(label)) return false;
+  if (/\b(pending|case|sar|validate|hold|frozen)\b/.test(label)) return false;
 
-  // Explicit confirmed / onboarded / cleared labels
+  // Only fully onboarded TMS status
+  if (mapped.isOnboarded === true || statusId === 6) return true;
+
   if (
-    /\b(confirmed|onboarded|cleared|approved|active)\b/.test(label)
+    /\b(confirmed|onboarded|cleared|approved|active)\b/.test(label) &&
+    !/\b(pending|case|sar|validate)\b/.test(label)
   ) {
     return true;
   }
 
-  // statusId >= 1 wins even if provider sets isError quirks
-  if (hasStatusId && statusId >= 1) return true;
-
-  // statusId 0 / missing / error-only responses stay pending
   return false;
 }
 
@@ -121,6 +145,24 @@ export async function maybeAutoApproveCustomerFromAml(
   req,
   approvedBy = 'aml-auto',
 ) {
+  // LiveEx CIP incomplete (pending / in review / not submitted / rejected)
+  // wins — do not approve from AML alone (avoids app VERIFIED then Pending).
+  const liveexDig = extractDigitalOnboardingFromKyc(kycData);
+  if (isLiveexCipBlockingAmlApprove(liveexDig) || isOnboardPendingReview(liveexDig)) {
+    console.log(
+      `[AML] Skip auto-approve for ${customer.id}: LiveEx CIP incomplete ` +
+        `(onBoardStatusId=${parseOnBoardStatusId(liveexDig)}, ` +
+        `rowId=${liveexDig?.rowIdGid || 'n/a'})`,
+    );
+    return {
+      customerApproved: false,
+      customerStatus: customer.status,
+      kycData,
+      newlyApproved: false,
+      blockedByLiveexPending: true,
+    };
+  }
+
   if (!shouldAutoApproveFromAmlStatus(mapped)) {
     return {
       customerApproved: false,
@@ -292,6 +334,15 @@ export function kycDataSatisfiesVerification(kycData) {
     }
   }
   const docs = raw ? (Array.isArray(raw) ? raw : [raw]) : [];
+
+  // If LiveEx CIP was used, only Completed counts (ignore stale doc.status=approved).
+  for (let i = docs.length - 1; i >= 0; i -= 1) {
+    const dig = docs[i]?.digitalOnboarding || (docs[i]?.paths ? docs[i] : null);
+    if (dig?.rowIdGid) {
+      return parseOnBoardStatusId(dig) === 3;
+    }
+  }
+
   return docs.some((doc) => {
     if (!doc || typeof doc !== 'object') return false;
     const dig = doc.digitalOnboarding || (doc.paths ? doc : null);

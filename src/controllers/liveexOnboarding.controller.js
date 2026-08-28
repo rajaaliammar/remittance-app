@@ -10,7 +10,6 @@ import {
   liveexVerifyOtp,
   liveexSaveWebsite,
   liveexTempDocument,
-  liveexCustomerDetails,
   liveexSubmitKyc,
   liveexLookupSourceOfFund,
   liveexLookupCountries,
@@ -27,6 +26,10 @@ import {
   uploadIdentityTempDocuments,
 } from '../services/liveexOnboarding.builder.js';
 import { syncCustomerStatusFromLiveexOnboard, tryApprovePendingCustomerFromCachedStatus } from '../utils/amlAutoApprove.js';
+import {
+  isLiveexDecisionSettled,
+  pollLiveexDetailsRapidly,
+} from '../utils/liveexDetailsSync.js';
 
 function sendError(res, err) {
   const status = err.status || 500;
@@ -346,15 +349,71 @@ async function runFullDigitalOnboarding(customer, options = {}, req = null) {
     },
   });
 
+  const faceMatchScore = uploaded.responses?.selfie?.score ?? null;
+  const faceMatchConfidence = uploaded.responses?.selfie?.confidence ?? null;
+  const faceMatchOk =
+    Number(faceMatchScore) > 0 || Number(faceMatchConfidence) > 0;
+
   const submitPayload = await buildSubmitKycPayload(customer, {
     rowIdGid,
     paths: uploaded.paths,
     idType: uploaded.docTypeId,
   });
-  const submitRaw = await liveexSubmitKyc(submitPayload);
 
-  const faceMatchScore = uploaded.responses?.selfie?.score ?? null;
-  const faceMatchConfidence = uploaded.responses?.selfie?.confidence ?? null;
+  /** LiveEx provider bug after a good face match — do not fail the whole CIP. */
+  function isLiveexSubmitKycProviderGlitch(err) {
+    const msg = String(err?.message || err?.data?.message || '');
+    const code = String(err?.code || err?.data?.messageCode || '');
+    return (
+      /IMG_SUBMIT/i.test(msg) ||
+      /IMG_SUBMIT/i.test(code) ||
+      /SqlTransaction has completed/i.test(msg) ||
+      /no longer usable/i.test(msg)
+    );
+  }
+
+  let submitRaw = null;
+  let submitKycProviderError = null;
+  try {
+    submitRaw = await liveexSubmitKyc(submitPayload);
+  } catch (submitErr) {
+    if (faceMatchOk && isLiveexSubmitKycProviderGlitch(submitErr)) {
+      submitKycProviderError = String(submitErr.message || submitErr);
+      console.warn(
+        `[LiveEx-Onboard] submit-kyc provider glitch after face match ` +
+          `(${faceMatchScore ?? faceMatchConfidence}) for ${customer.id}:`,
+        submitKycProviderError,
+      );
+      customer = await prisma.customer.update({
+        where: { id: customer.id },
+        data: {
+          kycData: mergeDigitalOnboarding(customer, {
+            rowIdGid,
+            email,
+            paths: uploaded.paths,
+            faceMatchFailed: false,
+            faceMatchScore,
+            faceMatchConfidence,
+            matchConfidence:
+              (Number(faceMatchScore) > 0
+                ? Number(faceMatchScore)
+                : null) ??
+              (Number(faceMatchConfidence) > 0
+                ? Number(faceMatchConfidence)
+                : null),
+            submitKycError: submitKycProviderError,
+            submitKycErrorAt: new Date().toISOString(),
+            // Soft pending until LiveEx finishes / portal clears case
+            onBoardStatusId: 1,
+            onBoardStatus: 'Profile Pending',
+          }),
+        },
+      });
+    } else {
+      throw submitErr;
+    }
+  }
+
   const submitMatch = submitRaw?.matchConfidence;
   const bestMatch =
     (Number(submitMatch) > 0 ? Number(submitMatch) : null) ??
@@ -362,79 +421,93 @@ async function runFullDigitalOnboarding(customer, options = {}, req = null) {
     (Number(faceMatchConfidence) > 0 ? Number(faceMatchConfidence) : null) ??
     (submitMatch != null ? Number(submitMatch) : null);
 
-  customer = await prisma.customer.update({
-    where: { id: customer.id },
-    data: {
-      kycData: mergeDigitalOnboarding(customer, {
-        rowIdGid,
-        email,
-        paths: uploaded.paths,
-        clientNumber: submitRaw?.clientNumber || null,
-        onBoardStatus: submitRaw?.onBoardStatus || null,
-        onBoardStatusId: submitRaw?.onBoardStatusId ?? null,
-        matchConfidence: bestMatch,
-        faceMatchScore,
-        faceMatchConfidence,
-        idNumber: submitRaw?.idNumber || null,
-        idTypeLabel: submitRaw?.idType || null,
-        submittedAt: new Date().toISOString(),
-        lastSubmitKycResponse: submitRaw,
-      }),
-    },
-  });
-
-  // Pull pipeline status (ISTR Pending / Onboard Success) when available
-  let detailsRaw = null;
-  try {
-    detailsRaw = await liveexCustomerDetails({ rowIdGid, email });
+  if (submitRaw) {
     customer = await prisma.customer.update({
       where: { id: customer.id },
       data: {
         kycData: mergeDigitalOnboarding(customer, {
           rowIdGid,
           email,
-          statusId: detailsRaw?.statusId ?? null,
-          statusLabel: detailsRaw?.status || null,
-          matchConfidence: detailsRaw?.matchConfidence ?? bestMatch,
-          lastDetailsResponse: detailsRaw,
+          paths: uploaded.paths,
+          clientNumber: submitRaw?.clientNumber || null,
+          onBoardStatus: submitRaw?.onBoardStatus || null,
+          onBoardStatusId: submitRaw?.onBoardStatusId ?? null,
+          matchConfidence: bestMatch,
+          faceMatchScore,
+          faceMatchConfidence,
+          idNumber: submitRaw?.idNumber || null,
+          idTypeLabel: submitRaw?.idType || null,
+          submittedAt: new Date().toISOString(),
+          lastSubmitKycResponse: submitRaw,
         }),
       },
     });
-  } catch (detailsErr) {
-    console.warn(
-      `[LiveEx-Onboard] post-submit details fetch failed for ${customer.id}:`,
-      detailsErr.message,
-    );
   }
 
-  dig = extractDigitalOnboarding(customer);
-  const approval = await syncCustomerStatusFromLiveexOnboard(
-    customer,
-    customer.kycData,
-    dig,
-    req,
-    'liveex-registration-auto',
-  );
-  if (approval.newlyApproved) {
-    customer = await prisma.customer.findUnique({ where: { id: customer.id } });
+  // Rapidly poll LiveEx details after face match so stored onboard decision
+  // matches provider (avoids approve-then-Pending when refresh runs later).
+  let detailsRaw = null;
+  let approval = {
+    customerApproved: false,
+    customerStatus: customer.status,
+  };
+  try {
+    const polled = await pollLiveexDetailsRapidly(customer, {
+      rowIdGid,
+      email,
+      req,
+      source: 'liveex-registration-poll',
+      maxAttempts: Number(options.pollAttempts) || 8,
+      intervalMs: Number(options.pollIntervalMs) || 1200,
+    });
+    if (polled) {
+      customer = polled.customer;
+      detailsRaw = polled.raw;
+      approval = polled.approval;
+      dig = polled.digCached;
+    }
+  } catch (detailsErr) {
+    console.warn(
+      `[LiveEx-Onboard] post-submit details poll failed for ${customer.id}:`,
+      detailsErr.message,
+    );
+    dig = extractDigitalOnboarding(customer);
+    approval = await syncCustomerStatusFromLiveexOnboard(
+      customer,
+      customer.kycData,
+      dig,
+      req,
+      'liveex-registration-auto',
+    );
+    if (approval.newlyApproved || approval.newlyPending || approval.newlyRejected) {
+      customer = await prisma.customer.findUnique({ where: { id: customer.id } });
+    }
   }
+
+  const finalDig = dig || extractDigitalOnboarding(customer);
 
   return {
     rowIdGid,
-    onBoardStatus: submitRaw?.onBoardStatus,
-    onBoardStatusId: submitRaw?.onBoardStatusId,
-    clientNumber: submitRaw?.clientNumber,
-    matchConfidence: bestMatch,
+    onBoardStatus: finalDig?.onBoardStatus ?? submitRaw?.onBoardStatus ?? 'Profile Pending',
+    onBoardStatusId:
+      finalDig?.onBoardStatusId ?? submitRaw?.onBoardStatusId ?? 1,
+    clientNumber: finalDig?.clientNumber ?? submitRaw?.clientNumber,
+    matchConfidence: finalDig?.matchConfidence ?? bestMatch,
     faceMatchScore,
     faceMatchConfidence,
-    idNumber: submitRaw?.idNumber,
+    idNumber: finalDig?.idNumber ?? submitRaw?.idNumber,
     idType: submitRaw?.idType,
     paths: uploaded.paths,
-    digitalOnboarding: extractDigitalOnboarding(customer),
+    digitalOnboarding: finalDig,
     submitRaw,
     detailsRaw,
     customerApproved: approval.customerApproved,
     customerStatus: approval.customerStatus,
+    pollsSettled: isLiveexDecisionSettled(finalDig),
+    submitKycProviderError: submitKycProviderError || undefined,
+    // Soft success even when LiveEx IMG_SUBMIT SQL glitch fired after face match
+    success: true,
+    faceMatchFailed: false,
   };
 }
 
@@ -494,32 +567,31 @@ export const liveexOnboardDetails = async (req, res) => {
         code: 'LIVEEX_ROW_ID_REQUIRED',
       });
     }
-    const raw = await liveexCustomerDetails({ rowIdGid, email });
-    const digExisting = extractDigitalOnboarding(customer);
-    const kycData = mergeDigitalOnboarding(customer, {
+    const rapid =
+      req.body?.poll !== false &&
+      req.body?.rapid !== false;
+    const polled = await pollLiveexDetailsRapidly(customer, {
       rowIdGid,
       email,
-      statusId: raw?.statusId ?? null,
-      statusLabel: raw?.status || null,
-      onBoardStatusId: raw?.onBoardStatusId ?? digExisting?.onBoardStatusId ?? null,
-      onBoardStatus: raw?.onBoardStatus ?? digExisting?.onBoardStatus ?? null,
-      lastDetailsResponse: raw,
-    });
-    await prisma.customer.update({ where: { id: customer.id }, data: { kycData } });
-    const digCached = extractDigitalOnboarding({ kycData });
-    const approval = await syncCustomerStatusFromLiveexOnboard(
-      { ...customer, kycData },
-      kycData,
-      digCached,
       req,
-      'liveex-details-auto',
-    );
+      source: 'liveex-details-poll',
+      maxAttempts: rapid ? Number(req.body?.pollAttempts) || 6 : 1,
+      intervalMs: Number(req.body?.pollIntervalMs) || 1000,
+    });
+    const digOut = polled?.digCached ?? extractDigitalOnboarding(customer);
     return res.json({
       success: true,
-      data: raw,
-      cached: digCached,
-      customerApproved: approval.customerApproved,
-      customerStatus: approval.customerStatus,
+      data: polled?.raw ?? null,
+      cached: digOut,
+      digitalOnboarding: digOut,
+      onBoardStatusId: digOut?.onBoardStatusId ?? null,
+      onBoardStatus: digOut?.onBoardStatus ?? null,
+      matchConfidence: digOut?.matchConfidence ?? null,
+      statusId: digOut?.statusId ?? null,
+      statusLabel: digOut?.statusLabel ?? null,
+      customerApproved: polled?.approval?.customerApproved ?? false,
+      customerStatus: polled?.approval?.customerStatus ?? customer.status,
+      pollsSettled: isLiveexDecisionSettled(digOut),
     });
   } catch (err) {
     return sendError(res, err);
@@ -593,32 +665,23 @@ export const refreshCustomerLiveexDetails = async (req, res) => {
         digitalOnboarding: dig,
       });
     }
-    const raw = await liveexCustomerDetails({ rowIdGid, email });
-    const kycData = mergeDigitalOnboarding(customer, {
+    // Rapid poll after face match / on Refresh so stored status matches LiveEx
+    const rapid = req.body?.poll !== false;
+    const polled = await pollLiveexDetailsRapidly(customer, {
       rowIdGid,
       email,
-      statusId: raw?.statusId ?? null,
-      statusLabel: raw?.status || null,
-      onBoardStatusId: raw?.onBoardStatusId ?? dig?.onBoardStatusId ?? null,
-      onBoardStatus: raw?.onBoardStatus ?? dig?.onBoardStatus ?? null,
-      matchConfidence: raw?.matchConfidence ?? dig?.matchConfidence ?? null,
-      lastDetailsResponse: raw,
-    });
-    await prisma.customer.update({ where: { id: customer.id }, data: { kycData } });
-    const digCached = extractDigitalOnboarding({ kycData });
-    const approval = await syncCustomerStatusFromLiveexOnboard(
-      { ...customer, kycData },
-      kycData,
-      digCached,
       req,
-      'liveex-refresh-auto',
-    );
+      source: 'liveex-refresh-poll',
+      maxAttempts: rapid ? Number(req.body?.pollAttempts) || 8 : 1,
+      intervalMs: Number(req.body?.pollIntervalMs) || 1200,
+    });
     return res.json({
       success: true,
-      data: raw,
-      digitalOnboarding: digCached,
-      customerApproved: approval.customerApproved,
-      customerStatus: approval.customerStatus,
+      data: polled?.raw ?? null,
+      digitalOnboarding: polled?.digCached ?? dig,
+      customerApproved: polled?.approval?.customerApproved ?? false,
+      customerStatus: polled?.approval?.customerStatus ?? customer.status,
+      pollsSettled: isLiveexDecisionSettled(polled?.digCached),
     });
   } catch (err) {
     return sendError(res, err);

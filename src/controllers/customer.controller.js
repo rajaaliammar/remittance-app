@@ -30,6 +30,7 @@ import {
   resolveLastIpForApi,
 } from '../utils/resolveCustomerLastIp.js';
 import { tryApprovePendingCustomerFromCachedStatus } from '../utils/amlAutoApprove.js';
+import { syncLiveexStatusIfNeeded } from '../utils/liveexDetailsSync.js';
 import { generateOtpCode, saveOtp, consumeOtp, hasOtp } from '../utils/otpStore.js';
 import { isSmtpConfigured, sendVerificationOtpEmail } from '../utils/email.js';
 
@@ -2310,7 +2311,22 @@ export const getVerifications = async (req, res) => {
       });
     }
 
-    // Backfill: LiveEx Completed / docs+face match → mark customer + KYC approved
+    // App self-check: pull LiveEx details when CIP is incomplete so status
+    // matches provider without requiring a portal "Refresh status".
+    try {
+      const liveexSync = await syncLiveexStatusIfNeeded(customer, req, {
+        source: 'liveex-verifications-self-check',
+        maxAttempts: 4,
+        intervalMs: 800,
+      });
+      if (liveexSync?.synced && liveexSync.customer) {
+        customer = liveexSync.customer;
+      }
+    } catch (err) {
+      console.warn('[getVerifications] LiveEx self-check skipped:', err.message);
+    }
+
+    // Backfill: LiveEx Completed only → mark customer + KYC approved
     try {
       const approval = await tryApprovePendingCustomerFromCachedStatus(customer, req);
       if (approval?.kycData != null || approval?.newlyApproved || approval?.customerApproved) {
