@@ -108,7 +108,10 @@ export function extractAmlCacheFromKycData(kycData) {
 
 /** Pick a field from KYC array entries (enhancedKYC documents[] or top-level keys). */
 export function pickKycFieldFromCustomer(customer, ...keys) {
-  for (const entry of flattenKycEntries(customer?.kycData)) {
+  const entries = flattenKycEntries(customer?.kycData);
+  // Prefer the newest KYC submission — older rows often point at deleted uploads.
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
     const direct = pickField(entry, ...keys);
     if (direct) return direct;
 

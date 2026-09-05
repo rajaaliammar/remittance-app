@@ -145,7 +145,7 @@ function collectUrlCandidates(customer) {
     pickKycFieldFromCustomer(customer, 'proof_of_address_url', 'poa_url'),
   );
 
-  for (const entry of flattenEntries(customer?.kycData)) {
+  for (const entry of flattenEntries(customer?.kycData).reverse()) {
     const fields = entry.documents || entry.fields;
     if (!Array.isArray(fields)) continue;
 

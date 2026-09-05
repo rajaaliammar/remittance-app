@@ -367,10 +367,18 @@ export function buildSaveWebsitePayload(customer, { rowIdGid, sendUrl } = {}) {
 
   const homeAddress = asString(customer.address, 'Not Provided');
 
+  const sanitizePersonName = (value, fallback) => {
+    const cleaned = String(value || '')
+      .replace(/[^\p{L}\p{M}\s'.-]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return cleaned || fallback;
+  };
+
   return {
     rowId,
-    firstName: asString(customer.firstName, 'Unknown'),
-    lastName: asString(customer.lastName, 'Unknown'),
+    firstName: sanitizePersonName(customer.firstName, 'Unknown'),
+    lastName: sanitizePersonName(customer.lastName, 'Unknown'),
     dateOfBirth,
     email,
     // National number only — dial code goes in mobileNumberCode (swagger CustomerSaveWebRequest)
@@ -490,6 +498,22 @@ export async function uploadIdentityTempDocuments({
     );
     err.status = 400;
     err.code = 'LIVEEX_ID_BACK_REQUIRED';
+    throw err;
+  }
+
+  // Same bytes for ID + selfie cannot pass LiveEx liveness / face match.
+  if (
+    files.id_front.base64 &&
+    files.selfie.base64 &&
+    files.id_front.base64 === files.selfie.base64
+  ) {
+    const err = new Error(
+      'Your selfie looks identical to the ID image. Take a live face photo with the front camera, then try again.',
+    );
+    err.status = 400;
+    err.code = 'LIVEEX_FACE_MISMATCH';
+    err.faceMatchFailed = true;
+    err.data = { score: 0, confidence: 0, faceMatchFailed: true };
     throw err;
   }
 

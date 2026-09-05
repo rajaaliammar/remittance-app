@@ -4,7 +4,8 @@ import { getReceiptSettings, updateReceiptSettings } from '../controllers/receip
 
 const router = express.Router();
 
-router.get('/', authenticateToken, getReceiptSettings);
+// GET is public so the mobile app can render portal-managed receipt disclosures.
+router.get('/', getReceiptSettings);
 router.put('/', authenticateToken, updateReceiptSettings);
 
 export default router;

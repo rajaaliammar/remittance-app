@@ -11,6 +11,7 @@ import {
   liveexSaveWebsite,
   liveexTempDocument,
   liveexSubmitKyc,
+  liveexCustomerDetails,
   liveexLookupSourceOfFund,
   liveexLookupCountries,
   liveexLookupPurposes,
@@ -258,26 +259,87 @@ async function runFullDigitalOnboarding(customer, options = {}, req = null) {
     rowIdGid,
     sendUrl: options.sendUrl,
   });
-  const saveRaw = await liveexSaveWebsite(savePayload);
-  const savedRow = pickLiveexRowId(saveRaw);
-  if (savedRow) rowIdGid = savedRow;
-  customer = await prisma.customer.update({
-    where: { id: customer.id },
-    data: {
-      kycData: mergeDigitalOnboarding(customer, {
-        rowIdGid,
-        email,
-        idType: resolvedDoc.docTypeId,
-        docTypeName: resolvedDoc.docTypeName,
-        profileSavedAt: new Date().toISOString(),
-        lastSaveWebsiteResponse: saveRaw,
-        lastSaveWebsitePayload: {
-          sendUrl: savePayload.sendUrl,
-          rowId: savePayload.rowId,
-        },
-      }),
-    },
-  });
+  let saveRaw = null;
+  let saveWebsiteSkipped = false;
+  try {
+    saveRaw = await liveexSaveWebsite(savePayload);
+    const savedRow = pickLiveexRowId(saveRaw);
+    if (savedRow) rowIdGid = savedRow;
+    customer = await prisma.customer.update({
+      where: { id: customer.id },
+      data: {
+        kycData: mergeDigitalOnboarding(customer, {
+          rowIdGid,
+          email,
+          idType: resolvedDoc.docTypeId,
+          docTypeName: resolvedDoc.docTypeName,
+          profileSavedAt: new Date().toISOString(),
+          lastSaveWebsiteResponse: saveRaw,
+          lastSaveWebsitePayload: {
+            sendUrl: savePayload.sendUrl,
+            rowId: savePayload.rowId,
+          },
+        }),
+      },
+    });
+  } catch (saveErr) {
+    // LiveEx often returns opaque HTTP 500 when the applicant already exists
+    // (statusId Verification / Profile Pending). Re-check details and continue
+    // with ID/selfie upload so KYC is not permanently stuck.
+    const status = Number(saveErr?.status || 0);
+    const canSkip =
+      status >= 500 ||
+      /HTTP 500|already|exist|registration completed/i.test(
+        String(saveErr?.message || ''),
+      );
+    if (!canSkip) throw saveErr;
+
+    let detailsOk = false;
+    try {
+      const existing = await liveexCustomerDetails({ rowIdGid, email });
+      detailsOk =
+        existing &&
+        existing.isErrorMessage !== true &&
+        (Number(existing.statusId) > 0 ||
+          Boolean(existing.firstName) ||
+          Boolean(existing.email));
+      if (detailsOk) {
+        console.warn(
+          `[LiveEx-Onboard] save-website failed (${saveErr.message}); ` +
+            `continuing with existing applicant row ${rowIdGid} ` +
+            `(statusId=${existing.statusId}, onBoardStatusId=${existing.onBoardStatusId})`,
+        );
+        saveWebsiteSkipped = true;
+        customer = await prisma.customer.update({
+          where: { id: customer.id },
+          data: {
+            kycData: mergeDigitalOnboarding(customer, {
+              rowIdGid,
+              email,
+              idType: resolvedDoc.docTypeId,
+              docTypeName: resolvedDoc.docTypeName,
+              statusId: existing.statusId ?? dig?.statusId ?? null,
+              statusLabel: existing.status || dig?.statusLabel || null,
+              onBoardStatusId:
+                existing.onBoardStatusId ?? dig?.onBoardStatusId ?? null,
+              onBoardStatus:
+                existing.onBoardStatus ?? dig?.onBoardStatus ?? null,
+              saveWebsiteSkippedAt: new Date().toISOString(),
+              lastSaveWebsiteError: String(saveErr.message || 'HTTP 500'),
+              lastDetailsResponse: existing,
+              detailsPolledAt: new Date().toISOString(),
+            }),
+          },
+        });
+      }
+    } catch (detailsErr) {
+      console.warn(
+        `[LiveEx-Onboard] save-website recovery details failed for ${rowIdGid}:`,
+        detailsErr.message,
+      );
+    }
+    if (!detailsOk) throw saveErr;
+  }
 
   let uploaded;
   try {
