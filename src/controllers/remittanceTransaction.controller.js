@@ -109,20 +109,69 @@ const resolveStateInitial = (value) => {
   return null;
 };
 
-const getStateDisclosureText = async (rawStateValue) => {
-  const stateInitial = resolveStateInitial(rawStateValue);
-  if (!stateInitial) return null;
+const getStateDisclosureText = async (rawStateValue, countryHint = '') => {
+  const region = String(rawStateValue || '').trim();
+  if (!region || region === '—') return null;
   try {
-    const rows = await prisma.$queryRawUnsafe(
+    const country = String(countryHint || '').trim();
+    const isUsSender =
+      !country ||
+      /united states|^usa$|^us$/i.test(country) ||
+      country.toUpperCase() === 'US';
+
+    // Prefer name match for non-US (e.g. Punjab) and always try name first when possible.
+    const byName = await prisma.$queryRawUnsafe(
       `
-        SELECT "disclosureText"
+        SELECT "disclosureText", "stateName", "stateInitial"
         FROM "state_disclosures"
-        WHERE UPPER(TRIM("stateInitial")) = UPPER(TRIM($1))
+        WHERE LOWER(TRIM("stateName")) = LOWER(TRIM($1))
+           OR LOWER(TRIM("stateName")) LIKE LOWER('%' || TRIM($1) || '%')
+           OR LOWER(TRIM($1)) LIKE LOWER('%' || TRIM("stateName") || '%')
+        ORDER BY
+          CASE WHEN LOWER(TRIM("stateName")) = LOWER(TRIM($1)) THEN 0 ELSE 1 END,
+          LENGTH(TRIM("stateName")) ASC
         LIMIT 1
       `,
-      stateInitial,
+      region,
     );
-    return rows?.[0]?.disclosureText ? String(rows[0].disclosureText) : null;
+    if (byName?.[0]?.disclosureText && !isUsSender) {
+      return String(byName[0].disclosureText);
+    }
+
+    const stateInitial = resolveStateInitial(region);
+    if (stateInitial) {
+      const rows = await prisma.$queryRawUnsafe(
+        `
+          SELECT "disclosureText"
+          FROM "state_disclosures"
+          WHERE UPPER(TRIM("stateInitial")) = UPPER(TRIM($1))
+          LIMIT 1
+        `,
+        stateInitial,
+      );
+      if (rows?.[0]?.disclosureText) return String(rows[0].disclosureText);
+    }
+
+    if (byName?.[0]?.disclosureText) return String(byName[0].disclosureText);
+
+    const codeGuess = String(region)
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '')
+      .slice(0, 10);
+    if (codeGuess.length >= 2) {
+      const rows = await prisma.$queryRawUnsafe(
+        `
+          SELECT "disclosureText"
+          FROM "state_disclosures"
+          WHERE UPPER(TRIM("stateInitial")) = UPPER(TRIM($1))
+          LIMIT 1
+        `,
+        codeGuess,
+      );
+      if (rows?.[0]?.disclosureText) return String(rows[0].disclosureText);
+    }
+    return null;
   } catch {
     return null;
   }
@@ -1240,24 +1289,170 @@ export const sendRemittanceTransactionReceipt = async (req, res) => {
     const charge = Number(paymentFields.charge || paymentFields.fee || recipientInfo.fee || 0);
     const total = sendAmount + charge;
     const status = String(transaction.status || 'Processing');
-    const createdAt = transaction.createdAt ? new Date(transaction.createdAt).toLocaleString('en-US') : '—';
-    const paidAt = transaction.updatedAt ? new Date(transaction.updatedAt).toLocaleString('en-US') : createdAt;
+    const US_STATE_TZ = {
+      AL: 'America/Chicago', AK: 'America/Anchorage', AZ: 'America/Phoenix',
+      AR: 'America/Chicago', CA: 'America/Los_Angeles', CO: 'America/Denver',
+      CT: 'America/New_York', DC: 'America/New_York', DE: 'America/New_York',
+      FL: 'America/New_York', GA: 'America/New_York', HI: 'Pacific/Honolulu',
+      IA: 'America/Chicago', ID: 'America/Boise', IL: 'America/Chicago',
+      IN: 'America/Indiana/Indianapolis', KS: 'America/Chicago', KY: 'America/New_York',
+      LA: 'America/Chicago', MA: 'America/New_York', MD: 'America/New_York',
+      ME: 'America/New_York', MI: 'America/Detroit', MN: 'America/Chicago',
+      MO: 'America/Chicago', MS: 'America/Chicago', MT: 'America/Denver',
+      NC: 'America/New_York', ND: 'America/Chicago', NE: 'America/Chicago',
+      NH: 'America/New_York', NJ: 'America/New_York', NM: 'America/Denver',
+      NV: 'America/Los_Angeles', NY: 'America/New_York', OH: 'America/New_York',
+      OK: 'America/Chicago', OR: 'America/Los_Angeles', PA: 'America/New_York',
+      RI: 'America/New_York', SC: 'America/New_York', SD: 'America/Chicago',
+      TN: 'America/Chicago', TX: 'America/Chicago', UT: 'America/Denver',
+      VA: 'America/New_York', VT: 'America/New_York', WA: 'America/Los_Angeles',
+      WI: 'America/Chicago', WV: 'America/New_York', WY: 'America/Denver',
+    };
+    const resolveZone = (countryOrCurrency, region) => {
+      const raw = String(countryOrCurrency || '').trim();
+      const regionCode = String(region || '').trim().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2);
+      const isUs =
+        !raw ||
+        /^(us|usa|united states|usd)$/i.test(raw) ||
+        Boolean(regionCode && US_STATE_TZ[regionCode]);
+      if (isUs || /united states/i.test(raw)) {
+        return { timeZone: (regionCode && US_STATE_TZ[regionCode]) || 'America/Chicago' };
+      }
+      const key = raw.toLowerCase();
+      const table = [
+        { match: /^(pk|pak|pakistan|pkr)$/i, timeZone: 'Asia/Karachi', label: 'PKT' },
+        { match: /^(in|ind|india|inr)$/i, timeZone: 'Asia/Kolkata', label: 'IST' },
+        { match: /^(et|eth|ethiopia|etb)$/i, timeZone: 'Africa/Addis_Ababa', label: 'EAT' },
+        { match: /^(so|som|somalia|sos)$/i, timeZone: 'Africa/Mogadishu', label: 'EAT' },
+        { match: /^(ke|ken|kenya|kes)$/i, timeZone: 'Africa/Nairobi', label: 'EAT' },
+        { match: /^(ng|nga|nigeria|ngn)$/i, timeZone: 'Africa/Lagos', label: 'WAT' },
+        { match: /^(gb|uk|united kingdom)$/i, timeZone: 'Europe/London' },
+        { match: /^(ca|can|canada)$/i, timeZone: 'America/Toronto' },
+        { match: /^(mx|mex|mexico|mxn)$/i, timeZone: 'America/Mexico_City' },
+        { match: /^(ae|uae|aed)$/i, timeZone: 'Asia/Dubai', label: 'GST' },
+      ];
+      for (const row of table) {
+        if (row.match.test(key) || row.match.test(raw)) {
+          return { timeZone: row.timeZone, label: row.label };
+        }
+      }
+      return { timeZone: 'UTC', label: 'UTC' };
+    };
+    const formatInZone = (value, timeZone, forcedLabel) => {
+      if (!value) return '';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return '';
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone,
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+        timeZoneName: 'short',
+      }).formatToParts(date);
+      const get = (type) => parts.find((p) => p.type === type)?.value || '';
+      let zone =
+        forcedLabel ||
+        String(get('timeZoneName') || '')
+          .replace(/\bGMT\b/i, 'UTC')
+          .trim();
+      if (!forcedLabel) {
+        if (/^GMT\+5$/i.test(zone) && timeZone === 'Asia/Karachi') zone = 'PKT';
+        if (/^GMT\+5:?30$/i.test(zone) && timeZone === 'Asia/Kolkata') zone = 'IST';
+        if (/^GMT\+3$/i.test(zone) && /Addis_Ababa|Nairobi|Mogadishu/.test(timeZone)) zone = 'EAT';
+        if (/^(GMT|UTC)\+1$/i.test(zone) && timeZone === 'Europe/London') zone = 'BST';
+        if (/^(GMT|UTC)$/i.test(zone) && timeZone === 'Europe/London') zone = 'GMT';
+      }
+      return `${get('month')} ${get('day')}, ${get('year')} ${get('hour')}:${get('minute')} ${get('dayPeriod')} ${zone}`.trim();
+    };
+    const senderZone = resolveZone(
+      transaction.customer?.country || 'United States',
+      transaction.customer?.region ||
+        paymentFields.sendersState ||
+        paymentFields.senderState,
+    );
+    const createdAt =
+      formatInZone(transaction.createdAt, senderZone.timeZone, senderZone.label) || '—';
+    const delivered =
+      String(status).toLowerCase() === 'completed'
+        ? transaction.updatedAt || transaction.createdAt
+        : null;
+    const formatDateOnly = (value, timeZone) => {
+      if (!value) return '';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return '';
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone,
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      }).formatToParts(date);
+      const get = (type) => parts.find((p) => p.type === type)?.value || '';
+      return `${get('month')} ${get('day')}, ${get('year')}`.trim();
+    };
+    const receiverZone = resolveZone(
+      recipientInfo.receivingBranchCountryName ||
+        recipientInfo.countryName ||
+        recipientInfo.country ||
+        recipientInfo.countryCode ||
+        currency,
+      null,
+    );
+    let paidAt = '---------';
+    if (delivered) {
+      const senderLine = formatInZone(delivered, senderZone.timeZone, senderZone.label);
+      const receiverDate = formatDateOnly(delivered, receiverZone.timeZone);
+      paidAt =
+        senderLine && receiverDate && senderZone.timeZone !== receiverZone.timeZone
+          ? `${senderLine}<br/>${receiverDate}`
+          : senderLine || '---------';
+    }
     const serviceType = transaction.transferType === 'wallet' ? 'Wallet Transfer' : 'Bank Transfer';
     const receiptSettings = await getReceiptSettingsValues();
     const senderCountry = String(
+      transaction.customer?.country ||
       paymentFields.sendingBranchCountryName ||
       recipientInfo.sendingBranchCountryName ||
       recipientInfo.countryName ||
       '—'
     );
-    const senderAddress = String(
-      paymentFields.senderAddress ||
-      paymentFields.address ||
-      recipientInfo.senderAddress ||
-      transaction.customer?.address ||
-      '—'
-    );
+    const senderAddress = (() => {
+      const street = String(
+        paymentFields.senderAddress ||
+          paymentFields.address ||
+          recipientInfo.senderAddress ||
+          transaction.customer?.address ||
+          '',
+      ).trim();
+      const city = String(transaction.customer?.city || paymentFields.senderCity || '').trim();
+      const region = String(
+        paymentFields.sendersState ||
+          paymentFields.senderState ||
+          recipientInfo.senderState ||
+          transaction.customer?.region ||
+          '',
+      ).trim();
+      const zip = String(transaction.customer?.zipCode || paymentFields.senderPostcode || '').trim();
+      const country = String(transaction.customer?.country || '').trim();
+      const streetNorm = street.toLowerCase().replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim();
+      const contains = (piece) => {
+        const n = String(piece || '').toLowerCase().replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim();
+        return Boolean(n) && streetNorm.includes(n);
+      };
+      const cluster = [city, region, zip].filter(Boolean).join(', ');
+      const extras = [];
+      if (cluster && !contains(cluster)) {
+        const missing = [city, region, zip].filter((p) => p && !contains(p));
+        if (missing.length) extras.push(missing.join(', '));
+      }
+      if (country && !contains(country)) extras.push(country);
+      const formatted = [street, ...extras].filter(Boolean).join(', ');
+      return formatted || '—';
+    })();
     const senderState = String(
+      transaction.customer?.region ||
       paymentFields.sendersState ||
       paymentFields.senderState ||
       recipientInfo.senderState ||
@@ -1288,7 +1483,7 @@ export const sendRemittanceTransactionReceipt = async (req, res) => {
     const logoHtml = receiptSettings.logoUrl
       ? `<img src="${receiptSettings.logoUrl}" alt="Receipt Logo" style="max-height:56px;max-width:220px;display:block;" />`
       : `<div style="font-size:42px;line-height:1;color:#0b66a2;font-weight:700;">${receiptSettings.brandName}</div>`;
-    const stateDisclosureText = await getStateDisclosureText(senderState);
+    const stateDisclosureText = await getStateDisclosureText(senderState, senderCountry);
     const disclosureContent = stateDisclosureText || receiptSettings.disclosureText;
     const disclosureLines = String(disclosureContent || '')
       .split('\n')
@@ -1336,7 +1531,7 @@ export const sendRemittanceTransactionReceipt = async (req, res) => {
                 <div style="padding:8px 14px;border-bottom:1px solid #e5e7eb;"><strong>Date Time</strong><span style="float:right;">${createdAt}</span></div>
                 <div style="padding:8px 14px;border-bottom:1px solid #e5e7eb;"><strong>Service</strong><span style="float:right;">${serviceType}</span></div>
                 <div style="padding:8px 14px;border-bottom:1px solid #e5e7eb;"><strong>Payment Method</strong><span style="float:right;">${transaction.gatewayName || '—'}</span></div>
-                <div style="padding:8px 14px;"><strong>Availability of funds</strong><span style="float:right;">${paidAt}</span></div>
+                <div style="padding:8px 14px;"><strong>Available</strong><span style="float:right;text-align:right;">${paidAt}</span></div>
               </div>
               <div style="border:1px solid #d1d5db;border-radius:6px;overflow:hidden;">
                 <div style="padding:10px 14px;background:#f3f4f6;border-bottom:1px solid #d1d5db;font-size:18px;">Receiver Details</div>

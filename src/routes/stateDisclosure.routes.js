@@ -15,6 +15,7 @@ import {
 const router = express.Router();
 
 router.get('/us-states', listUsStates);
+router.get('/states', listUsStates);
 router.get('/for-me', authenticateCustomer, getDisclosureForMe);
 router.get('/for-customer/:customerId', getDisclosureForCustomer);
 router.post('/seed-msb', authenticateToken, seedMsbStateDisclosures);

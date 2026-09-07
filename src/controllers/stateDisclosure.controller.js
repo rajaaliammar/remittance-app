@@ -62,6 +62,39 @@ const normalizeRegionToInitial = (raw) => {
   return null;
 };
 
+const normalizeStateInitial = (value) =>
+  String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .slice(0, 10);
+
+const normalizeText = (value) => String(value || '').trim();
+
+/** Build a stable state code from CountriesNow row (state_code or name initials). */
+const codeFromCountriesNowState = (row) => {
+  const name = String(row?.name || '').trim();
+  const raw = String(row?.state_code || row?.iso2 || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+  if (raw.length >= 1 && raw.length <= 10) {
+    return raw.length === 1 ? `${raw}X` : raw;
+  }
+  const words = name.split(/\s+/).filter(Boolean);
+  if (words.length >= 2) {
+    const initials = words
+      .map((w) => w[0] || '')
+      .join('')
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '');
+    if (initials.length >= 2) return initials.slice(0, 10);
+  }
+  const compact = name.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (compact.length >= 2) return compact.slice(0, 10);
+  return 'XX';
+};
+
 const findDisclosureByInitial = async (stateInitial) => {
   if (!stateInitial) return null;
   const rows = await prisma.$queryRawUnsafe(
@@ -76,6 +109,107 @@ const findDisclosureByInitial = async (stateInitial) => {
     stateInitial,
   );
   return rows?.[0] || null;
+};
+
+const findDisclosureByRegion = async (rawRegion, countryHint = '') => {
+  const region = String(rawRegion || '').trim();
+  if (!region) return { disclosure: null, verifiedStateInitial: null, verifiedStateName: null };
+
+  const country = String(countryHint || '').trim();
+  const isUsSender =
+    !country ||
+    /united states|^usa$|^us$/i.test(country) ||
+    country.toUpperCase() === 'US';
+
+  const tryByName = async () => {
+    const byNameExact = await prisma.$queryRawUnsafe(
+      `
+        SELECT
+          "id", "stateInitial", "stateName", "institution", "phone",
+          "website", "email", "address", "disclosureText", "createdAt", "updatedAt"
+        FROM "state_disclosures"
+        WHERE LOWER(TRIM("stateName")) = LOWER(TRIM($1))
+        LIMIT 1
+      `,
+      region,
+    );
+    if (byNameExact?.[0]) {
+      return {
+        disclosure: byNameExact[0],
+        verifiedStateInitial: byNameExact[0].stateInitial,
+        verifiedStateName: byNameExact[0].stateName,
+      };
+    }
+
+    const byNameLoose = await prisma.$queryRawUnsafe(
+      `
+        SELECT
+          "id", "stateInitial", "stateName", "institution", "phone",
+          "website", "email", "address", "disclosureText", "createdAt", "updatedAt"
+        FROM "state_disclosures"
+        WHERE
+          LOWER(TRIM("stateName")) LIKE LOWER('%' || TRIM($1) || '%')
+          OR LOWER(TRIM($1)) LIKE LOWER('%' || TRIM("stateName") || '%')
+        ORDER BY LENGTH(TRIM("stateName")) ASC
+        LIMIT 1
+      `,
+      region,
+    );
+    if (byNameLoose?.[0]) {
+      return {
+        disclosure: byNameLoose[0],
+        verifiedStateInitial: byNameLoose[0].stateInitial,
+        verifiedStateName: byNameLoose[0].stateName,
+      };
+    }
+    return null;
+  };
+
+  const tryByCode = async (code) => {
+    if (!code) return null;
+    const byCode = await findDisclosureByInitial(code);
+    if (!byCode) return null;
+    return {
+      disclosure: byCode,
+      verifiedStateInitial: byCode.stateInitial,
+      verifiedStateName: byCode.stateName,
+    };
+  };
+
+  // Non-US senders: prefer name match so codes like OR (Oromia) don't hit Oregon.
+  if (!isUsSender) {
+    const byName = await tryByName();
+    if (byName) return byName;
+    const codeGuess = normalizeStateInitial(region);
+    const byCode = await tryByCode(codeGuess.length >= 2 ? codeGuess : null);
+    if (byCode) return byCode;
+    return {
+      disclosure: null,
+      verifiedStateInitial: codeGuess.length >= 2 ? codeGuess : null,
+      verifiedStateName: null,
+    };
+  }
+
+  const usInitial = normalizeRegionToInitial(region);
+  {
+    const byUs = await tryByCode(usInitial);
+    if (byUs) return byUs;
+  }
+
+  const codeGuess = normalizeStateInitial(region);
+  {
+    const byCode = await tryByCode(codeGuess.length >= 2 ? codeGuess : null);
+    if (byCode) return byCode;
+  }
+
+  const byName = await tryByName();
+  if (byName) return byName;
+
+  return {
+    disclosure: null,
+    verifiedStateInitial: usInitial || (codeGuess.length >= 2 ? codeGuess : null),
+    verifiedStateName: null,
+  };
 };
 
 const resolveCustomerStateDisclosure = async (customerId) => {
@@ -93,22 +227,20 @@ const resolveCustomerStateDisclosure = async (customerId) => {
   });
   if (!customer) return { error: 'Customer not found', status: 404 };
 
-  const verifiedStateInitial = normalizeRegionToInitial(customer.region);
-  const disclosure = verifiedStateInitial
-    ? await findDisclosureByInitial(verifiedStateInitial)
-    : null;
+  const matched = await findDisclosureByRegion(customer.region, customer.country);
 
   return {
     data: {
       customerId: customer.id,
       region: customer.region || null,
-      verifiedStateInitial,
+      country: customer.country || null,
+      verifiedStateInitial: matched.verifiedStateInitial,
       verifiedStateName:
-        disclosure?.stateName ||
-        US_STATES_FALLBACK.find((s) => s.code === verifiedStateInitial)?.name ||
+        matched.verifiedStateName ||
+        US_STATES_FALLBACK.find((s) => s.code === matched.verifiedStateInitial)?.name ||
         null,
-      matched: Boolean(disclosure),
-      disclosure,
+      matched: Boolean(matched.disclosure),
+      disclosure: matched.disclosure,
     },
   };
 };
@@ -142,9 +274,6 @@ const ensureStateDisclosuresTable = async () => {
   `);
 };
 
-const normalizeStateInitial = (value) => String(value || '').trim().toUpperCase();
-const normalizeText = (value) => String(value || '').trim();
-
 const toDisclosurePayload = (input = {}) => ({
   stateInitial: normalizeStateInitial(input.stateInitial),
   stateName: normalizeText(input.stateName),
@@ -157,8 +286,8 @@ const toDisclosurePayload = (input = {}) => ({
 });
 
 const validatePayload = (payload) => {
-  if (!payload.stateInitial || !/^[A-Z]{2}$/.test(payload.stateInitial)) {
-    return 'State initials must be exactly 2 letters (e.g. CA, TX).';
+  if (!payload.stateInitial || !/^[A-Z0-9]{2,10}$/.test(payload.stateInitial)) {
+    return 'State code must be 2–10 letters or numbers (e.g. CA, TX, AA).';
   }
   if (!payload.stateName) return 'State name is required.';
   if (!payload.disclosureText) return 'Disclosure text is required.';
@@ -366,32 +495,76 @@ export const deleteStateDisclosure = async (req, res) => {
   }
 };
 
-/** Free US states list (CountriesNow API) with local fallback — for portal dropdown. */
-export const listUsStates = async (_req, res) => {
+/**
+ * States/provinces for a country via CountriesNow free API.
+ * Query: ?country=Ethiopia  or  ?iso2=ET  (defaults to United States).
+ */
+export const listUsStates = async (req, res) => {
+  const countryNameRaw =
+    String(req.query?.country || req.query?.name || '').trim() ||
+    String(req.body?.country || req.body?.name || '').trim();
+  const iso2Raw = String(req.query?.iso2 || req.body?.iso2 || '')
+    .trim()
+    .toUpperCase();
+
+  let countryName = countryNameRaw;
+  if (!countryName && iso2Raw) {
+    const isoMap = {
+      US: 'United States',
+      USA: 'United States',
+      CA: 'Canada',
+      ET: 'Ethiopia',
+      PK: 'Pakistan',
+      GB: 'United Kingdom',
+      UK: 'United Kingdom',
+      IN: 'India',
+      NG: 'Nigeria',
+      KE: 'Kenya',
+      SO: 'Somalia',
+      AE: 'United Arab Emirates',
+      MX: 'Mexico',
+    };
+    countryName = isoMap[iso2Raw] || iso2Raw;
+  }
+  if (!countryName) countryName = 'United States';
+
+  const isUnitedStates = /united states|usa|^us$/i.test(countryName);
+
   try {
-    let states = null;
+    let states = [];
+    let source = 'countriesnow';
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 6000);
+      const timer = setTimeout(() => controller.abort(), 8000);
       const response = await fetch('https://countriesnow.space/api/v0.1/countries/states', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ country: 'United States' }),
+        // CountriesNow accepts either `country` or `name`
+        body: JSON.stringify({ country: countryName, name: countryName }),
         signal: controller.signal,
+        redirect: 'follow',
       });
       clearTimeout(timer);
       if (response.ok) {
         const json = await response.json();
         const rawStates = json?.data?.states;
         if (Array.isArray(rawStates) && rawStates.length) {
+          const seen = new Set();
           states = rawStates
             .map((row) => {
               const name = String(row?.name || '').trim();
-              const code =
-                normalizeRegionToInitial(row?.state_code || row?.iso2 || name) ||
-                NAME_TO_CODE[name.toUpperCase()] ||
-                null;
-              if (!name || !code) return null;
+              if (!name) return null;
+              let code = codeFromCountriesNowState(row);
+              if (isUnitedStates) {
+                code =
+                  normalizeRegionToInitial(row?.state_code || row?.iso2 || name) ||
+                  NAME_TO_CODE[name.toUpperCase()] ||
+                  code;
+              }
+              if (!code) return null;
+              const key = `${code}::${name.toLowerCase()}`;
+              if (seen.has(key)) return null;
+              seen.add(key);
               return { code, name };
             })
             .filter(Boolean)
@@ -399,33 +572,40 @@ export const listUsStates = async (_req, res) => {
         }
       }
     } catch (apiError) {
-      console.warn('[state-disclosures] US states free API unavailable:', apiError.message);
+      console.warn(
+        `[state-disclosures] states API unavailable for ${countryName}:`,
+        apiError.message,
+      );
+      source = 'fallback';
     }
 
-    if (!states?.length) {
-      states = [...US_STATES_FALLBACK];
-    } else {
-      // CountriesNow often omits DC — merge local fallback so portal always has 51.
+    if (!states.length && isUnitedStates) {
+      states = [...US_STATES_FALLBACK].sort((a, b) => a.name.localeCompare(b.name));
+      source = 'fallback';
+    } else if (states.length && isUnitedStates) {
       const byCode = new Map(states.map((s) => [s.code, s]));
       for (const row of US_STATES_FALLBACK) {
         if (!byCode.has(row.code)) byCode.set(row.code, row);
       }
-      states = [...byCode.values()];
+      states = [...byCode.values()].sort((a, b) => a.name.localeCompare(b.name));
+      source = 'countriesnow+fallback';
     }
-
-    states.sort((a, b) => a.name.localeCompare(b.name));
 
     return res.json({
       success: true,
-      source: 'countriesnow+fallback',
+      source,
+      country: countryName,
       data: states,
     });
   } catch (error) {
-    console.error('Error listing US states:', error);
+    console.error('Error listing states by country:', error);
     return res.json({
       success: true,
       source: 'fallback',
-      data: [...US_STATES_FALLBACK].sort((a, b) => a.name.localeCompare(b.name)),
+      country: countryName,
+      data: isUnitedStates
+        ? [...US_STATES_FALLBACK].sort((a, b) => a.name.localeCompare(b.name))
+        : [],
     });
   }
 };
