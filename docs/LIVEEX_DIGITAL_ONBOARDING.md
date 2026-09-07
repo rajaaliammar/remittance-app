@@ -53,7 +53,7 @@ Swagger `CustomerSaveWebRequest` requires these for the TMS form to fill:
 |-------|---------|
 | `jurisdictionOfIssueCountry` | LiveEx countries lookup id (same as nationality/residence) |
 | `jurisdictionOfState` | Issue state/province (e.g. `CO`) |
-| `mobileNumberCode` | Dial code only (`1`) — **not** glued into `phone` |
+| `mobileNumberCode` | ISO alpha-2 from countries lookup (`US`, `CA`, `MX`) — **not** dial code `1` |
 | `phone` | National number only (`4654564564`) |
 | `residentialCountry` | (not `residentCountry`) |
 

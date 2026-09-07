@@ -381,7 +381,7 @@ export function buildSaveWebsitePayload(customer, { rowIdGid, sendUrl } = {}) {
     lastName: sanitizePersonName(customer.lastName, 'Unknown'),
     dateOfBirth,
     email,
-    // National number only — dial code goes in mobileNumberCode (swagger CustomerSaveWebRequest)
+    // National number only; mobileNumberCode = ISO2 (US/CA/MX) per LiveEx UserManual
     phone: nationalNumber,
     mobileNumberCode,
     homeAddress,

@@ -80,6 +80,37 @@ const ISO_DIAL_CODE = {
   AE: '971',
 };
 
+/** Longest dial-first list for inferring ISO from a stored `${dial}${national}` phone. */
+const DIAL_PREFIX_TO_ISO = Object.entries(ISO_DIAL_CODE)
+  .filter(([, dial]) => dial !== '1') // NANP (+1) is ambiguous US/CA — use hint country
+  .sort((a, b) => b[1].length - a[1].length);
+
+/**
+ * Prefer dial prefix on the stored phone (e.g. 251… → ET) over residential country,
+ * so Ethiopian signup works even when address defaults to US.
+ */
+function resolvePhoneIsoFromDigits(digits, hintIso) {
+  const hint = normalizeCountryCode(hintIso, 'US');
+  if (!digits) return hint;
+
+  const hintDial = ISO_DIAL_CODE[hint] || '1';
+  // Full number already includes the hint country's dial
+  if (digits.startsWith(hintDial) && digits.length > hintDial.length + 5) {
+    return hint;
+  }
+
+  // Detect another international dial only when dial + national (≥8) is present.
+  // Avoids ET national mobiles like 91xxxxxxx matching India (91).
+  for (const [iso, dial] of DIAL_PREFIX_TO_ISO) {
+    if (!digits.startsWith(dial)) continue;
+    const national = digits.slice(dial.length);
+    if (national.length < 8) continue;
+    return iso;
+  }
+
+  return hint;
+}
+
 /** US state / CA province codes — never treat these as country ISO2 (except CA/IN handled as countries). */
 const SUBDIVISION_CODES = new Set([
   'AL', 'AK', 'AZ', 'AR', 'CO', 'CT', 'DE', 'FL', 'GA', 'HI', 'ID', 'IL', 'IA', 'KS',
@@ -289,24 +320,39 @@ export function resolveProfessionId(occupationText, sourceText) {
 }
 
 /**
- * Split stored phone (`${dial}${national}`) into LiveEx save-website fields:
- * mobileNumberCode + phone (national only — do not put dial code in phone).
+ * Split stored phone (`${dial}${national}`) into LiveEx save-website fields.
+ *
+ * LiveEx Digital Onboarding UserManual: mobileNumberCode is the ISO alpha-2
+ * country code from /api/lookups/countries (e.g. "US", "CA", "MX", "ET") — not the
+ * numeric dialing code. phone is national digits only.
+ *
+ * dialCode is returned for the separate AML Customers/save contract
+ * (CountryCode-Number, e.g. 1-6124326758).
  */
 export function splitPhoneForLiveex(phone, countryCode = 'US') {
-  const iso = normalizeCountryCode(countryCode, 'US');
-  const dial = ISO_DIAL_CODE[iso] || '1';
   let digits = String(phone || '').replace(/\D/g, '');
+  const iso = resolvePhoneIsoFromDigits(digits, countryCode);
+  const dial = ISO_DIAL_CODE[iso] || '1';
+
   if (!digits) {
-    return { mobileNumberCode: dial, nationalNumber: '0000000000' };
+    return {
+      mobileNumberCode: iso,
+      dialCode: dial,
+      nationalNumber: '0000000000',
+    };
   }
-  if (digits.startsWith(dial) && digits.length > dial.length + 6) {
+  if (digits.startsWith(dial) && digits.length > dial.length + 5) {
     digits = digits.slice(dial.length);
   }
   if (dial === '1') {
     if (digits.length === 11 && digits.startsWith('1')) digits = digits.slice(1);
     if (digits.length >= 10) digits = digits.slice(-10);
   }
-  return { mobileNumberCode: dial, nationalNumber: digits || '0000000000' };
+  return {
+    mobileNumberCode: iso,
+    dialCode: dial,
+    nationalNumber: digits || '0000000000',
+  };
 }
 
 /**
@@ -314,8 +360,8 @@ export function splitPhoneForLiveex(phone, countryCode = 'US') {
  * Strips a leading dial code already embedded in stored phone (signup saves `${cc}${national}`).
  */
 export function formatAmlPhone(phone, countryCode = 'US') {
-  const { mobileNumberCode, nationalNumber } = splitPhoneForLiveex(phone, countryCode);
-  return `${mobileNumberCode}-${nationalNumber}`;
+  const { dialCode, nationalNumber } = splitPhoneForLiveex(phone, countryCode);
+  return `${dialCode}-${nationalNumber}`;
 }
 
 export const AML_DEFAULTS = {
