@@ -1,0 +1,512 @@
+[
+  {
+    "stateInitial": "AK",
+    "stateName": "Alaska",
+    "institution": "Alaska Division of Banking & Securities",
+    "phone": "(907) 465-2521",
+    "website": "https://www.commerce.alaska.gov/web/dbs/ConsumerFinance/MoneyServiceBusinesses",
+    "email": "dbs.licensing@alaska.gov",
+    "address": "PO Box 110807, Juneau, AK 99811-0807",
+    "disclosureText": "Alaska, you may contact the Alaska Division of Banking & Securities at (907) 465-2521, visit https://www.commerce.alaska.gov/web/dbs/ConsumerFinance/MoneyServiceBusinesses, write to PO Box 110807, Juneau, AK 99811-0807, or, if available, by email at: dbs.licensing@alaska.gov."
+  },
+  {
+    "stateInitial": "AL",
+    "stateName": "Alabama",
+    "institution": "Alabama Securities Commission",
+    "phone": "(800) 222-1253",
+    "website": "https://asc.alabama.gov/",
+    "email": "asc@asc.alabama.gov",
+    "address": "P.O. Box 304700, Montgomery, AL 36130-4700",
+    "disclosureText": "Alabama, you may contact the Alabama Securities Commission at (800) 222-1253, visit https://asc.alabama.gov/, write to P.O. Box 304700, Montgomery, AL 36130-4700, or, if available, by email at: asc@asc.alabama.gov."
+  },
+  {
+    "stateInitial": "AR",
+    "stateName": "Arkansas",
+    "institution": "Arkansas Securities Department",
+    "phone": "(501) 324-9260",
+    "website": "http://www.securities.arkansas.gov/",
+    "email": "ASDInfo@Arkansas.gov",
+    "address": "1 Commerce Way, Suite 402, Little Rock, AR 72202",
+    "disclosureText": "Arkansas, you may contact the Arkansas Securities Department at (501) 324-9260, visit http://www.securities.arkansas.gov/, write to 1 Commerce Way, Suite 402, Little Rock, AR 72202, or, if available, by email at: ASDInfo@Arkansas.gov."
+  },
+  {
+    "stateInitial": "AZ",
+    "stateName": "Arizona",
+    "institution": "Arizona Department of Insurance and Financial Institutions",
+    "phone": "(800) 352-8431",
+    "website": "https://difi.az.gov/",
+    "email": "financial.consumers@difi.az.gov",
+    "address": "100 N 15th Ave, Ste 261, Phoenix, AZ 85007-2630",
+    "disclosureText": "Arizona, you may contact the Arizona Department of Insurance and Financial Institutions at (800) 352-8431, visit https://difi.az.gov/, write to 100 N 15th Ave, Ste 261, Phoenix, AZ 85007-2630, or, if available, by email at: financial.consumers@difi.az.gov."
+  },
+  {
+    "stateInitial": "CA",
+    "stateName": "California",
+    "institution": "Department of Financial Protection and Innovation",
+    "phone": "(866) 275-2677",
+    "website": "https://dfpi.ca.gov/",
+    "email": "consumer.services@dfpi.ca.gov",
+    "address": "651 Bannon Street, Sacramento, CA 95811",
+    "disclosureText": "California, you may contact the Department of Financial Protection and Innovation at (866) 275-2677, visit https://dfpi.ca.gov/, write to 651 Bannon Street, Sacramento, CA 95811, or, if available, by email at: consumer.services@dfpi.ca.gov."
+  },
+  {
+    "stateInitial": "CO",
+    "stateName": "Colorado",
+    "institution": "Colorado Division of Banking",
+    "phone": "(303) 894-7575",
+    "website": "https://banking.colorado.gov/",
+    "email": "",
+    "address": "1560 Broadway, Suite 1175, Denver, CO 80202",
+    "disclosureText": "Colorado, you may contact the Colorado Division of Banking at (303) 894-7575, visit https://banking.colorado.gov/, write to 1560 Broadway, Suite 1175, Denver, CO 80202."
+  },
+  {
+    "stateInitial": "CT",
+    "stateName": "Connecticut",
+    "institution": "Department of Banking",
+    "phone": "(800) 831-7225",
+    "website": "https://portal.ct.gov/DOB",
+    "email": "banking.complaints@ct.gov",
+    "address": "260 Constitution Plaza, Hartford, CT 06103",
+    "disclosureText": "Connecticut, you may contact the Department of Banking at (800) 831-7225, visit https://portal.ct.gov/DOB, write to 260 Constitution Plaza, Hartford, CT 06103, or, if available, by email at: banking.complaints@ct.gov."
+  },
+  {
+    "stateInitial": "DC",
+    "stateName": "District of Columbia",
+    "institution": "Department of Insurance Securities and Banking",
+    "phone": "(202) 727-8000",
+    "website": "https://disb.dc.gov/",
+    "email": "disbcomplaints@dc.gov",
+    "address": "1050 First Street NE, Suite 801, Washington, DC 20002",
+    "disclosureText": "District of Columbia, you may contact the Department of Insurance Securities and Banking at (202) 727-8000, visit https://disb.dc.gov/, write to 1050 First Street NE, Suite 801, Washington, DC 20002, or, if available, by email at: disbcomplaints@dc.gov."
+  },
+  {
+    "stateInitial": "DE",
+    "stateName": "Delaware",
+    "institution": "Office of the State Bank Commissioner",
+    "phone": "(302) 739-4235",
+    "website": "https://banking.delaware.gov/",
+    "email": "bankcommissioner@delaware.gov",
+    "address": "1110 Forrest Avenue, Dover, DE 19904",
+    "disclosureText": "Delaware, you may contact the Office of the State Bank Commissioner at (302) 739-4235, visit https://banking.delaware.gov/, write to 1110 Forrest Avenue, Dover, DE 19904, or, if available, by email at: bankcommissioner@delaware.gov."
+  },
+  {
+    "stateInitial": "FL",
+    "stateName": "Florida",
+    "institution": "Florida Office of Financial Regulation",
+    "phone": "(850) 487-9687",
+    "website": "http://www.flofr.com/",
+    "email": "",
+    "address": "200 E. Gaines Street, Tallahassee, FL 32399",
+    "disclosureText": "Florida, you may contact the Florida Office of Financial Regulation at (850) 487-9687, visit http://www.flofr.com/, write to 200 E. Gaines Street, Tallahassee, FL 32399."
+  },
+  {
+    "stateInitial": "GA",
+    "stateName": "Georgia",
+    "institution": "Georgia Department of Banking and Finance",
+    "phone": "(888) 986-1633",
+    "website": "https://dbf.georgia.gov/",
+    "email": "reportissue@dbf.state.ga.us",
+    "address": "2990 Brandywine Road, Suite 200, Atlanta, GA 30341",
+    "disclosureText": "Georgia, you may contact the Georgia Department of Banking and Finance at (888) 986-1633, visit https://dbf.georgia.gov/, write to 2990 Brandywine Road, Suite 200, Atlanta, GA 30341, or, if available, by email at: reportissue@dbf.state.ga.us."
+  },
+  {
+    "stateInitial": "HI",
+    "stateName": "Hawaii",
+    "institution": "Hawaii Division of Financial Institutions",
+    "phone": "(808) 586-2820",
+    "website": "https://cca.hawaii.gov/dfi/",
+    "email": "dfi@dcca.hawaii.gov",
+    "address": "335 Merchant Street, Honolulu, HI 96813",
+    "disclosureText": "Hawaii, you may contact the Hawaii Division of Financial Institutions at (808) 586-2820, visit https://cca.hawaii.gov/dfi/, write to 335 Merchant Street, Honolulu, HI 96813, or, if available, by email at: dfi@dcca.hawaii.gov."
+  },
+  {
+    "stateInitial": "IA",
+    "stateName": "Iowa",
+    "institution": "Iowa Division of Banking",
+    "phone": "(515) 281-4014",
+    "website": "https://idob.iowa.gov/",
+    "email": "",
+    "address": "200 E Grand Ave, Suite 300, Des Moines, IA 50309",
+    "disclosureText": "Iowa, you may contact the Iowa Division of Banking at (515) 281-4014, visit https://idob.iowa.gov/, write to 200 E Grand Ave, Suite 300, Des Moines, IA 50309."
+  },
+  {
+    "stateInitial": "ID",
+    "stateName": "Idaho",
+    "institution": "Idaho Department of Finance",
+    "phone": "(208) 332-8004",
+    "website": "https://finance.idaho.gov/",
+    "email": "securities@finance.idaho.gov",
+    "address": "11341 W Chinden Blvd, Boise, ID 83714",
+    "disclosureText": "Idaho, you may contact the Idaho Department of Finance at (208) 332-8004, visit https://finance.idaho.gov/, write to 11341 W Chinden Blvd, Boise, ID 83714, or, if available, by email at: securities@finance.idaho.gov."
+  },
+  {
+    "stateInitial": "IL",
+    "stateName": "Illinois",
+    "institution": "Illinois Department of Financial and Professional Regulation",
+    "phone": "(312) 814-6910",
+    "website": "https://idfpr.illinois.gov/",
+    "email": "FPR.CIU@illinois.gov",
+    "address": "555 W Monroe Street, Chicago, IL 60661",
+    "disclosureText": "Illinois, you may contact the Illinois Department of Financial and Professional Regulation at (312) 814-6910, visit https://idfpr.illinois.gov/, write to 555 W Monroe Street, Chicago, IL 60661, or, if available, by email at: FPR.CIU@illinois.gov."
+  },
+  {
+    "stateInitial": "IN",
+    "stateName": "Indiana",
+    "institution": "Indiana Department of Financial Institutions",
+    "phone": "(317) 232-3955",
+    "website": "https://www.in.gov/dfi/",
+    "email": "dficomplaints@dfi.in.gov",
+    "address": "30 South Meridian Street, Indianapolis, IN 46204",
+    "disclosureText": "Indiana, you may contact the Indiana Department of Financial Institutions at (317) 232-3955, visit https://www.in.gov/dfi/, write to 30 South Meridian Street, Indianapolis, IN 46204, or, if available, by email at: dficomplaints@dfi.in.gov."
+  },
+  {
+    "stateInitial": "KS",
+    "stateName": "Kansas",
+    "institution": "Office of the State Bank Commissioner",
+    "phone": "(785) 296-2266",
+    "website": "https://www.osbckansas.org/",
+    "email": "complaints@osbckansas.org",
+    "address": "700 SW Jackson Street, Suite 300, Topeka, KS 66603",
+    "disclosureText": "Kansas, you may contact the Office of the State Bank Commissioner at (785) 296-2266, visit https://www.osbckansas.org/, write to 700 SW Jackson Street, Suite 300, Topeka, KS 66603, or, if available, by email at: complaints@osbckansas.org."
+  },
+  {
+    "stateInitial": "KY",
+    "stateName": "Kentucky",
+    "institution": "Department of Financial Institutions",
+    "phone": "(502) 573-3390",
+    "website": "https://kfi.ky.gov/",
+    "email": "KFI.Complaints@ky.gov",
+    "address": "500 Mero Street, Frankfort, KY 40601",
+    "disclosureText": "Kentucky, you may contact the Department of Financial Institutions at (502) 573-3390, visit https://kfi.ky.gov/, write to 500 Mero Street, Frankfort, KY 40601, or, if available, by email at: KFI.Complaints@ky.gov."
+  },
+  {
+    "stateInitial": "LA",
+    "stateName": "Louisiana",
+    "institution": "Office of Financial Institutions",
+    "phone": "(225) 925-4660",
+    "website": "http://www.ofi.state.la.us/",
+    "email": "complaints@ofi.louisiana.gov",
+    "address": "P.O. Box 94095, Baton Rouge, LA 70804",
+    "disclosureText": "Louisiana, you may contact the Office of Financial Institutions at (225) 925-4660, visit http://www.ofi.state.la.us/, write to P.O. Box 94095, Baton Rouge, LA 70804, or, if available, by email at: complaints@ofi.louisiana.gov."
+  },
+  {
+    "stateInitial": "MA",
+    "stateName": "Massachusetts",
+    "institution": "Division of Banks",
+    "phone": "(617) 956-1500",
+    "website": "https://www.mass.gov/orgs/division-of-banks",
+    "email": "dobconsumer.assistance@mass.gov",
+    "address": "1000 Washington Street, Boston, MA 02118",
+    "disclosureText": "Massachusetts, you may contact the Division of Banks at (617) 956-1500, visit https://www.mass.gov/orgs/division-of-banks, write to 1000 Washington Street, Boston, MA 02118, or, if available, by email at: dobconsumer.assistance@mass.gov."
+  },
+  {
+    "stateInitial": "MD",
+    "stateName": "Maryland",
+    "institution": "Commissioner of Financial Regulation",
+    "phone": "(888) 784-0136",
+    "website": "https://www.dllr.state.md.us/finance/",
+    "email": "CSU.Complaints@maryland.gov",
+    "address": "1100 North Eutaw Street, Baltimore, MD 21201",
+    "disclosureText": "Maryland, you may contact the Commissioner of Financial Regulation at (888) 784-0136, visit https://www.dllr.state.md.us/finance/, write to 1100 North Eutaw Street, Baltimore, MD 21201, or, if available, by email at: CSU.Complaints@maryland.gov."
+  },
+  {
+    "stateInitial": "ME",
+    "stateName": "Maine",
+    "institution": "Bureau of Consumer Credit Protection",
+    "phone": "(800) 332-8529",
+    "website": "https://www.maine.gov/pfr/consumercredit/",
+    "email": "",
+    "address": "35 State House Station, Augusta, ME 04333",
+    "disclosureText": "Maine, you may contact the Bureau of Consumer Credit Protection at (800) 332-8529, visit https://www.maine.gov/pfr/consumercredit/, write to 35 State House Station, Augusta, ME 04333."
+  },
+  {
+    "stateInitial": "MI",
+    "stateName": "Michigan",
+    "institution": "Department of Insurance and Financial Services",
+    "phone": "(877) 999-6442",
+    "website": "https://www.michigan.gov/difs/",
+    "email": "DIFScomplaints@michigan.gov",
+    "address": "PO Box 30220, Lansing, MI 48909",
+    "disclosureText": "Michigan, you may contact the Department of Insurance and Financial Services at (877) 999-6442, visit https://www.michigan.gov/difs/, write to PO Box 30220, Lansing, MI 48909, or, if available, by email at: DIFScomplaints@michigan.gov."
+  },
+  {
+    "stateInitial": "MN",
+    "stateName": "Minnesota",
+    "institution": "Minnesota Commerce Department",
+    "phone": "(651) 239-1600",
+    "website": "https://mn.gov/commerce/",
+    "email": "consumer.protection@state.mn.us",
+    "address": "85 7th Place East, Suite 280, Saint Paul, MN 55101",
+    "disclosureText": "Minnesota, you may contact the Minnesota Commerce Department at (651) 239-1600, visit https://mn.gov/commerce/, write to 85 7th Place East, Suite 280, Saint Paul, MN 55101, or, if available, by email at: consumer.protection@state.mn.us."
+  },
+  {
+    "stateInitial": "MO",
+    "stateName": "Missouri",
+    "institution": "Missouri Division of Finance",
+    "phone": "(573) 751-3242",
+    "website": "https://finance.mo.gov/",
+    "email": "finance@dof.mo.gov",
+    "address": "P.O. Box 716, Jefferson City, MO 65102",
+    "disclosureText": "Missouri, you may contact the Missouri Division of Finance at (573) 751-3242, visit https://finance.mo.gov/, write to P.O. Box 716, Jefferson City, MO 65102, or, if available, by email at: finance@dof.mo.gov."
+  },
+  {
+    "stateInitial": "MS",
+    "stateName": "Mississippi",
+    "institution": "Mississippi Department of Banking and Consumer Finance",
+    "phone": "(800) 844-2499",
+    "website": "https://www.dbcf.ms.gov/",
+    "email": "",
+    "address": "P.O. Box 12129, Jackson, MS 39236",
+    "disclosureText": "Mississippi, you may contact the Mississippi Department of Banking and Consumer Finance at (800) 844-2499, visit https://www.dbcf.ms.gov/, write to P.O. Box 12129, Jackson, MS 39236."
+  },
+  {
+    "stateInitial": "MT",
+    "stateName": "Montana",
+    "institution": "Montana Division of Banking & Financial Institutions",
+    "phone": "",
+    "website": "https://banking.mt.gov/moneytransmitters",
+    "email": "",
+    "address": "",
+    "disclosureText": "Montana does not regulate money transmitters. For more information, visit https://banking.mt.gov/moneytransmitters."
+  },
+  {
+    "stateInitial": "NC",
+    "stateName": "North Carolina",
+    "institution": "Office of the Commissioner of Banks",
+    "phone": "(919) 733-3016",
+    "website": "https://nccob.nc.gov/",
+    "email": "",
+    "address": "4309 Mail Service Center, Raleigh, NC 27699",
+    "disclosureText": "North Carolina, you may contact the Office of the Commissioner of Banks at (919) 733-3016, visit https://nccob.nc.gov/, write to 4309 Mail Service Center, Raleigh, NC 27699."
+  },
+  {
+    "stateInitial": "ND",
+    "stateName": "North Dakota",
+    "institution": "Department of Financial Institutions",
+    "phone": "(701) 328-9933",
+    "website": "https://www.nd.gov/dfi/",
+    "email": "dfi@nd.gov",
+    "address": "1200 Memorial Highway, Bismarck, ND 58504",
+    "disclosureText": "North Dakota, you may contact the Department of Financial Institutions at (701) 328-9933, visit https://www.nd.gov/dfi/, write to 1200 Memorial Highway, Bismarck, ND 58504, or, if available, by email at: dfi@nd.gov."
+  },
+  {
+    "stateInitial": "NE",
+    "stateName": "Nebraska",
+    "institution": "Nebraska Department of Banking & Finance",
+    "phone": "(877) 471-3445",
+    "website": "https://ndbf.nebraska.gov/",
+    "email": "dob.complaints@nebraska.gov",
+    "address": "1526 K Street, Lincoln, NE 68508",
+    "disclosureText": "Nebraska, you may contact the Nebraska Department of Banking & Finance at (877) 471-3445, visit https://ndbf.nebraska.gov/, write to 1526 K Street, Lincoln, NE 68508, or, if available, by email at: dob.complaints@nebraska.gov."
+  },
+  {
+    "stateInitial": "NH",
+    "stateName": "New Hampshire",
+    "institution": "Banking Department",
+    "phone": "(603) 271-3561",
+    "website": "https://www.nh.gov/banking/",
+    "email": "legal@banking.nh.gov",
+    "address": "53 Regional Drive, Concord, NH 03301",
+    "disclosureText": "New Hampshire, you may contact the Banking Department at (603) 271-3561, visit https://www.nh.gov/banking/, write to 53 Regional Drive, Concord, NH 03301, or, if available, by email at: legal@banking.nh.gov."
+  },
+  {
+    "stateInitial": "NJ",
+    "stateName": "New Jersey",
+    "institution": "Department of Banking and Insurance",
+    "phone": "(800) 446-7467",
+    "website": "https://www.nj.gov/dobi/consumer.htm",
+    "email": "",
+    "address": "PO Box 471, Trenton, NJ 08625",
+    "disclosureText": "New Jersey, you may contact the Department of Banking and Insurance at (800) 446-7467, visit https://www.nj.gov/dobi/consumer.htm, write to PO Box 471, Trenton, NJ 08625."
+  },
+  {
+    "stateInitial": "NM",
+    "stateName": "New Mexico",
+    "institution": "Financial Institutions Division",
+    "phone": "(505) 476-4885",
+    "website": "https://www.rld.nm.gov/",
+    "email": "",
+    "address": "P.O. Box 25101, Santa Fe, NM 87504",
+    "disclosureText": "New Mexico, you may contact the Financial Institutions Division at (505) 476-4885, visit https://www.rld.nm.gov/, write to P.O. Box 25101, Santa Fe, NM 87504."
+  },
+  {
+    "stateInitial": "NV",
+    "stateName": "Nevada",
+    "institution": "Department of Business and Industry Financial Institutions Division",
+    "phone": "(866) 858-8951",
+    "website": "https://fid.nv.gov/",
+    "email": "FIDComplaints@fid.state.nv.us",
+    "address": "3300 W Sahara Avenue, Las Vegas, NV 89102",
+    "disclosureText": "Nevada, you may contact the Department of Business and Industry Financial Institutions Division at (866) 858-8951, visit https://fid.nv.gov/, write to 3300 W Sahara Avenue, Las Vegas, NV 89102, or, if available, by email at: FIDComplaints@fid.state.nv.us."
+  },
+  {
+    "stateInitial": "NY",
+    "stateName": "New York",
+    "institution": "Department of Financial Services",
+    "phone": "(877) 226-5697",
+    "website": "https://www.dfs.ny.gov/",
+    "email": "",
+    "address": "One Commerce Plaza, Albany, NY 12257",
+    "disclosureText": "New York, you may contact the Department of Financial Services at (877) 226-5697, visit https://www.dfs.ny.gov/, write to One Commerce Plaza, Albany, NY 12257."
+  },
+  {
+    "stateInitial": "OH",
+    "stateName": "Ohio",
+    "institution": "Division of Financial Institutions",
+    "phone": "(866) 278-0003",
+    "website": "https://com.ohio.gov/divisions-and-programs/financial-institutions",
+    "email": "",
+    "address": "77 South High Street, Columbus, OH 43215",
+    "disclosureText": "Ohio, you may contact the Division of Financial Institutions at (866) 278-0003, visit https://com.ohio.gov/divisions-and-programs/financial-institutions, write to 77 South High Street, Columbus, OH 43215."
+  },
+  {
+    "stateInitial": "OK",
+    "stateName": "Oklahoma",
+    "institution": "Oklahoma State Banking Department",
+    "phone": "(405) 521-2782",
+    "website": "https://oklahoma.gov/banking.html",
+    "email": "",
+    "address": "2900 N Lincoln Boulevard, Oklahoma City, OK 73105",
+    "disclosureText": "Oklahoma, you may contact the Oklahoma State Banking Department at (405) 521-2782, visit https://oklahoma.gov/banking.html, write to 2900 N Lincoln Boulevard, Oklahoma City, OK 73105."
+  },
+  {
+    "stateInitial": "OR",
+    "stateName": "Oregon",
+    "institution": "Department of Consumer and Business Services",
+    "phone": "(888) 877-4894",
+    "website": "https://dfr.oregon.gov/",
+    "email": "DFR.FinancialServicesHelp@dcbs.oregon.gov",
+    "address": "350 Winter Street NE, Salem, OR 97309",
+    "disclosureText": "Oregon, you may contact the Department of Consumer and Business Services at (888) 877-4894, visit https://dfr.oregon.gov/, write to 350 Winter Street NE, Salem, OR 97309, or, if available, by email at: DFR.FinancialServicesHelp@dcbs.oregon.gov."
+  },
+  {
+    "stateInitial": "PA",
+    "stateName": "Pennsylvania",
+    "institution": "Department of Banking and Securities",
+    "phone": "(800) 722-2657",
+    "website": "https://www.dobs.pa.gov/",
+    "email": "",
+    "address": "17 N 2nd Street, Harrisburg, PA 17101",
+    "disclosureText": "Pennsylvania, you may contact the Department of Banking and Securities at (800) 722-2657, visit https://www.dobs.pa.gov/, write to 17 N 2nd Street, Harrisburg, PA 17101."
+  },
+  {
+    "stateInitial": "RI",
+    "stateName": "Rhode Island",
+    "institution": "Department of Business Regulation",
+    "phone": "(401) 462-9503",
+    "website": "https://dbr.ri.gov/",
+    "email": "DBR.BankInquiry@dbr.ri.gov",
+    "address": "1511 Pontiac Avenue, Cranston, RI 02920",
+    "disclosureText": "Rhode Island, you may contact the Department of Business Regulation at (401) 462-9503, visit https://dbr.ri.gov/, write to 1511 Pontiac Avenue, Cranston, RI 02920, or, if available, by email at: DBR.BankInquiry@dbr.ri.gov."
+  },
+  {
+    "stateInitial": "SC",
+    "stateName": "South Carolina",
+    "institution": "Office of the Attorney General",
+    "phone": "(803) 734-1221",
+    "website": "https://www.scag.gov/",
+    "email": "msb@scag.gov",
+    "address": "PO Box 11549, Columbia, SC 29211",
+    "disclosureText": "South Carolina, you may contact the Office of the Attorney General at (803) 734-1221, visit https://www.scag.gov/, write to PO Box 11549, Columbia, SC 29211, or, if available, by email at: msb@scag.gov."
+  },
+  {
+    "stateInitial": "SD",
+    "stateName": "South Dakota",
+    "institution": "Department of Labor and Regulation",
+    "phone": "(605) 773-3421",
+    "website": "https://dlr.sd.gov/banking/",
+    "email": "banking@state.sd.us",
+    "address": "1714 Lincoln Avenue, Pierre, SD 57501",
+    "disclosureText": "South Dakota, you may contact the Department of Labor and Regulation at (605) 773-3421, visit https://dlr.sd.gov/banking/, write to 1714 Lincoln Avenue, Pierre, SD 57501, or, if available, by email at: banking@state.sd.us."
+  },
+  {
+    "stateInitial": "TN",
+    "stateName": "Tennessee",
+    "institution": "Department of Financial Institutions",
+    "phone": "(615) 741-2236",
+    "website": "https://www.tn.gov/tdfi/",
+    "email": "tdfi.consumerresources@tn.gov",
+    "address": "312 Rosa L Parks Avenue, Nashville, TN 37243",
+    "disclosureText": "Tennessee, you may contact the Department of Financial Institutions at (615) 741-2236, visit https://www.tn.gov/tdfi/, write to 312 Rosa L Parks Avenue, Nashville, TN 37243, or, if available, by email at: tdfi.consumerresources@tn.gov."
+  },
+  {
+    "stateInitial": "TX",
+    "stateName": "Texas",
+    "institution": "Texas Department of Banking",
+    "phone": "(877) 276-5554",
+    "website": "https://www.dob.texas.gov/",
+    "email": "consumer.complaints@dob.texas.gov",
+    "address": "2601 N Lamar Boulevard, Austin, TX 78705",
+    "disclosureText": "Texas, you may contact the Texas Department of Banking at (877) 276-5554, visit https://www.dob.texas.gov/, write to 2601 N Lamar Boulevard, Austin, TX 78705, or, if available, by email at: consumer.complaints@dob.texas.gov."
+  },
+  {
+    "stateInitial": "UT",
+    "stateName": "Utah",
+    "institution": "Utah Department of Financial Institutions",
+    "phone": "(801) 538-8834",
+    "website": "https://dfi.utah.gov/",
+    "email": "complaints.dfi@utah.gov",
+    "address": "PO Box 146800, Salt Lake City, UT 84114",
+    "disclosureText": "Utah, you may contact the Utah Department of Financial Institutions at (801) 538-8834, visit https://dfi.utah.gov/, write to PO Box 146800, Salt Lake City, UT 84114, or, if available, by email at: complaints.dfi@utah.gov."
+  },
+  {
+    "stateInitial": "VA",
+    "stateName": "Virginia",
+    "institution": "Bureau of Financial Institutions",
+    "phone": "(804) 371-9657",
+    "website": "https://scc.virginia.gov/bfi",
+    "email": "BFIQuestions@scc.virginia.gov",
+    "address": "PO Box 640, Richmond, VA 23218",
+    "disclosureText": "Virginia, you may contact the Bureau of Financial Institutions at (804) 371-9657, visit https://scc.virginia.gov/bfi, write to PO Box 640, Richmond, VA 23218, or, if available, by email at: BFIQuestions@scc.virginia.gov."
+  },
+  {
+    "stateInitial": "VT",
+    "stateName": "Vermont",
+    "institution": "Department of Financial Regulation",
+    "phone": "(800) 964-1784",
+    "website": "https://dfr.vermont.gov/",
+    "email": "dfr.bnkconsumer@vermont.gov",
+    "address": "89 Main Street, Montpelier, VT 05620",
+    "disclosureText": "Vermont, you may contact the Department of Financial Regulation at (800) 964-1784, visit https://dfr.vermont.gov/, write to 89 Main Street, Montpelier, VT 05620, or, if available, by email at: dfr.bnkconsumer@vermont.gov."
+  },
+  {
+    "stateInitial": "WA",
+    "stateName": "Washington",
+    "institution": "Department of Financial Institutions",
+    "phone": "(360) 902-8703",
+    "website": "https://dfi.wa.gov/",
+    "email": "CSEnforceComplaints@dfi.wa.gov",
+    "address": "PO Box 41200, Olympia, WA 98504",
+    "disclosureText": "Washington, you may contact the Department of Financial Institutions at (360) 902-8703, visit https://dfi.wa.gov/, write to PO Box 41200, Olympia, WA 98504, or, if available, by email at: CSEnforceComplaints@dfi.wa.gov."
+  },
+  {
+    "stateInitial": "WI",
+    "stateName": "Wisconsin",
+    "institution": "Department of Financial Institutions",
+    "phone": "(608) 261-7578",
+    "website": "https://www.wdfi.org/",
+    "email": "DFISecretary@wisconsin.gov",
+    "address": "4822 Madison Yards Way, Madison, WI 53705",
+    "disclosureText": "Wisconsin, you may contact the Department of Financial Institutions at (608) 261-7578, visit https://www.wdfi.org/, write to 4822 Madison Yards Way, Madison, WI 53705, or, if available, by email at: DFISecretary@wisconsin.gov."
+  },
+  {
+    "stateInitial": "WV",
+    "stateName": "West Virginia",
+    "institution": "Office of the Attorney General",
+    "phone": "(800) 368-8808",
+    "website": "https://ago.wv.gov/",
+    "email": "consumer@wvago.gov",
+    "address": "PO Box 1789, Charleston, WV 25326",
+    "disclosureText": "West Virginia, you may contact the Office of the Attorney General at (800) 368-8808, visit https://ago.wv.gov/, write to PO Box 1789, Charleston, WV 25326, or, if available, by email at: consumer@wvago.gov."
+  },
+  {
+    "stateInitial": "WY",
+    "stateName": "Wyoming",
+    "institution": "Wyoming Division of Banking",
+    "phone": "(307) 777-7797",
+    "website": "https://wyomingbankingdivision.wyo.gov/",
+    "email": "wyomingbankingdivision@wyo.gov",
+    "address": "2300 Capitol Avenue, Cheyenne, WY 82002",
+    "disclosureText": "Wyoming, you may contact the Wyoming Division of Banking at (307) 777-7797, visit https://wyomingbankingdivision.wyo.gov/, write to 2300 Capitol Avenue, Cheyenne, WY 82002, or, if available, by email at: wyomingbankingdivision@wyo.gov."
+  }
+]
