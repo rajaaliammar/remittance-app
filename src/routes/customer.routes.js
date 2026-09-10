@@ -1,4 +1,5 @@
 import express from 'express';
+import { uploadKycDocument } from '../controllers/customer.controller.js';
 import { 
   signup, 
   login, 
@@ -38,6 +39,7 @@ router.post('/signup', signup);
 router.post('/login', login);
 router.post('/send-otp', sendOTP);
 router.post('/verify-otp', verifyOTP);
+router.post('/kyc/upload', uploadKycDocument);
 
 // Protected routes (require authentication)
 router.get('/', authenticateToken, getAllCustomers);
