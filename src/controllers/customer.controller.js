@@ -36,12 +36,21 @@ import { isSmtpConfigured, sendVerificationOtpEmail } from '../utils/email.js';
 
 /** Phone signup OTP is a fixed code. Email recovery OTP uses SMTP only (not LiveEx). */
 const STATIC_PHONE_OTP = String(process.env.PHONE_OTP_STATIC_CODE || '1234').trim();
-
 function isStaticPhoneOtp(otp) {
-  return String(otp || '').trim() === STATIC_PHONE_OTP;
+  // Production mein static OTP completely disable rakhein
+  if (process.env.NODE_ENV === 'production') {
+    return false;
+  }
+  return String(otp || '').trim() === (process.env.STATIC_PHONE_OTP || '123456');
 }
 
 function signCustomerAccessToken(customer) {
+  const secret = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+  
+  if (process.env.NODE_ENV === 'production' && secret === 'your-secret-key-change-in-production') {
+    console.error('CRITICAL WARNING: JWT_SECRET environment variable is missing in production!');
+  }
+
   return jwt.sign(
     {
       id: customer.id,
@@ -50,7 +59,7 @@ function signCustomerAccessToken(customer) {
       phone: customer.phone,
       type: 'customer',
     },
-    process.env.JWT_SECRET || 'your-secret-key-change-in-production',
+    secret,
     { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
   );
 }
@@ -759,7 +768,6 @@ export const verifyOTP = async (req, res) => {
     });
   }
 };
-
 // Login with PIN - Authenticate by phone number + PIN or email + PIN (no OTP)
 export const loginWithPin = async (req, res) => {
   try {
@@ -782,6 +790,15 @@ export const loginWithPin = async (req, res) => {
           message: 'Account not found. Please sign in with password first or check your email.'
         });
       }
+
+      // Check Account Status (Prevent blocked/inactive accounts from logging in)
+      if (customer.status && customer.status !== 'ACTIVE' && customer.status !== 'APPROVED') {
+        return res.status(403).json({
+          success: false,
+          message: 'Your account is currently inactive or suspended. Please contact support.'
+        });
+      }
+
       if (!customer.pin) {
         return res.status(401).json({
           success: false,
@@ -795,6 +812,7 @@ export const loginWithPin = async (req, res) => {
           message: 'Invalid PIN'
         });
       }
+
       // Ensure hasPin flag is set (fixes cases where pin was set but hasPin wasn't persisted)
       const loginIpData = { lastSeenAt: new Date() };
       const loginIp = extractClientIp(req);
@@ -1018,6 +1036,9 @@ export const loginWithPassword = async (req, res) => {
     const { country_code, phone_number, email, password } = req.body;
     const emailTrimmed = email != null ? String(email).trim().toLowerCase() : '';
 
+    let customer = null;
+
+    // Handle Email Login
     if (emailTrimmed !== '') {
       if (!password) {
         return res.status(400).json({
@@ -1025,79 +1046,39 @@ export const loginWithPassword = async (req, res) => {
           message: 'Email and password are required.'
         });
       }
-      const customer = await prisma.customer.findFirst({
+      customer = await prisma.customer.findFirst({
         where: { email: emailTrimmed }
       });
-      if (!customer) {
-        return res.status(401).json({
+    } else {
+      // Handle Phone Login
+      if (!country_code || phone_number == null || String(phone_number).trim() === '' || !password) {
+        return res.status(400).json({
           success: false,
-          message: 'Account not found. Please sign up first.'
+          message: 'Country code, phone number, and password are required.'
         });
       }
-      const passwordValid = await bcrypt.compare(String(password).trim(), customer.password);
-      if (!passwordValid) {
-        return res.status(401).json({
-          success: false,
-          message: 'Invalid password.'
+
+      const phonesToTry = getPhoneLookupVariants(country_code, phone_number);
+      for (const phone of phonesToTry) {
+        customer = await prisma.customer.findFirst({
+          where: { phone }
         });
+        if (customer) break;
       }
-      const emailPwIp = extractClientIp(req);
-      await prisma.customer.update({
-        where: { id: customer.id },
-        data: { lastSeenAt: new Date(), ...(emailPwIp ? { lastIpAddress: emailPwIp } : {}) },
-      }).catch(() => {});
-      const token = jwt.sign(
-        {
-          id: customer.id,
-          email: customer.email,
-          username: customer.username,
-          phone: customer.phone,
-          type: 'customer'
-        },
-        process.env.JWT_SECRET || 'your-secret-key-change-in-production',
-        { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
-      );
-      return res.status(200).json({
-        success: true,
-        message: 'Login successful',
-        data: {
-          access_token: token,
-          user: {
-            id: customer.id,
-            email: customer.email,
-            username: customer.username,
-            first_name: customer.firstName,
-            last_name: customer.lastName,
-            phone: customer.phone,
-            status: customer.status,
-            has_pin: !!customer.hasPin,
-            profile_image: null,
-            type: 'customer'
-          }
-        }
-      });
-    }
-
-    if (!country_code || phone_number == null || String(phone_number).trim() === '' || !password) {
-      return res.status(400).json({
-        success: false,
-        message: 'Country code, phone number, and password are required.'
-      });
-    }
-
-    const phonesToTry = getPhoneLookupVariants(country_code, phone_number);
-    let customer = null;
-    for (const phone of phonesToTry) {
-      customer = await prisma.customer.findFirst({
-        where: { phone }
-      });
-      if (customer) break;
     }
 
     if (!customer) {
       return res.status(401).json({
         success: false,
         message: 'Account not found. Please sign up first.'
+      });
+    }
+
+    // Check Account Status (Prevent blocked/inactive accounts)
+    if (customer.status && customer.status !== 'ACTIVE' && customer.status !== 'APPROVED') {
+      return res.status(403).json({
+        success: false,
+        message: 'Your account is currently inactive or suspended. Please contact support.'
       });
     }
 
@@ -1109,10 +1090,10 @@ export const loginWithPassword = async (req, res) => {
       });
     }
 
-    const phonePwIp = extractClientIp(req);
+    const clientIp = extractClientIp(req);
     await prisma.customer.update({
       where: { id: customer.id },
-      data: { lastSeenAt: new Date(), ...(phonePwIp ? { lastIpAddress: phonePwIp } : {}) },
+      data: { lastSeenAt: new Date(), ...(clientIp ? { lastIpAddress: clientIp } : {}) },
     }).catch(() => {});
 
     const token = jwt.sign(
@@ -1147,8 +1128,8 @@ export const loginWithPassword = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error in login with password:', error);
-    res.status(500).json({
+    console.error('Error in loginWithPassword:', error);
+    return res.status(500).json({
       success: false,
       message: 'Login failed. Please try again.',
       error: error.message

@@ -37,7 +37,7 @@ export const authenticateToken = async (req, res, next) => {
       });
     }
 
-    if (user.status !== 'approved') {
+    if (user.status !== 'ACTIVE' && user.status !== 'approved') {
       return res.status(403).json({
         success: false,
         message: 'Your account is not approved'
@@ -95,7 +95,7 @@ export const optionalAuthenticateToken = async (req, res, next) => {
         isSuperAdmin: true,
       },
     });
-    if (user && user.status === 'approved') {
+    if (user && (user.status === 'ACTIVE' || user.status === 'approved')) {
       req.user = {
         id: user.id,
         email: user.email,
