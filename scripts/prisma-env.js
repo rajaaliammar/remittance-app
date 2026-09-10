@@ -4,10 +4,13 @@
  */
 import { spawnSync } from 'child_process';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-await import(path.join(__dirname, '../src/env-bootstrap.js'));
+
+// Windows path ko valid file:// URL mein convert kar ke import kar rahe hain
+const bootstrapPath = path.join(__dirname, '../src/env-bootstrap.js');
+await import(pathToFileURL(bootstrapPath).href);
 
 const args = process.argv.slice(2);
 const result = spawnSync('npx', ['prisma@6', ...args], {
