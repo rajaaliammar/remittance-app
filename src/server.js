@@ -302,7 +302,7 @@ async function startServer() {
     } else {
       console.error(
         '[PUSH] ❌ Device notification center DISABLED — Firebase Admin not configured.\n' +
-          '       Download service account JSON from Firebase Console (project super-app-71711)\n' +
+          '       Download service account JSON from Firebase Console (project super-app-71711-cb54a)\n' +
           '       → save as Remittance_backend/firebase-service-account.json and restart.\n' +
           '       Or run: cd Remittance_backend && npm run firebase:setup\n' +
           (pushStatus.expectedPath ? `       Expected file: ${pushStatus.expectedPath}` : ''),

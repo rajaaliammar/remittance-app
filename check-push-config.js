@@ -46,7 +46,7 @@ if (inlineJson && String(inlineJson).trim()) {
     resolved = path.resolve(process.cwd(), autoFiles[0]);
   } else {
     console.log('   ❌ No Firebase credentials configured');
-    console.log('   💡 Download from Firebase Console → project super-app-71711 → Service Accounts → Generate new private key');
+    console.log('   💡 Download from Firebase Console → project super-app-71711-cb54a → Service Accounts → Generate new private key');
     console.log('   💡 Save as Remittance_backend/firebase-service-account.json and restart the server');
   }
 } else {

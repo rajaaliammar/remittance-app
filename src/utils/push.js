@@ -12,22 +12,54 @@ const require = createRequire(import.meta.url);
 let messaging = null;
 
 const DEFAULT_SERVICE_ACCOUNT_FILE = 'firebase-service-account.json';
+const DEFAULT_FIREBASE_PROJECT_ID = 'super-app-71711-cb54a';
 
 function isServiceAccountFileName(name) {
+  const lower = String(name || '').toLowerCase();
   return (
-    name === DEFAULT_SERVICE_ACCOUNT_FILE ||
-    (name.endsWith('.json') && name.includes('firebase-adminsdk'))
+    lower === DEFAULT_SERVICE_ACCOUNT_FILE ||
+    (lower.startsWith('firebase-service-account') && lower.includes('.json')) ||
+    (lower.endsWith('.json') && lower.includes('firebase-adminsdk'))
   );
 }
 
-function readServiceAccountFile(filePath) {
+function getFirebaseProjectId(key) {
+  return (
+    key?.project_id ||
+    process.env.FIREBASE_PROJECT_ID ||
+    DEFAULT_FIREBASE_PROJECT_ID
+  );
+}
+
+function readServiceAccountFile(filePath, { logErrors = false } = {}) {
   try {
-    const key = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    const raw = fs.readFileSync(filePath, 'utf8');
+    let key;
+    try {
+      key = JSON.parse(raw);
+    } catch (e) {
+      if (logErrors) {
+        console.error(
+          `[PUSH] ❌ Failed to parse Firebase service account JSON from ${filePath}: ${e?.message || e}`,
+        );
+      }
+      return null;
+    }
     if (key?.project_id && key?.private_key && key?.client_email) {
       return key;
     }
-  } catch {
-    /* invalid */
+    if (logErrors) {
+      const missing = ['project_id', 'private_key', 'client_email'].filter((f) => !key?.[f]);
+      console.error(
+        `[PUSH] ❌ Invalid Firebase service account file ${filePath}: missing ${missing.join(', ') || 'required fields'}`,
+      );
+    }
+  } catch (e) {
+    if (logErrors) {
+      console.error(
+        `[PUSH] ❌ Failed to read Firebase service account file ${filePath}: ${e?.message || e}`,
+      );
+    }
   }
   return null;
 }
@@ -107,11 +139,18 @@ export function getPushConfigStatus() {
       const key = JSON.parse(jsonInline);
       return {
         configured: !!(key?.project_id && key?.private_key && key?.client_email),
-        projectId: key?.project_id || null,
+        projectId: getFirebaseProjectId(key),
         source: 'FIREBASE_SERVICE_ACCOUNT_JSON',
       };
-    } catch {
-      return { configured: false, projectId: null, source: 'FIREBASE_SERVICE_ACCOUNT_JSON', error: 'invalid_json' };
+    } catch (e) {
+      console.error('[PUSH] ❌ FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON:', e?.message || e);
+      return {
+        configured: false,
+        projectId: process.env.FIREBASE_PROJECT_ID || DEFAULT_FIREBASE_PROJECT_ID,
+        source: 'FIREBASE_SERVICE_ACCOUNT_JSON',
+        error: 'invalid_json',
+        errorDetail: e?.message || String(e),
+      };
     }
   }
 
@@ -119,19 +158,24 @@ export function getPushConfigStatus() {
   if (!fs.existsSync(resolved)) {
     return {
       configured: false,
-      projectId: null,
+      projectId: process.env.FIREBASE_PROJECT_ID || DEFAULT_FIREBASE_PROJECT_ID,
       source: process.env.FIREBASE_SERVICE_ACCOUNT_PATH || null,
       error: 'file_not_found',
       expectedPath: resolved,
     };
   }
-  const key = readServiceAccountFile(resolved);
+  const key = readServiceAccountFile(resolved, { logErrors: true });
   if (!key) {
-    return { configured: false, projectId: null, source: resolved, error: 'invalid_json' };
+    return {
+      configured: false,
+      projectId: process.env.FIREBASE_PROJECT_ID || DEFAULT_FIREBASE_PROJECT_ID,
+      source: resolved,
+      error: 'invalid_json',
+    };
   }
   return {
     configured: true,
-    projectId: key.project_id || null,
+    projectId: getFirebaseProjectId(key),
     source: resolved,
   };
 }
@@ -150,14 +194,13 @@ function loadServiceAccountKey() {
   const resolved = resolveServiceAccountPath();
   if (!fs.existsSync(resolved)) {
     console.error('[PUSH] ❌ Firebase service account file not found:', resolved);
-    console.error('[PUSH] Download from Firebase Console (project super-app-71711) and save as firebase-service-account.json');
+    console.error(`[PUSH] Download from Firebase Console (project ${DEFAULT_FIREBASE_PROJECT_ID}) and save as firebase-service-account.json`);
     console.error('[PUSH] Or run: cd Remittance_backend && npm run firebase:setup');
     console.error('[PUSH] Or set FIREBASE_SERVICE_ACCOUNT_JSON with the full JSON contents');
     return null;
   }
-  const key = readServiceAccountFile(resolved);
+  const key = readServiceAccountFile(resolved, { logErrors: true });
   if (!key) {
-    console.error('[PUSH] ❌ Invalid Firebase service account file:', resolved);
     return null;
   }
   return key;
@@ -175,8 +218,12 @@ function getMessaging() {
         messaging = false;
         return false;
       }
-      admin.initializeApp({ credential: admin.credential.cert(key) });
-      console.log('[PUSH] ✅ Firebase Admin initialized successfully', key.project_id ? `(project: ${key.project_id})` : '');
+      const projectId = getFirebaseProjectId(key);
+      admin.initializeApp({
+        credential: admin.credential.cert(key),
+        projectId,
+      });
+      console.log('[PUSH] ✅ Firebase Admin initialized successfully', `(project: ${projectId})`);
     }
     messaging = admin.messaging();
     return messaging;

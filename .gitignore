@@ -39,3 +39,7 @@ firebase-adminsdk-*.json
 
 # Uploads
 uploads/
+# Firebase
+firebase-service-account.json
+firebase-service-account.json.json
+__MACOSX/
