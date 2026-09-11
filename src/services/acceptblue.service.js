@@ -190,6 +190,141 @@ export async function createCharge({ payment_method_id, amount, description }) {
   });
 }
 
+function toReferenceNumber(reference) {
+  const n = Number(String(reference ?? '').replace(/[^\d]/g, ''));
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function assertProcessingSuccess(data, action) {
+  const status = String(data?.status ?? '').toLowerCase();
+  const errorMessage =
+    data?.error_message || data?.errorMessage || data?.error || data?.detail || null;
+  if (errorMessage || ['error', 'declined', 'failed'].includes(status)) {
+    const err = new Error(
+      `Accept.blue ${action} failed: ${errorMessage || data?.status || 'unknown provider error'}`,
+    );
+    err.status = 502;
+    err.code = 'ACCEPTBLUE_REFUND_FAILED';
+    err.details = data;
+    throw err;
+  }
+  return data;
+}
+
+/**
+ * Fetch a processed transaction by Accept.blue id / reference number.
+ * @param {string|number} transactionId
+ */
+export async function getTransaction(transactionId) {
+  const ref = toReferenceNumber(transactionId);
+  if (!ref) {
+    const err = new Error('Accept.blue transaction lookup requires a numeric reference.');
+    err.status = 400;
+    throw err;
+  }
+  return request('GET', `/transactions/${ref}`);
+}
+
+/**
+ * Void an unsettled (same-day) charge. Body uses `reference_number`.
+ * @param {{ reference_number: string|number }} params
+ */
+export async function voidTransaction({ reference_number }) {
+  const ref = toReferenceNumber(reference_number);
+  if (!ref) {
+    const err = new Error('Accept.blue void requires a numeric transaction reference.');
+    err.status = 400;
+    throw err;
+  }
+  const data = await request('POST', '/transactions/void', { reference_number: ref });
+  return assertProcessingSuccess(data, 'void');
+}
+
+/**
+ * Refund a settled charge back to the original card. Body uses `reference_number`.
+ * @param {{ reference_number: string|number, amount?: number }} params
+ */
+export async function refundTransaction({ reference_number, amount }) {
+  const ref = toReferenceNumber(reference_number);
+  if (!ref) {
+    const err = new Error('Accept.blue refund requires a numeric transaction reference.');
+    err.status = 400;
+    throw err;
+  }
+  const body = { reference_number: ref };
+  if (amount != null && Number.isFinite(Number(amount))) {
+    body.amount = Number(Number(amount).toFixed(2));
+  }
+  const data = await request('POST', '/transactions/refund', body);
+  return assertProcessingSuccess(data, 'refund');
+}
+
+function isAlreadyReversedStatus(status) {
+  const s = String(status || '').toLowerCase();
+  return ['voided', 'cancelled', 'canceled', 'refunded'].includes(s);
+}
+
+function isSettledStatus(status) {
+  return String(status || '').toLowerCase() === 'settled';
+}
+
+/**
+ * Same-rail card reversal: void if the charge has not settled, otherwise refund.
+ * Throws with the provider message; callers must not mark the remittance refunded.
+ *
+ * @param {{ reference_number: string|number, amount?: number }} params
+ * @returns {Promise<{ method: 'void'|'refund'|'already_reversed', originalReference: number, response: object }>}
+ */
+export async function voidOrRefund({ reference_number, amount }) {
+  const ref = toReferenceNumber(reference_number);
+  if (!ref) {
+    const err = new Error('Accept.blue void/refund requires a numeric transaction reference.');
+    err.status = 400;
+    err.code = 'MISSING_CARD_CHARGE_REF';
+    throw err;
+  }
+
+  let settled = false;
+  try {
+    const existing = await getTransaction(ref);
+    if (isAlreadyReversedStatus(existing?.status)) {
+      return { method: 'already_reversed', originalReference: ref, response: existing };
+    }
+    settled = isSettledStatus(existing?.status);
+  } catch {
+    // Lookup is advisory; fall through to void then refund.
+  }
+
+  const tryRefund = async (priorErr) => {
+    try {
+      const response = await refundTransaction({ reference_number: ref, amount });
+      return { method: 'refund', originalReference: ref, response };
+    } catch (refundErr) {
+      const error = new Error(
+        `Accept.blue void/refund failed: ${refundErr.message || priorErr?.message || 'unknown provider error'}`,
+      );
+      error.status = refundErr.status || priorErr?.status || 502;
+      error.code = 'ACCEPTBLUE_REFUND_FAILED';
+      error.details = {
+        void: priorErr?.details || priorErr?.message || null,
+        refund: refundErr.details || refundErr.message,
+      };
+      throw error;
+    }
+  };
+
+  if (settled) {
+    return tryRefund(null);
+  }
+
+  try {
+    const response = await voidTransaction({ reference_number: ref });
+    return { method: 'void', originalReference: ref, response };
+  } catch (voidErr) {
+    return tryRefund(voidErr);
+  }
+}
+
 export default {
   isAcceptBlueConfigured,
   createCustomer,
@@ -199,4 +334,8 @@ export default {
   listPaymentMethods,
   deletePaymentMethod,
   createCharge,
+  getTransaction,
+  voidTransaction,
+  refundTransaction,
+  voidOrRefund,
 };

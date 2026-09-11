@@ -13,8 +13,11 @@ export const optionalAuthenticateCustomer = async (req, _res, next) => {
       process.env.JWT_SECRET || 'your-secret-key-change-in-production',
     );
 
+    const customerId = decoded.id || decoded.userId || decoded.sub;
+    if (!customerId) return next();
+
     const customer = await prisma.customer.findUnique({
-      where: { id: decoded.id },
+      where: { id: customerId },
       select: {
         id: true,
         email: true,

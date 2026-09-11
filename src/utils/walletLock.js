@@ -31,12 +31,13 @@ export async function creditCustomerWallet(tx, customerId, amount) {
   if (!Number.isFinite(credit) || credit < 0) {
     throw new WalletError('Invalid credit amount', 400);
   }
-  const newBalance = current + credit;
+  // Atomic increment under the row lock (availableBalance = availableBalance + amount).
   await tx.$executeRaw`
     UPDATE customers
-    SET "availableBalance" = ${newBalance}, "updatedAt" = NOW()
+    SET "availableBalance" = COALESCE("availableBalance", 0) + ${credit}, "updatedAt" = NOW()
     WHERE id = ${customerId}
   `;
+  const newBalance = current + credit;
   return { previousBalance: current, newBalance };
 }
 

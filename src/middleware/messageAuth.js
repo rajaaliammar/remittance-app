@@ -14,14 +14,18 @@ export const authenticateMessageUser = async (req, res, next) => {
       return res.status(401).json({ success: false, message: 'Access token is required' });
     }
     const decoded = jwt.verify(token, JWT_SECRET);
-    const customer = await prisma.customer.findUnique({ where: { id: decoded.id }, select: { id: true } });
+    const userId = decoded.id || decoded.userId || decoded.sub;
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Invalid token' });
+    }
+    const customer = await prisma.customer.findUnique({ where: { id: userId }, select: { id: true } });
     if (customer) {
       req.userId = customer.id;
       req.userType = 'customer';
       return next();
     }
     const backoffice = await prisma.backofficeUser.findUnique({
-      where: { id: decoded.id },
+      where: { id: userId },
       select: { id: true, status: true },
     });
     if (backoffice && backoffice.status === 'approved') {

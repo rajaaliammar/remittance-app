@@ -25,9 +25,13 @@ import { enqueuePostTransactionJobs } from '../queues/enqueue.js';
 import {
   WalletError,
   debitCustomerWallet,
-  creditCustomerWallet,
   lockCustomerWallet,
 } from '../utils/walletLock.js';
+import {
+  prepareSameRailRefund,
+  commitSameRailRefund,
+  sameRailRefundMessage,
+} from '../utils/sameRailRefund.js';
 import {
   kycDataSatisfiesVerification,
   tryApprovePendingCustomerFromCachedStatus,
@@ -473,7 +477,10 @@ export const createRemittanceTransaction = async (req, res) => {
           description: `Remittance ${currency || 'USD'} send ${send.toFixed(2)} + fees`,
         });
         acceptBlueChargeMeta = {
-          acceptblueTransactionId: abResult.id ?? abResult.transaction_id ?? null,
+          fundingSource: 'CARD',
+          acceptblueTransactionId:
+            abResult.id ?? abResult.transaction_id ?? abResult.reference_number ?? null,
+          acceptblueReferenceNumber: abResult.reference_number ?? abResult.id ?? null,
           acceptblueStatus: abResult.status ?? null,
         };
       } catch (e) {
@@ -491,6 +498,8 @@ export const createRemittanceTransaction = async (req, res) => {
       charge: totalCharge,
       fee: totalCharge,
       feeBreakdown: breakdown,
+      // fundingSource records the collection rail so refunds cannot be misapplied to the wallet.
+      fundingSource: paymentMethodLocalId ? 'CARD' : 'WALLET',
       ...(acceptBlueChargeMeta || {}),
     };
 
@@ -784,31 +793,35 @@ export const updateRemittanceTransaction = async (req, res) => {
       }
 
       const customerId = transaction.customerId;
-      const sendAmount = Number(transaction.sendAmount ?? 0);
-      const recipientInfo =
-        transaction.recipientInfo && typeof transaction.recipientInfo === 'object'
-          ? transaction.recipientInfo
-          : {};
-      const paymentFieldValues =
-        transaction.paymentFieldValues && typeof transaction.paymentFieldValues === 'object'
-          ? transaction.paymentFieldValues
-          : {};
-      const fee = Number(
-        recipientInfo.fee ?? paymentFieldValues.charge ?? paymentFieldValues.fee ?? 0,
-      );
-      const totalToRefund = sendAmount + fee;
+
+      let prepared;
+      try {
+        // CARD: Accept.blue void/refund first. If the provider call fails we throw
+        // here and never mark the remittance refunded or credit the wallet.
+        prepared = await prepareSameRailRefund(transaction);
+      } catch (providerErr) {
+        return res.status(providerErr.status >= 400 ? providerErr.status : 502).json({
+          success: false,
+          message: providerErr.message || 'Card void/refund failed. Transaction was not marked refunded.',
+          code: providerErr.code || 'ACCEPTBLUE_REFUND_FAILED',
+          details: providerErr.details,
+        });
+      }
 
       try {
         const result = await prisma.$transaction(async (tx) => {
-          await creditCustomerWallet(tx, customerId, totalToRefund);
-          const updatedTx = await tx.remittanceTransaction.update({
-            where: { id },
-            data: { status: 'Refunded', updatedAt: new Date() },
+          const { updated } = await commitSameRailRefund(tx, {
+            transactionId: id,
+            customerId,
+            prepared,
+            status: 'Refunded',
+          });
+          return tx.remittanceTransaction.findUnique({
+            where: { id: updated.id },
             include: {
               customer: { select: senderCustomerSelect },
             },
           });
-          return updatedTx;
         });
 
         try {
@@ -819,7 +832,7 @@ export const updateRemittanceTransaction = async (req, res) => {
 
         return res.json({
           success: true,
-          message: 'Transaction refunded successfully. Customer balance has been credited.',
+          message: sameRailRefundMessage(prepared.fundingSource, 'refunded'),
           data: result,
         });
       } catch (walletErr) {
@@ -983,8 +996,9 @@ export const updateRemittanceTransaction = async (req, res) => {
 };
 
 /**
- * Reject a remittance transaction (admin/portal). Sets status to Failed and refunds customer balance.
- * Only allowed when status is Processing.
+ * Reject a remittance transaction (admin/portal). Sets status to Failed and
+ * returns funds on the original rail (wallet credit OR Accept.blue void/refund).
+ * Only allowed when status is Processing, Awaiting, Hold, or Manual_Review.
  */
 export const rejectRemittanceTransaction = async (req, res) => {
   try {
@@ -1037,15 +1051,27 @@ export const rejectRemittanceTransaction = async (req, res) => {
       ? transaction.paymentFieldValues
       : {};
     const fee = Number(recipientInfo.fee ?? paymentFieldValues.charge ?? paymentFieldValues.fee ?? 0);
-    const totalToRefund = sendAmount + fee;
 
-    let newBalance;
+    let prepared;
     try {
-      const result = await prisma.$transaction(async (tx) => {
-        const creditResult = await creditCustomerWallet(tx, customerId, totalToRefund);
-        const updated = await tx.remittanceTransaction.update({
-          where: { id },
-          data: { status: 'Failed', updatedAt: new Date() },
+      // Same-rail: CARD calls Accept.blue first. Provider failure aborts — status stays unchanged.
+      prepared = await prepareSameRailRefund(transaction);
+    } catch (providerErr) {
+      return res.status(providerErr.status >= 400 ? providerErr.status : 502).json({
+        success: false,
+        message: providerErr.message || 'Card void/refund failed. Transaction was not marked refunded.',
+        code: providerErr.code || 'ACCEPTBLUE_REFUND_FAILED',
+        details: providerErr.details,
+      });
+    }
+
+    try {
+      await prisma.$transaction(async (tx) => {
+        await commitSameRailRefund(tx, {
+          transactionId: id,
+          customerId,
+          prepared,
+          status: 'Failed',
         });
 
         if (prisma.orchestrationJob && typeof tx.orchestrationJob?.updateMany === 'function') {
@@ -1058,10 +1084,7 @@ export const rejectRemittanceTransaction = async (req, res) => {
             },
           });
         }
-
-        return { updated, newBalance: creditResult.newBalance };
       });
-      newBalance = result.newBalance;
     } catch (walletErr) {
       if (walletErr instanceof WalletError) {
         return res.status(walletErr.statusCode).json({
@@ -1124,7 +1147,7 @@ export const rejectRemittanceTransaction = async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Transaction rejected. Customer balance has been refunded.',
+      message: sameRailRefundMessage(prepared.fundingSource, 'rejected'),
       data: updated,
     });
   } catch (error) {

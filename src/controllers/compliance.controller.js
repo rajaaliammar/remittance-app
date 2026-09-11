@@ -6,7 +6,12 @@
  */
 
 import prisma from '../utils/prisma.js';
-import { WalletError, creditCustomerWallet } from '../utils/walletLock.js';
+import { WalletError } from '../utils/walletLock.js';
+import {
+  prepareSameRailRefund,
+  commitSameRailRefund,
+  sameRailRefundMessage,
+} from '../utils/sameRailRefund.js';
 import { maybeAutoApproveRemittanceFromAml } from '../utils/amlTransactionAutoApprove.js';
 
 const txInclude = {
@@ -222,7 +227,9 @@ export const approveHeldTransaction = async (req, res) => {
 
 /**
  * POST /api/compliance/held-transactions/:id/reject
- * Rejects a held transaction → sets status to Failed and refunds customer.
+ * Rejects a held transaction → sets status to Failed and returns funds on the
+ * original rail (wallet credit OR Accept.blue void/refund). Never credits the
+ * wallet for card-funded transfers.
  * Closes all open compliance alerts.
  */
 export const rejectHeldTransaction = async (req, res) => {
@@ -246,33 +253,31 @@ export const rejectHeldTransaction = async (req, res) => {
     }
 
     const customerId = transaction.customerId;
-    const sendAmount = Number(transaction.sendAmount ?? 0);
-    const recipientInfo =
-      transaction.recipientInfo && typeof transaction.recipientInfo === 'object'
-        ? transaction.recipientInfo
-        : {};
-    const paymentFieldValues =
-      transaction.paymentFieldValues && typeof transaction.paymentFieldValues === 'object'
-        ? transaction.paymentFieldValues
-        : {};
-    const fee = Number(
-      recipientInfo.fee ?? paymentFieldValues.charge ?? paymentFieldValues.fee ?? 0,
-    );
-    const totalToRefund = sendAmount + fee;
+
+    let prepared;
+    try {
+      // CARD: Accept.blue void/refund first. Failure leaves Hold status unchanged.
+      prepared = await prepareSameRailRefund(transaction);
+    } catch (providerErr) {
+      return res.status(providerErr.status >= 400 ? providerErr.status : 502).json({
+        success: false,
+        message: providerErr.message || 'Card void/refund failed. Transaction was not marked refunded.',
+        code: providerErr.code || 'ACCEPTBLUE_REFUND_FAILED',
+        details: providerErr.details,
+      });
+    }
 
     let newBalance;
     try {
       const result = await prisma.$transaction(async (tx) => {
-        const creditResult = await creditCustomerWallet(tx, customerId, totalToRefund);
-        await tx.remittanceTransaction.update({
-          where: { id },
-          data: {
-            status: 'Failed',
-            complianceReviewNote: note || null,
-            updatedAt: new Date(),
-          },
+        const committed = await commitSameRailRefund(tx, {
+          transactionId: id,
+          customerId,
+          prepared,
+          status: 'Failed',
+          extraData: { complianceReviewNote: note || null },
         });
-        return { newBalance: creditResult.newBalance };
+        return { newBalance: committed.newBalance };
       });
       newBalance = result.newBalance;
     } catch (walletErr) {
@@ -302,14 +307,22 @@ export const rejectHeldTransaction = async (req, res) => {
       io.to(`user:${customerId}`).emit('transaction-status', {
         transactionId: id,
         status: 'Failed',
-        message: 'Your transaction could not be processed. Your funds have been refunded.',
+        message:
+          prepared.fundingSource === 'CARD'
+            ? 'Your transaction could not be processed. The card charge has been reversed.'
+            : 'Your transaction could not be processed. Your funds have been refunded.',
       });
     }
 
     res.json({
       success: true,
-      message: 'Transaction rejected. Customer balance refunded.',
-      data: { transactionId: id, refundedAmount: totalToRefund, newBalance },
+      message: sameRailRefundMessage(prepared.fundingSource, 'rejected'),
+      data: {
+        transactionId: id,
+        refundedAmount: prepared.refundAmount,
+        fundingSource: prepared.fundingSource,
+        newBalance,
+      },
     });
   } catch (error) {
     console.error('Error rejecting held transaction:', error);

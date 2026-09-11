@@ -7,6 +7,7 @@ import {
   verifyOTP,
   getAllCustomers, 
   getCustomerById,
+  getProfile,
   getCustomerDeviceInfoByEmail,
   sendNotificationToCustomer,
   broadcastNotificationToAllCustomers,
@@ -16,6 +17,7 @@ import {
   deleteCustomer 
 } from '../controllers/customer.controller.js';
 import { authenticateToken } from '../middleware/auth.js';
+import { authenticateCustomer } from '../middleware/customerAuth.js';
 import {
   getCustomerAmlStatus,
   runCustomerAmlValidation,
@@ -40,6 +42,10 @@ router.post('/login', login);
 router.post('/send-otp', sendOTP);
 router.post('/verify-otp', verifyOTP);
 router.post('/kyc/upload', uploadKycDocument);
+
+// Current customer profile (must be before /:id so "profile" is not treated as an id)
+router.get('/profile', authenticateCustomer, getProfile);
+router.get('/profile/', authenticateCustomer, getProfile);
 
 // Protected routes (require authentication)
 router.get('/', authenticateToken, getAllCustomers);

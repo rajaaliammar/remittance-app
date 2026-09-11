@@ -16,9 +16,13 @@ export const authenticateCustomerOrBackoffice = async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, JWT_SECRET);
+    const userId = decoded.id || decoded.userId || decoded.sub;
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Invalid token' });
+    }
 
     const customer = await prisma.customer.findUnique({
-      where: { id: decoded.id },
+      where: { id: userId },
       select: { id: true, email: true, status: true },
     });
     if (customer) {
@@ -27,7 +31,7 @@ export const authenticateCustomerOrBackoffice = async (req, res, next) => {
     }
 
     const backoffice = await prisma.backofficeUser.findUnique({
-      where: { id: decoded.id },
+      where: { id: userId },
       select: { id: true, email: true, status: true },
     });
     if (backoffice && backoffice.status === 'approved') {

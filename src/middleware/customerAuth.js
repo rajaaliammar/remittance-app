@@ -18,9 +18,17 @@ export const authenticateCustomer = async (req, res, next) => {
       process.env.JWT_SECRET || 'your-secret-key-change-in-production'
     );
 
-    // Verify customer still exists
+    const customerId = decoded.id || decoded.userId || decoded.sub;
+    if (!customerId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid token'
+      });
+    }
+
+    // Verify customer still exists using the same key signed into the JWT
     const customer = await prisma.customer.findUnique({
-      where: { id: decoded.id },
+      where: { id: customerId },
       select: {
         id: true,
         email: true,
