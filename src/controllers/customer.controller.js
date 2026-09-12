@@ -34,14 +34,16 @@ import { syncLiveexStatusIfNeeded } from '../utils/liveexDetailsSync.js';
 import { generateOtpCode, saveOtp, consumeOtp, hasOtp } from '../utils/otpStore.js';
 import { isSmtpConfigured, sendVerificationOtpEmail } from '../utils/email.js';
 
-/** Phone signup OTP is a fixed code. Email recovery OTP uses SMTP only (not LiveEx). */
-const STATIC_PHONE_OTP = String(process.env.PHONE_OTP_STATIC_CODE || '1234').trim();
+/** Phone signup OTP is a fixed code (4-digit to match mobile UI). Email recovery OTP uses SMTP only. */
+const STATIC_PHONE_OTP = String(
+  process.env.STATIC_PHONE_OTP || process.env.PHONE_OTP_STATIC_CODE || '1234'
+).trim();
 function isStaticPhoneOtp(otp) {
-  // Production mein static OTP completely disable rakhein
+  // Disable static OTP in production
   if (process.env.NODE_ENV === 'production') {
     return false;
   }
-  return String(otp || '').trim() === (process.env.STATIC_PHONE_OTP || '123456');
+  return String(otp || '').trim() === STATIC_PHONE_OTP;
 }
 
 function signCustomerAccessToken(customer) {
@@ -792,11 +794,14 @@ export const loginWithPin = async (req, res) => {
       }
 
       // Check Account Status (Prevent blocked/inactive accounts from logging in)
-      if (customer.status && customer.status !== 'ACTIVE' && customer.status !== 'APPROVED') {
-        return res.status(403).json({
-          success: false,
-          message: 'Your account is currently inactive or suspended. Please contact support.'
-        });
+      {
+        const st = String(customer.status || '').toLowerCase();
+        if (customer.status && !['active', 'approved'].includes(st)) {
+          return res.status(403).json({
+            success: false,
+            message: 'Your account is currently inactive or suspended. Please contact support.'
+          });
+        }
       }
 
       if (!customer.pin) {
@@ -1055,11 +1060,14 @@ export const loginWithPassword = async (req, res) => {
     }
 
     // Check Account Status (Prevent blocked/inactive accounts)
-    if (customer.status && customer.status !== 'ACTIVE' && customer.status !== 'APPROVED') {
-      return res.status(403).json({
-        success: false,
-        message: 'Your account is currently inactive or suspended. Please contact support.'
-      });
+    {
+      const st = String(customer.status || '').toLowerCase();
+      if (customer.status && !['active', 'approved'].includes(st)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Your account is currently inactive or suspended. Please contact support.'
+        });
+      }
     }
 
     const passwordValid = await bcrypt.compare(String(password).trim(), customer.password);

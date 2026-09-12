@@ -150,9 +150,14 @@ export const addCard = async (req, res) => {
     });
   } catch (error) {
     console.error('Error adding card:', error);
+    const raw = String(error?.message || '');
+    const message =
+      /Failed to parse URL|Invalid URL|ERR_INVALID_URL/i.test(raw)
+        ? 'Accept.blue is misconfigured. Set ACCEPTBLUE_BASE_URL with https:// (e.g. https://api.develop.accept.blue/api/v2).'
+        : raw || 'Failed to add card';
     res.status(error.status || 500).json({
       success: false,
-      message: error.message || 'Failed to add card',
+      message,
     });
   }
 };

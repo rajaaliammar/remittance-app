@@ -1,5 +1,6 @@
 import prisma from '../utils/prisma.js';
 import { sanitizeLogoField } from '../utils/imageFieldSanitizer.js';
+import { resolveCountry } from '../utils/resolveCountry.js';
 
 function parseAssignedCountries(raw) {
   if (!raw) return [];
@@ -92,18 +93,11 @@ export const getWalletsByCountry = async (req, res) => {
       });
     }
 
-    // Get the country to find its ISO2 code
-    const country = await prisma.country.findUnique({
-      where: { id: countryId },
-      select: {
-        id: true,
-        iso2: true,
-        iso3: true,
-        name: true,
-        currencyCode: true,
-        currencyRate: true,
-      },
+    // Get the country to find its ISO2 code (accepts id, iso2, or fallback-us)
+    const { country: resolved } = await resolveCountry(prisma, countryId, {
+      iso2: req.query?.iso2,
     });
+    const country = resolved;
 
     if (!country) {
       return res.status(404).json({ 

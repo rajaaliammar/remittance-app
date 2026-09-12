@@ -6,6 +6,27 @@ import {
   invalidatePurposesCache,
 } from '../utils/cache.js';
 
+const DEFAULT_PURPOSES = [
+  'Family Support',
+  'Education',
+  'Gift',
+  'Personal Savings',
+  'Payment of services or Invoice',
+  'Property or Large purchase',
+  'School fees',
+  'Medical expenses',
+  'Business expenses',
+  'Other',
+];
+
+async function seedDefaultPurposes() {
+  const count = await prisma.purpose.count();
+  if (count > 0) return;
+  for (const name of DEFAULT_PURPOSES) {
+    await prisma.purpose.create({ data: { name, status: 'Active' } });
+  }
+}
+
 // Get all purposes
 export const getAllPurposes = async (req, res) => {
   try {
@@ -13,6 +34,8 @@ export const getAllPurposes = async (req, res) => {
     const cacheKey = CacheKeys.purposesList({ search, status });
 
     const purposes = await getOrSet(cacheKey, REFERENCE_TTL_SECONDS, async () => {
+      await seedDefaultPurposes();
+
       const where = {};
       if (status) {
         where.status = status;

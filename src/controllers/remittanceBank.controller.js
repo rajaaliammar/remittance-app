@@ -1,6 +1,10 @@
 import prisma from '../utils/prisma.js';
 import { syncBankToCountryServices } from '../utils/syncBankCountryServices.js';
 import { sanitizeLogoField } from '../utils/imageFieldSanitizer.js';
+import {
+  defaultBanksForIso2,
+  resolveCountry,
+} from '../utils/resolveCountry.js';
 
 // Get all remittance banks
 export const getAllRemittanceBanks = async (req, res) => {
@@ -39,7 +43,7 @@ export const getAllRemittanceBanks = async (req, res) => {
 export const getBanksByCountry = async (req, res) => {
   try {
     const { countryId } = req.params;
-    const { serviceId } = req.query;
+    const { serviceId, iso2: iso2Query } = req.query;
 
     if (!countryId) {
       return res.status(400).json({ 
@@ -48,17 +52,8 @@ export const getBanksByCountry = async (req, res) => {
       });
     }
 
-    // Get the country to find its ISO2 code
-    const country = await prisma.country.findUnique({
-      where: { id: countryId },
-      select: {
-        id: true,
-        iso2: true,
-        iso3: true,
-        name: true,
-        currencyCode: true,
-        currencyRate: true,
-      },
+    const { country } = await resolveCountry(prisma, countryId, {
+      iso2: iso2Query,
     });
 
     if (!country) {
@@ -114,10 +109,10 @@ export const getBanksByCountry = async (req, res) => {
     // Prefer portal-uploaded image from active Bank Transfer country service (per bank + country)
     const bankIds = banksForCountry.map((b) => b.id);
     const serviceImagesByBankId = new Map();
-    if (bankIds.length > 0) {
+    if (bankIds.length > 0 && country.id && !String(country.id).startsWith('fallback-')) {
       const countryServices = await prisma.countryService.findMany({
         where: {
-          countryId,
+          countryId: country.id,
           status: 'Active',
           serviceType: 'Bank Transfer',
           remittanceBankId: { in: bankIds },
@@ -135,9 +130,9 @@ export const getBanksByCountry = async (req, res) => {
 
     let resultBanks = banksForCountry;
 
-    if (serviceId) {
+    if (serviceId && country.id && !String(country.id).startsWith('fallback-')) {
       const svc = await prisma.countryService.findFirst({
-        where: { id: String(serviceId), countryId, status: 'Active' },
+        where: { id: String(serviceId), countryId: country.id, status: 'Active' },
         select: { remittanceBankId: true },
       });
       if (svc?.remittanceBankId) {
@@ -156,7 +151,7 @@ export const getBanksByCountry = async (req, res) => {
     }
 
     // Format the response
-    const formattedBanks = resultBanks.map((bank) => ({
+    let formattedBanks = resultBanks.map((bank) => ({
       id: bank.id,
       name: bank.name,
       logo: serviceImagesByBankId.get(bank.id) || bank.logo,
@@ -172,6 +167,11 @@ export const getBanksByCountry = async (req, res) => {
           : []
         : [],
     }));
+
+    // Dev / empty-catalog fallback so Send → Bank selection is usable
+    if (formattedBanks.length === 0) {
+      formattedBanks = defaultBanksForIso2(iso2, country.currencyRate);
+    }
 
     res.json({
       success: true,

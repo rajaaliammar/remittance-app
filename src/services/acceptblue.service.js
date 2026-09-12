@@ -5,9 +5,15 @@
  * Uses Basic Auth (API key as username, PIN as password).
  */
 
-/** Read env at call time — process.env is populated after env-bootstrap runs. */
+/** Ensure ACCEPTBLUE_BASE_URL is an absolute http(s) URL (common .env mistake: missing protocol). */
 function getBaseUrl() {
-  return (process.env.ACCEPTBLUE_BASE_URL || 'https://api.accept.blue/api/v2').replace(/\/+$/, '');
+  const fallback = 'https://api.accept.blue/api/v2';
+  let url = String(process.env.ACCEPTBLUE_BASE_URL || fallback).trim().replace(/\/+$/, '');
+  if (!url) url = fallback;
+  if (!/^https?:\/\//i.test(url)) {
+    url = `https://${url.replace(/^\/+/, '')}`;
+  }
+  return url.replace(/\/+$/, '');
 }
 
 function getApiKey() {

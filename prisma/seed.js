@@ -70,9 +70,16 @@ async function main() {
 
   // Create default purposes
   const defaultPurposes = [
+    { name: 'Family Support', status: 'Active' },
+    { name: 'Education', status: 'Active' },
+    { name: 'Gift', status: 'Active' },
+    { name: 'Personal Savings', status: 'Active' },
     { name: 'Payment of services or Invoice', status: 'Active' },
     { name: 'Property or Large purchase', status: 'Active' },
     { name: 'School fees', status: 'Active' },
+    { name: 'Medical expenses', status: 'Active' },
+    { name: 'Business expenses', status: 'Active' },
+    { name: 'Other', status: 'Active' },
   ];
 
   for (const purposeData of defaultPurposes) {
@@ -139,6 +146,84 @@ async function main() {
   }
 
   await ensureDefaultKycForms();
+
+  // Ensure core demo countries + banks exist for local Send / Bank Selection testing
+  const demoCountrySeed = [
+    { iso2: 'US', iso3: 'USA', name: 'United States', phoneCode: '+1', currencyName: 'US Dollar', currencyCode: 'USD', currencyRate: '1', continent: 'North America', popular: true },
+    { iso2: 'GB', iso3: 'GBR', name: 'United Kingdom', phoneCode: '+44', currencyName: 'Pound Sterling', currencyCode: 'GBP', currencyRate: '0.79', continent: 'Europe', popular: true },
+    { iso2: 'ET', iso3: 'ETH', name: 'Ethiopia', phoneCode: '+251', currencyName: 'Ethiopian Birr', currencyCode: 'ETB', currencyRate: '57', continent: 'Africa', popular: true },
+    { iso2: 'IN', iso3: 'IND', name: 'India', phoneCode: '+91', currencyName: 'Indian Rupee', currencyCode: 'INR', currencyRate: '83', continent: 'Asia', popular: true },
+  ];
+  const demoBanksByIso2 = {
+    US: [
+      { name: 'Chase (US demo)', website: 'https://www.chase.com' },
+      { name: 'Bank of America (US demo)', website: 'https://www.bankofamerica.com' },
+    ],
+    GB: [
+      { name: 'Barclays (GB demo)', website: 'https://www.barclays.co.uk' },
+      { name: 'HSBC UK (GB demo)', website: 'https://www.hsbc.co.uk' },
+    ],
+    ET: [
+      { name: 'Commercial Bank of Ethiopia (ET demo)', website: 'https://www.combanketh.et' },
+    ],
+    IN: [
+      { name: 'HDFC Bank (IN demo)', website: 'https://www.hdfcbank.com' },
+      { name: 'State Bank of India (IN demo)', website: 'https://www.sbi.co.in' },
+    ],
+  };
+  for (const row of demoCountrySeed) {
+    let continent = await prisma.continent.findFirst({ where: { name: row.continent } });
+    if (!continent) {
+      continent = await prisma.continent.create({ data: { name: row.continent, status: 'Active' } });
+    }
+    let country = await prisma.country.findFirst({ where: { iso2: row.iso2 } });
+    if (!country) {
+      country = await prisma.country.create({
+        data: {
+          continentId: continent.id,
+          name: row.name,
+          iso2: row.iso2,
+          iso3: row.iso3,
+          phoneCode: row.phoneCode,
+          currencyName: row.currencyName,
+          currencyCode: row.currencyCode,
+          currencyRate: row.currencyRate,
+          isPopular: row.popular,
+          status: 'Active',
+          sendable: true,
+          receivable: true,
+        },
+      });
+      console.log(`✅ Country created: ${country.iso2}`);
+    } else if (!country.receivable || !country.sendable) {
+      country = await prisma.country.update({
+        where: { id: country.id },
+        data: { receivable: true, sendable: true, status: 'Active' },
+      });
+    }
+    const banks = demoBanksByIso2[row.iso2] || [];
+    for (const bankSeed of banks) {
+      let bank = await prisma.remittanceBank.findFirst({ where: { name: bankSeed.name } });
+      const assignment = {
+        countryCode: row.iso2,
+        country: row.name,
+        dollarPrice: row.currencyRate,
+        status: 'Active',
+      };
+      if (!bank) {
+        await prisma.remittanceBank.create({
+          data: {
+            name: bankSeed.name,
+            website: bankSeed.website,
+            active: true,
+            dollarRate: row.currencyRate,
+            assignedCountries: [assignment],
+          },
+        });
+        console.log(`✅ Remittance bank created: ${bankSeed.name}`);
+      }
+    }
+  }
 
   // Demo remittance banks for India (local dev) — app lists banks where assignedCountries includes IN + Active
   const india = await prisma.country.findFirst({

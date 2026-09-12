@@ -6,6 +6,17 @@
 
 const LOG = process.env.LIVEEX_ONBOARD_LOG !== 'false';
 
+/** Ensure LIVEEX_ONBOARD_BASE_URL is an absolute http(s) URL (common .env mistake: missing protocol). */
+function normalizeOnboardBaseUrl(raw) {
+  const fallback = 'https://amlhlep.com/TMSDigitalOnboardingWeb';
+  let url = String(raw || fallback).trim().replace(/\/$/, '');
+  if (!url) url = fallback;
+  if (!/^https?:\/\//i.test(url)) {
+    url = `https://${url.replace(/^\/+/, '')}`;
+  }
+  return url.replace(/\/$/, '');
+}
+
 function config() {
   const enabledRaw = process.env.LIVEEX_DIGITAL_ONBOARDING_ENABLED;
   const enabled =
@@ -15,10 +26,7 @@ function config() {
 
   return {
     enabled,
-    baseUrl: (
-      process.env.LIVEEX_ONBOARD_BASE_URL ||
-      'https://amlhlep.com/TMSDigitalOnboardingWeb'
-    ).replace(/\/$/, ''),
+    baseUrl: normalizeOnboardBaseUrl(process.env.LIVEEX_ONBOARD_BASE_URL),
     companyCode: parseInt(
       process.env.LIVEEX_ONBOARD_COMPANY_CODE || process.env.AML_CODE || '3004',
       10,
