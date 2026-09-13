@@ -17,7 +17,7 @@ Express.js backend application with Prisma ORM for the remittance system.
 
 - Node.js (v18 or higher)
 - PostgreSQL database
-- npm or yarn
+- npm or yarn  
 
 ## Installation
  
