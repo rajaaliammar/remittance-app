@@ -185,14 +185,16 @@ export async function deletePaymentMethod(paymentMethodId) {
  * Charge a saved payment method.
  * Accept.blue expects `source: "pm-{paymentMethodId}"` (numeric id; prefix normalized here).
  *
- * @param {{ payment_method_id: string|number, amount: number, description?: string }} chargeData
+ * @param {{ payment_method_id: string|number, amount: number, description?: string, reference?: string }} chargeData
  */
-export async function createCharge({ payment_method_id, amount, description }) {
+export async function createCharge({ payment_method_id, amount, description, reference }) {
   const raw = String(payment_method_id).replace(/^pm-/i, '');
+  const ref = reference != null ? String(reference).trim() : '';
+  const descParts = [description, ref ? `ref:${ref}` : null].filter(Boolean);
   return request('POST', '/transactions/charge', {
     source: `pm-${raw}`,
     amount,
-    description: description || undefined,
+    description: descParts.length ? descParts.join(' | ') : undefined,
   });
 }
 
