@@ -1,4 +1,5 @@
 import prisma from './prisma.js';
+import { roundMoney, addMoney } from './money.js';
 
 /**
  * Utility to calculate transaction charge.
@@ -9,7 +10,7 @@ import prisma from './prisma.js';
  * @param {string} [opts.transferType] - "bank" | "wallet" - which channel; used to filter tax/fee by applyTo
  */
 export const calculateTransactionFee = async ({ amount, countryId, transferType }) => {
-    const amt = parseFloat(amount);
+    const amt = roundMoney(amount);
     let baseCharge = 0;
     let chargesBreakdown = [];
 
@@ -21,16 +22,16 @@ export const calculateTransactionFee = async ({ amount, countryId, transferType 
 
         if (countryCharge && Array.isArray(countryCharge.chargeLevels)) {
             const levels = countryCharge.chargeLevels
-                .map(l => ({ ...l, amount: parseFloat(l.amount), charge: parseFloat(l.charge) }))
+                .map(l => ({ ...l, amount: roundMoney(l.amount), charge: Number(l.charge) }))
                 .sort((a, b) => b.amount - a.amount);
 
             const level = levels.find(l => l.amount <= amt);
 
             if (level) {
                 if (level.type === 'fixed') {
-                    baseCharge = level.charge;
+                    baseCharge = roundMoney(level.charge);
                 } else if (level.type === 'percent') {
-                    baseCharge = (amt * level.charge) / 100;
+                    baseCharge = roundMoney((amt * level.charge) / 100);
                 }
                 chargesBreakdown.push({
                     name: 'Base Charge',
@@ -72,24 +73,24 @@ export const calculateTransactionFee = async ({ amount, countryId, transferType 
 
         if (tf.valueType === 'dynamic' && Array.isArray(tf.tiers) && tf.tiers.length > 0) {
             const tier = tf.tiers.find(
-                (t) => amt >= parseFloat(t.minAmount) && amt <= parseFloat(t.maxAmount)
+                (t) => amt >= roundMoney(t.minAmount) && amt <= roundMoney(t.maxAmount)
             );
             if (tier) {
-                const v = parseFloat(tier.value);
+                const v = Number(tier.value);
                 if (tier.valueType === 'fixed') {
-                    calculatedAmount = v;
+                    calculatedAmount = roundMoney(v);
                 } else {
-                    calculatedAmount = (amt * v) / 100;
+                    calculatedAmount = roundMoney((amt * v) / 100);
                 }
                 displayValue = v;
                 displayValueType = tier.valueType;
             }
         } else {
-            const value = tf.value != null ? parseFloat(tf.value) : 0;
+            const value = tf.value != null ? Number(tf.value) : 0;
             if (tf.valueType === 'fixed') {
-                calculatedAmount = value;
+                calculatedAmount = roundMoney(value);
             } else if (tf.valueType === 'percentage') {
-                calculatedAmount = (amt * value) / 100;
+                calculatedAmount = roundMoney((amt * value) / 100);
             }
         }
 
@@ -102,19 +103,19 @@ export const calculateTransactionFee = async ({ amount, countryId, transferType 
         });
 
         if (tf.type === 'Tax') {
-            portalTaxTotal += calculatedAmount;
+            portalTaxTotal = addMoney(portalTaxTotal, calculatedAmount);
         } else {
-            portalFeeTotal += calculatedAmount;
+            portalFeeTotal = addMoney(portalFeeTotal, calculatedAmount);
         }
     });
 
-    const totalCharge = baseCharge + portalTaxTotal + portalFeeTotal;
+    const totalCharge = addMoney(baseCharge, addMoney(portalTaxTotal, portalFeeTotal));
 
     return {
         totalCharge,
         breakdown: chargesBreakdown,
         baseCharge,
         tax: portalTaxTotal,
-        fee: portalFeeTotal + baseCharge
+        fee: addMoney(portalFeeTotal, baseCharge)
     };
 };

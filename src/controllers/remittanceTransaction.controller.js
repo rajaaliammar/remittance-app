@@ -21,6 +21,7 @@ import {
 } from '../utils/ledgerService.js';
 import { notifyCustomerAsync } from '../utils/customerNotify.js';
 import acceptblueService from '../services/acceptblue.service.js';
+import { resolveEffectiveExchangeRate } from '../services/exchangeRate.service.js';
 import { enqueuePostTransactionJobs } from '../queues/enqueue.js';
 import {
   WalletError,
@@ -37,6 +38,12 @@ import {
   tryApprovePendingCustomerFromCachedStatus,
 } from '../utils/amlAutoApprove.js';
 import { upsertSavedRecipientFromSend } from './savedRecipient.controller.js';
+import {
+  roundMoney,
+  addMoney,
+  multiplyByRate,
+  exceedsDrift,
+} from '../utils/money.js';
 
 const US_STATE_NAME_TO_CODE = {
   ALABAMA: 'AL',
@@ -252,14 +259,15 @@ export const createRemittanceTransaction = async (req, res) => {
 
     const {
       sendAmount,
-      receiveAmount,
+      receiveAmount: clientReceiveAmount,
       currency,
       gatewayId,
       gatewayName,
       recipientInfo,
       paymentFieldValues,
       transferType,
-      countryId,
+      countryId: bodyCountryId,
+      destinationCountryId,
     } = req.body || {};
 
     const pfIncoming =
@@ -268,13 +276,92 @@ export const createRemittanceTransaction = async (req, res) => {
       pfIncoming.paymentMethodId || pfIncoming.savedCardId || ''
     ).trim();
 
-    const send = parseFloat(sendAmount);
-    const receive = parseFloat(receiveAmount);
-    if (isNaN(send) || send < 0 || isNaN(receive) || receive < 0) {
+    const send = roundMoney(sendAmount);
+    if (!Number.isFinite(send) || send < 0) {
       return res.status(400).json({
         success: false,
-        message: 'Valid sendAmount and receiveAmount are required',
+        message: 'Valid sendAmount is required',
       });
+    }
+
+    // Server-side FX lock — never trust client receiveAmount without verification
+    const riEarly = recipientInfo && typeof recipientInfo === 'object' ? recipientInfo : {};
+    const countryId =
+      bodyCountryId ||
+      destinationCountryId ||
+      riEarly.countryId ||
+      riEarly.destinationCountryId ||
+      riEarly.countryCode ||
+      null;
+    const rateBankId = riEarly.bankId || gatewayId || riEarly.providerId || null;
+    const rateWalletId = riEarly.walletId || null;
+    const rateServiceId = riEarly.serviceId || riEarly.countryServiceId || null;
+
+    const lockedRate = countryId
+      ? await resolveEffectiveExchangeRate({
+          countryId,
+          bankId: rateBankId,
+          walletId: rateWalletId,
+          serviceId: rateServiceId,
+        })
+      : null;
+
+    if (!lockedRate?.effectiveRate) {
+      return res.status(400).json({
+        success: false,
+        message: 'Unable to resolve a locked exchange rate for this destination. Provide a valid countryId and provider.',
+        code: 'EXCHANGE_RATE_UNAVAILABLE',
+      });
+    }
+
+    // Persist resolved DB country id when client sent ISO2 / fallback-* / alias
+    const resolvedCountryId = lockedRate.country?.id || countryId;
+
+    const effectiveRate = lockedRate.effectiveRate;
+    const exchangeRateSource = lockedRate.rateSource;
+    const exchangeRateLockedAt = lockedRate.lockedAt;
+    const receive = multiplyByRate(send, effectiveRate);
+
+    // Drift compares FX-only receive (send * rate). Strip gift / recipient-fee
+    // adjustments the client may have baked into receiveAmount.
+    if (
+      clientReceiveAmount != null &&
+      String(clientReceiveAmount).trim() !== '' &&
+      Number.isFinite(Number(clientReceiveAmount))
+    ) {
+      let clientFxReceive = roundMoney(clientReceiveAmount);
+      const giftRaw = riEarly.giftAmount ?? riEarly.giftBonus;
+      const gift = Number.isFinite(Number(giftRaw)) ? Number(giftRaw) : 0;
+      if (gift > 0) {
+        clientFxReceive = roundMoney(clientFxReceive - gift);
+      }
+      const feePaidBy = String(riEarly.feePaidBy || riEarly.feeBearer || '').toLowerCase();
+      const feeRaw = riEarly.fee ?? riEarly.transferFee;
+      if (
+        (feePaidBy === 'receiver' || feePaidBy === 'recipient') &&
+        Number.isFinite(Number(feeRaw)) &&
+        Number(feeRaw) > 0
+      ) {
+        // Fee is in send currency; convert with locked rate to reverse client adjustment
+        clientFxReceive = roundMoney(clientFxReceive + multiplyByRate(Number(feeRaw), effectiveRate));
+      }
+
+      if (exceedsDrift(clientFxReceive, receive, 0.005)) {
+        return res.status(409).json({
+          success: false,
+          message: 'Exchange rate changed since your quote. Please refresh the rate and try again.',
+          code: 'RATE_CHANGED',
+          data: {
+            serverReceiveAmount: receive,
+            clientReceiveAmount: roundMoney(clientReceiveAmount),
+            clientFxReceiveAmount: clientFxReceive,
+            exchangeRate: effectiveRate,
+            exchangeRateSource,
+            exchangeRateLockedAt,
+            maxDriftPercent: 0.5,
+          },
+        });
+      }
     }
 
     // Enforce approved KYC form's "Max Transaction Amount" (e.g. kyc2 = 2999 USD)
@@ -287,14 +374,20 @@ export const createRemittanceTransaction = async (req, res) => {
       });
     }
 
+    // Prefer resolved DB country id (ISO2 / fallback-* / destinationCountryId aliases → real id)
+    const feeCountryId =
+      resolvedCountryId && !String(resolvedCountryId).startsWith('fallback-')
+        ? resolvedCountryId
+        : null;
+
     // Calculate fees on backend for security and accuracy (transferType filters tax/fee by applyTo: bank | wallet | both)
     const { totalCharge, breakdown, tax: taxAmount, fee: feeAmount } = await calculateTransactionFee({
       amount: send,
-      countryId,
+      countryId: feeCountryId,
       transferType: transferType === 'wallet' ? 'wallet' : 'bank'
     });
 
-    const totalToDeduct = send + totalCharge;
+    const totalToDeduct = addMoney(send, totalCharge);
 
     const delegate = prisma.remittanceTransaction;
     if (!delegate || typeof delegate.create !== 'function') {
@@ -350,7 +443,10 @@ export const createRemittanceTransaction = async (req, res) => {
       feeBreakdown: breakdown,
       baseAmount: send,
       totalAmount: totalToDeduct,
-      countryId,
+      countryId: feeCountryId || resolvedCountryId || countryId,
+      exchangeRate: effectiveRate,
+      exchangeRateSource,
+      exchangeRateLockedAt,
     };
     // Stable key for AML beneficiary aggregation when not an internal customer id
     if (!enrichedRecipientInfo.beneficiaryId && !enrichedRecipientInfo.beneficiaryKey) {
@@ -370,8 +466,10 @@ export const createRemittanceTransaction = async (req, res) => {
       gatewayId,
       gatewayName,
       transferType: txType,
-      countryId,
+      countryId: feeCountryId || resolvedCountryId || countryId,
       recipientInfo,
+      exchangeRate: effectiveRate,
+      exchangeRateSource,
     };
 
     console.log('[Orchestration] createRemittanceTransaction: entering orchestration phase | customerId=', customerId, '| sendAmount=', send, '| totalToDeduct=', totalToDeduct);
@@ -441,7 +539,18 @@ export const createRemittanceTransaction = async (req, res) => {
       }
     }
 
-    let acceptBlueChargeMeta = null;
+    const basePaymentFieldValues = {
+      ...(paymentFieldValues || {}),
+      charge: totalCharge,
+      fee: totalCharge,
+      feeBreakdown: breakdown,
+      fundingSource: paymentMethodLocalId ? 'CARD' : 'WALLET',
+      exchangeRate: effectiveRate,
+      exchangeRateSource,
+      exchangeRateLockedAt,
+    };
+
+    // ── Card saga: PENDING_PAYMENT row FIRST → charge → Processing / compensate ──
     if (paymentMethodLocalId) {
       if (!acceptblueService.isAcceptBlueConfigured()) {
         return res.status(503).json({
@@ -469,12 +578,51 @@ export const createRemittanceTransaction = async (req, res) => {
           message: 'Saved payment method not found.',
         });
       }
+
+      let pendingTx;
       try {
-        const chargeAmount = Number(Number(totalToDeduct).toFixed(2));
-        const abResult = await acceptblueService.createCharge({
+        const pendingResult = await prisma.$transaction(async (tx) => {
+          await lockCustomerWallet(tx, customerId);
+          const created = await tx.remittanceTransaction.create({
+            data: {
+              customerId,
+              type: 'Sent',
+              transferType: txType,
+              sendAmount: send,
+              receiveAmount: receive,
+              currency: currency || null,
+              gatewayId: gatewayId || null,
+              gatewayName: gatewayName || null,
+              recipientInfo: enrichedRecipientInfo,
+              paymentFieldValues: basePaymentFieldValues,
+              exchangeRate: effectiveRate,
+              exchangeRateSource,
+              status: 'PENDING_PAYMENT',
+            },
+          });
+          return created;
+        });
+        pendingTx = pendingResult;
+      } catch (walletErr) {
+        if (walletErr instanceof WalletError) {
+          return res.status(walletErr.statusCode).json({
+            success: false,
+            message: walletErr.message,
+            code: walletErr.code,
+          });
+        }
+        throw walletErr;
+      }
+
+      const chargeAmount = roundMoney(totalToDeduct);
+      let acceptBlueChargeMeta = null;
+      let abResult = null;
+      try {
+        abResult = await acceptblueService.createCharge({
           payment_method_id: cardRow.acceptbluePaymentMethodId,
           amount: chargeAmount,
           description: `Remittance ${currency || 'USD'} send ${send.toFixed(2)} + fees`,
+          reference: pendingTx.id,
         });
         acceptBlueChargeMeta = {
           fundingSource: 'CARD',
@@ -485,36 +633,162 @@ export const createRemittanceTransaction = async (req, res) => {
         };
       } catch (e) {
         console.error('[Accept.blue] Remittance charge failed:', e?.message || e);
+        try {
+          await prisma.remittanceTransaction.update({
+            where: { id: pendingTx.id },
+            data: {
+              status: 'Failed',
+              paymentFieldValues: {
+                ...basePaymentFieldValues,
+                chargeError: e.message || 'Card payment failed',
+              },
+            },
+          });
+        } catch (markErr) {
+          console.error('[Saga] Failed to mark PENDING_PAYMENT as Failed after charge error:', markErr.message);
+        }
         return res.status(Number(e.status) >= 400 ? e.status : 402).json({
           success: false,
           message: e.message || 'Card payment failed',
           details: e.details,
+          transactionId: pendingTx.id,
         });
       }
+
+      let transaction;
+      let newBalance;
+      try {
+        const result = await prisma.$transaction(async (tx) => {
+          const balanceAfterLock = await lockCustomerWallet(tx, customerId);
+          const updated = await tx.remittanceTransaction.update({
+            where: { id: pendingTx.id },
+            data: {
+              status: 'Processing',
+              paymentFieldValues: {
+                ...basePaymentFieldValues,
+                ...acceptBlueChargeMeta,
+              },
+            },
+          });
+          return { transaction: updated, newBalance: balanceAfterLock };
+        });
+        transaction = result.transaction;
+        newBalance = result.newBalance;
+      } catch (dbErr) {
+        console.error('[Saga] DB update to Processing failed after charge — compensating:', dbErr.message);
+        const ref =
+          acceptBlueChargeMeta?.acceptblueReferenceNumber ||
+          acceptBlueChargeMeta?.acceptblueTransactionId;
+        try {
+          if (ref) {
+            await acceptblueService.voidOrRefund({
+              reference_number: ref,
+              amount: chargeAmount,
+            });
+          }
+        } catch (compErr) {
+          console.error('[Saga] Compensating voidOrRefund failed:', compErr.message);
+        }
+        try {
+          await prisma.remittanceTransaction.update({
+            where: { id: pendingTx.id },
+            data: {
+              status: 'Failed',
+              paymentFieldValues: {
+                ...basePaymentFieldValues,
+                ...(acceptBlueChargeMeta || {}),
+                compensated: true,
+                compensateReason: dbErr.message,
+              },
+            },
+          });
+        } catch (markErr) {
+          console.error('[Saga] Failed to mark transaction Failed after compensate:', markErr.message);
+        }
+        return res.status(500).json({
+          success: false,
+          message: 'Payment captured but transaction finalization failed. A compensating void/refund was attempted.',
+          code: 'SAGA_COMPENSATED',
+          transactionId: pendingTx.id,
+        });
+      }
+
+      if (canStoreOrchestration && job) {
+        try {
+          await prisma.orchestrationJob.update({
+            where: { id: job.id },
+            data: { remittanceTransactionId: transaction.id },
+          });
+          console.log('[Orchestration] createRemittanceTransaction: job linked to transaction | jobId=', job.id, '| transactionId=', transaction.id);
+        } catch (e) {
+          console.warn('Orchestration link to transaction skipped:', e.message);
+        }
+      }
+
+      const ipAddress =
+        req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
+        req.connection?.remoteAddress ||
+        req.socket?.remoteAddress ||
+        null;
+      const deviceId =
+        req.headers['x-device-id'] || req.headers['x-device-fingerprint'] || null;
+
+      const queueResult = await enqueuePostTransactionJobs({
+        transactionId: transaction.id,
+        customerId,
+        send,
+        receive,
+        currency: currency || transaction.currency,
+        feeAmount,
+        totalCharge,
+        taxAmount,
+        orchestrationJobId: job?.id || null,
+        enrichedRecipientInfo,
+        recipientInfo: enrichedRecipientInfo,
+        transaction,
+        ipAddress,
+        deviceId,
+        reqMeta: { ipAddress, deviceId },
+      });
+
+      console.log(
+        '[Orchestration] createRemittanceTransaction: completed | transactionId=',
+        transaction.id,
+        '| background=',
+        queueResult.mode,
+      );
+
+      void upsertSavedRecipientFromSend(customerId, {
+        ...(enrichedRecipientInfo && typeof enrichedRecipientInfo === 'object'
+          ? enrichedRecipientInfo
+          : {}),
+        transferType: transaction.transferType || enrichedRecipientInfo?.transferType,
+        bankId: enrichedRecipientInfo?.bankId,
+        walletId: enrichedRecipientInfo?.walletId,
+      });
+
+      return res.status(201).json({
+        success: true,
+        data: {
+          ...transaction,
+          status: 'Processing',
+          newBalance,
+          exchangeRate: effectiveRate,
+          exchangeRateSource,
+          exchangeRateLockedAt,
+        },
+        backgroundProcessing: true,
+        queued: queueResult.queued,
+        message:
+          'Transfer submitted successfully. AML, ledger, and compliance checks are processing in the background.',
+      });
     }
 
-    const enrichedPaymentFieldValues = {
-      ...(paymentFieldValues || {}),
-      charge: totalCharge,
-      fee: totalCharge,
-      feeBreakdown: breakdown,
-      // fundingSource records the collection rail so refunds cannot be misapplied to the wallet.
-      fundingSource: paymentMethodLocalId ? 'CARD' : 'WALLET',
-      ...(acceptBlueChargeMeta || {}),
-    };
-
+    // ── Wallet path: create PENDING_PAYMENT then debit → Processing ──
     let transaction;
     let newBalance;
     try {
       const result = await prisma.$transaction(async (tx) => {
-        let balanceAfterDebit = null;
-        if (!paymentMethodLocalId) {
-          const debitResult = await debitCustomerWallet(tx, customerId, totalToDeduct);
-          balanceAfterDebit = debitResult.newBalance;
-        } else {
-          balanceAfterDebit = await lockCustomerWallet(tx, customerId);
-        }
-
         const created = await tx.remittanceTransaction.create({
           data: {
             customerId,
@@ -526,12 +800,21 @@ export const createRemittanceTransaction = async (req, res) => {
             gatewayId: gatewayId || null,
             gatewayName: gatewayName || null,
             recipientInfo: enrichedRecipientInfo,
-            paymentFieldValues: enrichedPaymentFieldValues,
-            status: 'Processing',
+            paymentFieldValues: basePaymentFieldValues,
+            exchangeRate: effectiveRate,
+            exchangeRateSource,
+            status: 'PENDING_PAYMENT',
           },
         });
 
-        return { transaction: created, newBalance: balanceAfterDebit };
+        const debitResult = await debitCustomerWallet(tx, customerId, totalToDeduct);
+
+        const updated = await tx.remittanceTransaction.update({
+          where: { id: created.id },
+          data: { status: 'Processing' },
+        });
+
+        return { transaction: updated, newBalance: debitResult.newBalance };
       });
       transaction = result.transaction;
       newBalance = result.newBalance;
@@ -607,6 +890,9 @@ export const createRemittanceTransaction = async (req, res) => {
         ...transaction,
         status: 'Processing',
         newBalance,
+        exchangeRate: effectiveRate,
+        exchangeRateSource,
+        exchangeRateLockedAt,
       },
       backgroundProcessing: true,
       queued: queueResult.queued,
@@ -652,7 +938,7 @@ export const listRemittanceTransactions = async (req, res) => {
     if (status) {
       const normalized = String(status).toLowerCase();
       if (normalized === 'pending') {
-        where.status = { in: ['processing', 'hold', 'manual_review'] };
+        where.status = { in: ['processing', 'hold', 'manual_review', 'PENDING_PAYMENT', 'pending_payment'] };
       } else {
         where.status = normalized;
       }

@@ -150,23 +150,49 @@ export const getBanksByCountry = async (req, res) => {
       }
     }
 
-    // Format the response
-    let formattedBanks = resultBanks.map((bank) => ({
-      id: bank.id,
-      name: bank.name,
-      logo: serviceImagesByBankId.get(bank.id) || bank.logo,
-      website: bank.website,
-      email: bank.email,
-      phoneNumber: bank.phoneNumber,
-      address: bank.address,
-      active: bank.active,
-      dollarRate: bank.dollarRate,
-      assignedCountries: bank.assignedCountries
-        ? Array.isArray(bank.assignedCountries)
-          ? bank.assignedCountries
-          : []
-        : [],
-    }));
+    // Format the response — expose country-specific rate (assignedCountries.dollarPrice)
+    // so mobile quotes match server FX lock (resolveEffectiveExchangeRate).
+    let formattedBanks = resultBanks.map((bank) => {
+      let assignedCountries = Array.isArray(bank.assignedCountries)
+        ? bank.assignedCountries
+        : [];
+      if (!assignedCountries.length && typeof bank.assignedCountries === 'string') {
+        try {
+          const p = JSON.parse(bank.assignedCountries);
+          assignedCountries = Array.isArray(p) ? p : [];
+        } catch {
+          assignedCountries = [];
+        }
+      }
+      const assignment = assignedCountries.find((ac) => {
+        const code = ac?.countryCode != null ? String(ac.countryCode).trim().toUpperCase() : '';
+        const name = ac?.country != null ? String(ac.country).trim() : '';
+        const matchesCountry =
+          code === iso2 ||
+          code === iso3 ||
+          (cur && code === cur) ||
+          ac.countryCode === country.id ||
+          name.toLowerCase() === String(country.name || '').trim().toLowerCase() ||
+          name.toUpperCase() === iso2;
+        return matchesCountry && String(ac?.status ?? 'Active').toLowerCase() === 'active';
+      });
+      const assignmentRate =
+        assignment?.dollarPrice != null && String(assignment.dollarPrice).trim() !== ''
+          ? String(assignment.dollarPrice)
+          : null;
+      return {
+        id: bank.id,
+        name: bank.name,
+        logo: serviceImagesByBankId.get(bank.id) || bank.logo,
+        website: bank.website,
+        email: bank.email,
+        phoneNumber: bank.phoneNumber,
+        address: bank.address,
+        active: bank.active,
+        dollarRate: assignmentRate || bank.dollarRate || country.currencyRate || null,
+        assignedCountries,
+      };
+    });
 
     // Dev / empty-catalog fallback so Send → Bank selection is usable
     if (formattedBanks.length === 0) {

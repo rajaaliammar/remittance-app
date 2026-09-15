@@ -443,7 +443,7 @@ model RemittanceTransaction {
   gatewayName         String?
   recipientInfo       Json?     // { accountNumber, accountHolderName, serviceProvider, sourceOfFund, sendingPurpose }
   paymentFieldValues  Json?     // Gateway custom field values
-  status              String    @default("Processing") // Processing, Completed, Failed, Hold, Manual_Review
+  status              String    @default("Processing") // PENDING_PAYMENT, Processing, Completed, Failed, Hold, Manual_Review, Refunded
   // Compliance fields
   riskScore           Int?      // Computed risk score (0-100+). Higher = riskier.
   triggeredRules      Json?     // Array of rule codes that fired: ["T4", "B2"]

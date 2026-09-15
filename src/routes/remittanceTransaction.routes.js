@@ -11,10 +11,16 @@ import {
 import { authenticateCustomer } from '../middleware/customerAuth.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { authenticateCustomerOrBackoffice } from '../middleware/customerOrBackofficeAuth.js';
+import { idempotencyMiddleware } from '../middleware/idempotency.js';
 
 const router = express.Router();
 
-router.post('/', authenticateCustomer, createRemittanceTransaction);
+router.post(
+  '/',
+  authenticateCustomer,
+  idempotencyMiddleware({ scope: 'remittance-transactions' }),
+  createRemittanceTransaction,
+);
 router.get('/', authenticateCustomer, listRemittanceTransactions);
 router.get('/all', authenticateToken, listAllRemittanceTransactions);
 router.get('/:id', authenticateCustomerOrBackoffice, getRemittanceTransactionById);

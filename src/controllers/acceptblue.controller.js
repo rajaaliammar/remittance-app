@@ -244,15 +244,17 @@ export const deleteCard = async (req, res) => {
 export const chargeCard = async (req, res) => {
   try {
     const { paymentMethodId, amount, currency, description } = req.body;
+    const { roundMoney } = await import('../utils/money.js');
 
-    if (!paymentMethodId || !amount) {
+    if (!paymentMethodId || amount == null) {
       return res.status(400).json({
         success: false,
         message: 'paymentMethodId and amount are required',
       });
     }
 
-    if (amount <= 0) {
+    const chargeAmount = roundMoney(amount);
+    if (!(chargeAmount > 0)) {
       return res.status(400).json({ success: false, message: 'Amount must be greater than zero' });
     }
 
@@ -278,8 +280,9 @@ export const chargeCard = async (req, res) => {
 
     const result = await acceptblueService.createCharge({
       payment_method_id: card.acceptbluePaymentMethodId,
-      amount: parseFloat(amount),
+      amount: chargeAmount,
       description: description || `Remittance payment`,
+      reference: req.body?.remittanceTransactionId || undefined,
     });
 
     res.json({
@@ -287,7 +290,7 @@ export const chargeCard = async (req, res) => {
       data: {
         transactionId: result.id || result.transaction_id,
         status: result.status || 'approved',
-        amount: parseFloat(amount),
+        amount: chargeAmount,
         currency: currency || 'USD',
         card: { brand: card.brand, last4: card.last4 },
       },
